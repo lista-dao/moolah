@@ -1,0 +1,19 @@
+node_modules
+.idea
+
+# Compiler files
+cache/
+out/
+
+# Ignores development broadcast logs
+!/broadcast
+/broadcast/*/31337/
+/broadcast/**/dry-run/
+/broadcast/*/97/
+
+# Dotenv file
+.env
+
+# Ignore macOS .DS_Store files
+.DS_Store
+

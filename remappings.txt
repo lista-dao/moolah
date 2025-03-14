@@ -1,0 +1,10 @@
+@src/=src
+@openzeppelin/contracts/=lib/openzeppelin-contracts-upgradeable/lib/openzeppelin-contracts/contracts/
+@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/
+moolah=src/moolah
+moolah-vault=src/moolah-vault
+liquidator=src/liquidator
+interest-rate-model=src/interest-rate-model
+vault-allocator=src/vault-allocator
+@solady=lib/solady/src
+forge-std=lib/forge-std/src

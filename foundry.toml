@@ -1,0 +1,23 @@
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc = "0.8.28"
+optimizer_runs = 200
+
+allow_internal_expect_revert = true
+
+ffi = true
+ast = true
+force = true # force recompile, must clean first in v5: https://docs.openzeppelin.com/upgrades-plugins/1.x/foundry-upgrades#before_running
+build_info = true
+extra_output = ["storageLayout"]
+
+[rpc_endpoints]
+bsc_testnet = "https://data-seed-prebsc-1-s3.bnbchain.org:8545"
+bsc = "https://bsc-dataseed3.bnbchain.org"
+
+[etherscan]
+bsc = { key = "${BSCSCAN_API_KEY}" }
+bsc_testnet = { key = "${BSCSCAN_API_KEY}" }
