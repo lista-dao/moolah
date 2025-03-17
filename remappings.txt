@@ -8,3 +8,4 @@ interest-rate-model=src/interest-rate-model
 vault-allocator=src/vault-allocator
 @solady=lib/solady/src
 forge-std=lib/forge-std/src
+timelock=src/timelock
