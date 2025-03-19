@@ -2,42 +2,39 @@
 pragma solidity ^0.8.10;
 
 import "@openzeppelin/contracts/governance/TimelockController.sol";
+import "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
 
-contract TimeLock is TimelockController {
+contract TimeLock is TimelockController, AccessControlEnumerable {
 
-  uint256 public immutable MIN_DELAY;
+  uint256 public immutable MIN_DELAY = 1 days;
 
   constructor(
-    uint256 minDelay,
     address[] memory proposers,
     address[] memory executors,
     address admin
-  ) TimelockController(minDelay, proposers, executors, admin) {
-    MIN_DELAY = 1 days;
-    require(minDelay >= MIN_DELAY, "TimeLock: insufficient delay");
+  ) TimelockController(MIN_DELAY, proposers, executors, admin) {}
+
+  function getMinDelay() public view override returns (uint256) {
+    return MIN_DELAY > super.getMinDelay() ? MIN_DELAY : super.getMinDelay();
   }
 
-  function schedule(
-    address target,
-    uint256 value,
-    bytes calldata data,
-    bytes32 predecessor,
-    bytes32 salt,
-    uint256 delay
-  ) public override {
-    require(delay >= MIN_DELAY, "Timelock: insufficient delay");
-    super.schedule(target, value, data, predecessor, salt, delay);
+  function supportsInterface(
+    bytes4 interfaceId
+  ) public view virtual override(TimelockController, AccessControlEnumerable) returns (bool) {
+    return TimelockController.supportsInterface(interfaceId) || AccessControlEnumerable.supportsInterface(interfaceId);
   }
 
-  function scheduleBatch(
-    address[] calldata targets,
-    uint256[] calldata values,
-    bytes[] calldata payloads,
-    bytes32 predecessor,
-    bytes32 salt,
-    uint256 delay
-  ) public override {
-    require(delay >= MIN_DELAY, "Timelock: insufficient delay");
-    super.scheduleBatch(targets, values, payloads, predecessor, salt, delay);
+  function _revokeRole(
+    bytes32 role,
+    address account
+  ) internal virtual override(AccessControl, AccessControlEnumerable) returns (bool) {
+    return AccessControlEnumerable._revokeRole(role, account);
+  }
+
+  function _grantRole(
+    bytes32 role,
+    address account
+  ) internal virtual override(AccessControl, AccessControlEnumerable) returns (bool) {
+    return AccessControlEnumerable._grantRole(role, account);
   }
 }

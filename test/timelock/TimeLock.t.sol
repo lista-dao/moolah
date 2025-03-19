@@ -2,6 +2,8 @@
 
 pragma solidity ^0.8.10;
 
+import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+
 import "forge-std/Test.sol";
 
 import {TimeLock} from "timelock/TimeLock.sol";
@@ -18,7 +20,7 @@ contract TimeLockTest is Test {
     proposers[0] = proposer;
     address[] memory executors = new address[](1);
     executors[0] = executor;
-    timeLock = new TimeLock(minDelay, proposers, executors, address(0)); // don't set admin
+    timeLock = new TimeLock(proposers, executors, address(0)); // don't set admin
 
     assertEq(timeLock.hasRole(timeLock.PROPOSER_ROLE(), proposer), true);
     assertEq(timeLock.hasRole(timeLock.EXECUTOR_ROLE(), executor), true);
@@ -47,7 +49,11 @@ contract TimeLockTest is Test {
     uint256 _delay = 100;
 
     vm.startPrank(proposer);
-    vm.expectRevert("Timelock: insufficient delay");
+    vm.expectRevert(abi.encodeWithSelector(
+      TimelockController.TimelockInsufficientDelay.selector,
+        _delay,
+        timeLock.getMinDelay()
+    ));
     timeLock.schedule(target, value, data, predecessor, salt, _delay);
     _delay = 1 days;
     timeLock.schedule(target, value, data, predecessor, salt, _delay);
