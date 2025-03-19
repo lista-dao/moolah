@@ -7,9 +7,9 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { VaultAllocator } from "vault-allocator/VaultAllocator.sol";
 
 contract VaultAllocatorDeploy is Script {
-  // todo: update moolah address
+  // todo: add moolah address
   address moolah = 0x61E1a5D17F01A4ed4788e9B1Ca4110C2925f8975;
-  address admin = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253;
+  address admin = 0x05E3A7a66945ca9aF73f66660f22ffB36332FA54;
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");

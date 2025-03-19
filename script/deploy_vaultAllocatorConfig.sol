@@ -6,7 +6,7 @@ import "forge-std/Script.sol";
 import { VaultAllocator } from "vault-allocator/VaultAllocator.sol";
 
 contract LiquidatorDeploy is Script {
-  // todo update allocator vault
+  // todo
   VaultAllocator allocator = VaultAllocator(0x16689558357c1F8f9104FAC5908e15FaB6a6560A);
   address vault = 0xA5edCb7c60448f7779361afc2F92f858f3A6dd1E;
 

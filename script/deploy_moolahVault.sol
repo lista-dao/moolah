@@ -7,9 +7,9 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 
 contract MoolahVaultDeploy is Script {
-  // todo update moolah vaultAllocator
+  // todo
   address moolah = 0x61E1a5D17F01A4ed4788e9B1Ca4110C2925f8975;
-  address asset = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c; // WBNB
+  address asset = 0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd; // WBNB
   string name = "Lista DAO BNB Vault";
   string symbol = "ListaBNB";
   address vaultAllocator = 0x16689558357c1F8f9104FAC5908e15FaB6a6560A;
