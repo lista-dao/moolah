@@ -7,7 +7,6 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { Moolah } from "moolah/Moolah.sol";
 
 contract MoolahDeploy is Script {
-  address oracle = 0x79e9675cDe605Ef9965AbCE185C5FD08d0DE16B1;
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -22,7 +21,7 @@ contract MoolahDeploy is Script {
     // Deploy Moolah proxy
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, deployer, oracle)
+      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, deployer)
     );
     console.log("Moolah proxy: ", address(proxy));
 
