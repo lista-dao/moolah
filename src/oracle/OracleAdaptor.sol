@@ -10,10 +10,10 @@ import { IStakeManager } from "./interfaces/IStakeManager.sol";
 
 contract OracleAdaptor is Initializable, AccessControlUpgradeable, UUPSUpgradeable, IOracle {
   // @dev resilient oracle address
-  address public constant resilientOracleAddr = 0xf3afD82A4071f272F403dC176916141f44E6c750;
-  // @dev *WBNB* token address
+  address public constant RESILIENT_ORACLE = 0xf3afD82A4071f272F403dC176916141f44E6c750;
+  // @dev WBNB token address
   address public constant WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
-  // @dev *SLISBNB* token address
+  // @dev SLISBNB token address
   address public constant SLISBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B;
   // @dev Stake Manager Address
   address public constant STAKE_MANAGER = 0x1adB950d8bB3dA4bE104211D5AB038628e477fE6;
@@ -43,16 +43,16 @@ contract OracleAdaptor is Initializable, AccessControlUpgradeable, UUPSUpgradeab
 
     // Handle slisBNB
     if (asset == SLISBNB) {
-      uint256 price = IOracle(resilientOracleAddr).peek(WBNB);
+      uint256 price = IOracle(RESILIENT_ORACLE).peek(WBNB);
       return price * IStakeManager(STAKE_MANAGER).convertSnBnbToBnb(10 ** 10);
     }
 
     if (targetAsset == address(0)) {
       // Handle normal assets
-      return IOracle(resilientOracleAddr).peek(asset);
+      return IOracle(RESILIENT_ORACLE).peek(asset);
     } else {
       // Handle pt-clisBNB-25apr
-      return IOracle(resilientOracleAddr).peek(targetAsset);
+      return IOracle(RESILIENT_ORACLE).peek(targetAsset);
     }
   }
 
@@ -61,16 +61,17 @@ contract OracleAdaptor is Initializable, AccessControlUpgradeable, UUPSUpgradeab
 
     // Handle slisBNB
     if (asset == SLISBNB) {
-      TokenConfig memory config = IOracle(resilientOracleAddr).getTokenConfig(WBNB);
+      TokenConfig memory config = IOracle(RESILIENT_ORACLE).getTokenConfig(WBNB);
       config.oracles[0] = address(this);
+      config.enableFlagsForOracles[0] = true;
       return config;
     }
 
     if (targetAsset == address(0)) {
-      return IOracle(resilientOracleAddr).getTokenConfig(asset);
+      return IOracle(RESILIENT_ORACLE).getTokenConfig(asset);
     } else {
       // Handle pt-clisBNB-25apr
-      return IOracle(resilientOracleAddr).getTokenConfig(targetAsset);
+      return IOracle(RESILIENT_ORACLE).getTokenConfig(targetAsset);
     }
   }
 
