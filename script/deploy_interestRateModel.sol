@@ -5,10 +5,12 @@ import "forge-std/Script.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import { InterestRateModel } from "interest-rate-model/InterestRateModel.sol";
+import { Moolah } from "moolah/Moolah.sol";
 
 contract InterestRateModelDeploy is Script {
   // todo: add moolah address
-  address moolah = 0xb1732a5BE3812e0095de327df9DbF5044C2Fe9a2;
+  address moolah = 0x3AD83CCFB19C0ca6423a1a5FB2DC883846DBBef9;
+  address admin = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253;
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -21,8 +23,11 @@ contract InterestRateModelDeploy is Script {
     console.log("InterestRateModel implementation: ", address(impl));
 
     // Deploy InterestRateModel proxy
-    ERC1967Proxy proxy = new ERC1967Proxy(address(impl), abi.encodeWithSelector(impl.initialize.selector, deployer));
+    ERC1967Proxy proxy = new ERC1967Proxy(address(impl), abi.encodeWithSelector(impl.initialize.selector, admin));
     console.log("InterestRateModel proxy: ", address(proxy));
+
+    // enable irm
+    Moolah(moolah).enableIrm(address(proxy));
 
     vm.stopBroadcast();
   }
