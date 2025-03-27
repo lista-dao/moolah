@@ -39,13 +39,13 @@ contract OracleAdaptor is Initializable, AccessControlUpgradeable, UUPSUpgradeab
   }
 
   function peek(address asset) public view returns (uint256) {
-    address targetAsset = assetMap[asset];
-
     // Handle slisBNB
     if (asset == SLISBNB) {
       uint256 price = IOracle(RESILIENT_ORACLE).peek(WBNB);
-      return price * IStakeManager(STAKE_MANAGER).convertSnBnbToBnb(10 ** 10);
+      return price * IStakeManager(STAKE_MANAGER).convertSnBnbToBnb(1e10) / 1e10;
     }
+
+    address targetAsset = assetMap[asset];
 
     if (targetAsset == address(0)) {
       // Handle normal assets
