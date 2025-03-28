@@ -20,6 +20,7 @@ contract LiquidatorTest is BaseTest {
     super.setUp();
 
     BOT = makeAddr("Bot");
+    oneInch = new MockOneInch();
 
     Liquidator impl = new Liquidator(address(moolah));
     ERC1967Proxy proxy = new ERC1967Proxy(
@@ -30,9 +31,11 @@ contract LiquidatorTest is BaseTest {
     vm.startPrank(OWNER);
     liquidator.setTokenWhitelist(address(collateralToken), true);
     liquidator.setTokenWhitelist(address(loanToken), true);
+
+    liquidator.setMarketWhitelist(Id.unwrap(marketParams.id()), true);
+    liquidator.setPairWhitelist(address(oneInch), true);
     vm.stopPrank();
 
-    oneInch = new MockOneInch();
   }
 
   function testLiquidate() public {
@@ -54,7 +57,7 @@ contract LiquidatorTest is BaseTest {
     oracle.setPrice(address(collateralToken), ORACLE_PRICE_SCALE / 10);
 
     vm.startPrank(BOT);
-    liquidator.liquidate(Id.unwrap(marketParams.id()), address(this), collateralAmount, address(0));
+    liquidator.liquidate(Id.unwrap(marketParams.id()), address(this), collateralAmount, 0);
     vm.stopPrank();
 
     assertEq(collateralToken.balanceOf(address(liquidator)), collateralAmount, "collateralToken balance");

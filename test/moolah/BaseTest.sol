@@ -129,6 +129,7 @@ contract BaseTest is Test {
     vm.startPrank(OWNER);
     if (!moolah.isLltvEnabled(lltv)) moolah.enableLltv(lltv);
     if (moolah.market(marketParams.id()).lastUpdate == 0) moolah.createMarket(marketParams);
+    moolah.setFee(marketParams, 0);
     vm.stopPrank();
 
     _forward(1);

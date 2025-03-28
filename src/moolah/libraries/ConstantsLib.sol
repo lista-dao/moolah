@@ -20,3 +20,5 @@ bytes32 constant DOMAIN_TYPEHASH = keccak256("EIP712Domain(uint256 chainId,addre
 bytes32 constant AUTHORIZATION_TYPEHASH = keccak256(
   "Authorization(address authorizer,address authorized,bool isAuthorized,uint256 nonce,uint256 deadline)"
 );
+
+uint128 constant DEFAULT_FEE = 0.05e18;

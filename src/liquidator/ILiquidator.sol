@@ -20,7 +20,7 @@ interface ILiquidator {
     bytes calldata swapData
   ) external payable;
 
-  function liquidate(bytes32 id, address borrower, uint256 seizedAssets, address pair) external payable;
+  function liquidate(bytes32 id, address borrower, uint256 seizedAssets, uint256 repaidShares) external payable;
 
   function sellToken(
     address pair,
@@ -32,4 +32,8 @@ interface ILiquidator {
   ) external;
 
   function setTokenWhitelist(address token, bool status) external;
+
+  function setMarketWhitelist(bytes32 id, bool status) external;
+
+  function setPairWhitelist(address pair, bool status) external;
 }
