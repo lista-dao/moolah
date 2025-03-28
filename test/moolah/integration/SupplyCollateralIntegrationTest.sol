@@ -31,7 +31,9 @@ contract SupplyCollateralIntegrationTest is BaseTest {
 
     vm.assume(token.code.length == 0);
 
+    marketParams.loanToken = token;
     marketParams.collateralToken = token;
+    marketParams.oracle = address(oracle);
 
     vm.startPrank(OWNER);
     moolah.createMarket(marketParams);

@@ -38,6 +38,7 @@ contract CreateMarketIntegrationTest is BaseTest {
   function testCreateMarketWithEnabledIrmAndLltv(MarketParams memory marketParamsFuzz) public {
     marketParamsFuzz.irm = address(irm);
     marketParamsFuzz.lltv = _boundValidLltv(marketParamsFuzz.lltv);
+    marketParamsFuzz.oracle = address(oracle);
     Id marketParamsFuzzId = marketParamsFuzz.id();
 
     vm.startPrank(OWNER);
@@ -54,10 +55,11 @@ contract CreateMarketIntegrationTest is BaseTest {
     assertEq(moolah.market(marketParamsFuzzId).totalSupplyShares, 0, "totalSupplyShares != 0");
     assertEq(moolah.market(marketParamsFuzzId).totalBorrowAssets, 0, "totalBorrowAssets != 0");
     assertEq(moolah.market(marketParamsFuzzId).totalBorrowShares, 0, "totalBorrowShares != 0");
-    assertEq(moolah.market(marketParamsFuzzId).fee, 0, "fee != 0");
+    assertNotEq(moolah.market(marketParamsFuzzId).fee, 0, "fee != 0");
   }
 
   function testCreateMarketAlreadyCreated(MarketParams memory marketParamsFuzz) public {
+    marketParamsFuzz.oracle = address(oracle);
     marketParamsFuzz.irm = address(irm);
     marketParamsFuzz.lltv = _boundValidLltv(marketParamsFuzz.lltv);
 
@@ -76,6 +78,7 @@ contract CreateMarketIntegrationTest is BaseTest {
   function testIdToMarketParams(MarketParams memory marketParamsFuzz) public {
     marketParamsFuzz.irm = address(irm);
     marketParamsFuzz.lltv = _boundValidLltv(marketParamsFuzz.lltv);
+    marketParamsFuzz.oracle = address(oracle);
     Id marketParamsFuzzId = marketParamsFuzz.id();
 
     vm.startPrank(OWNER);

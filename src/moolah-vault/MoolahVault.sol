@@ -40,9 +40,6 @@ contract MoolahVault is
   using SharesMathLib for uint256;
   using MarketParamsLib for MarketParams;
   using MoolahBalancesLib for IMoolah;
-  using PendingLib for MarketConfig;
-  using PendingLib for PendingUint192;
-  using PendingLib for PendingAddress;
 
   /* IMMUTABLES */
 
@@ -80,7 +77,6 @@ contract MoolahVault is
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant CURATOR = keccak256("CURATOR"); // manager role
   bytes32 public constant ALLOCATOR = keccak256("ALLOCATOR"); // manager role
-  bytes32 public constant GUARDIAN = keccak256("GUARDIAN"); // manager role
 
   /* CONSTRUCTOR */
 
@@ -118,7 +114,6 @@ contract MoolahVault is
     _grantRole(MANAGER, manager);
     _setRoleAdmin(CURATOR, MANAGER);
     _setRoleAdmin(ALLOCATOR, MANAGER);
-    _setRoleAdmin(GUARDIAN, MANAGER);
 
     IERC20(_asset).forceApprove(address(MOOLAH), type(uint256).max);
   }

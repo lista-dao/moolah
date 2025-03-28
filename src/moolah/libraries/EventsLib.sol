@@ -159,4 +159,8 @@ library EventsLib {
   /// @param interest The amount of interest accrued.
   /// @param feeShares The amount of shares minted as fee.
   event AccrueInterest(Id indexed id, uint256 prevBorrowRate, uint256 interest, uint256 feeShares);
+
+  /// @notice Emitted when setting the minimum loan.
+  /// @param minLoan The new minimum loan.
+  event SetMinLoanValue(uint256 minLoan);
 }

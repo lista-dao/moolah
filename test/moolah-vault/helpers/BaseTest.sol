@@ -82,7 +82,7 @@ contract BaseTest is Test {
 
     idleParams = MarketParams({
       loanToken: address(loanToken),
-      collateralToken: address(0),
+      collateralToken: address(collateralToken),
       oracle: address(oracle),
       irm: address(irm),
       lltv: 0
