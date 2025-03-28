@@ -62,15 +62,12 @@ contract VaultAllocator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
 
   /// @dev Initializes the contract.
   /// @param _admin The new admin of the contract.
-  /// @param _manager The new manager of the contract.
-  function initialize(address _admin, address _manager) public initializer {
+  function initialize(address _admin) public initializer {
     require(_admin != address(0), ErrorsLib.ZERO_ADDRESS);
-    require(_manager != address(0), ErrorsLib.ZERO_ADDRESS);
 
     __AccessControl_init();
 
     _grantRole(DEFAULT_ADMIN_ROLE, _admin);
-    _grantRole(MANAGER, _manager);
   }
 
   /* ADMIN OR VAULT OWNER ONLY */

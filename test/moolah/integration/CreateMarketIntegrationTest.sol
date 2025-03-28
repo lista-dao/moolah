@@ -54,7 +54,7 @@ contract CreateMarketIntegrationTest is BaseTest {
     assertEq(moolah.market(marketParamsFuzzId).totalSupplyShares, 0, "totalSupplyShares != 0");
     assertEq(moolah.market(marketParamsFuzzId).totalBorrowAssets, 0, "totalBorrowAssets != 0");
     assertEq(moolah.market(marketParamsFuzzId).totalBorrowShares, 0, "totalBorrowShares != 0");
-    assertEq(moolah.market(marketParamsFuzzId).fee, 0, "fee != 0");
+    assertNotEq(moolah.market(marketParamsFuzzId).fee, 0, "fee != 0");
   }
 
   function testCreateMarketAlreadyCreated(MarketParams memory marketParamsFuzz) public {

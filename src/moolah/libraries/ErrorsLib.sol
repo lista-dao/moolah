@@ -79,4 +79,8 @@ library ErrorsLib {
 
   /// @notice Thrown when account is not in the liquidation whitelist.
   string internal constant NOT_LIQUIDATION_WHITELIST = "not liquidation whitelist";
+
+  string internal constant REMAIN_SUPPLY_TOO_LOW = "remain supply too low";
+
+  string internal constant REMAIN_BORROW_TOO_LOW = "remain borrow too low";
 }
