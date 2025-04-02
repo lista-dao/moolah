@@ -420,7 +420,7 @@ contract BaseTest is Test {
 
     ERC1967Proxy moolahProxy = new ERC1967Proxy(
       address(moolahImpl),
-      abi.encodeWithSelector(moolahImpl.initialize.selector, admin, manager, pauser)
+      abi.encodeWithSelector(moolahImpl.initialize.selector, admin, manager, pauser, 0)
     );
 
     return IMoolah(address(moolahProxy));

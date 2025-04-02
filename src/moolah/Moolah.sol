@@ -84,7 +84,7 @@ contract Moolah is
   /// @param admin The new admin of the contract.
   /// @param manager The new manager of the contract.
   /// @param pauser The new pauser of the contract.
-  function initialize(address admin, address manager, address pauser) public initializer {
+  function initialize(address admin, address manager, address pauser, uint256 _minLoanValue) public initializer {
     require(admin != address(0), ErrorsLib.ZERO_ADDRESS);
     require(manager != address(0), ErrorsLib.ZERO_ADDRESS);
     require(pauser != address(0), ErrorsLib.ZERO_ADDRESS);
@@ -96,6 +96,8 @@ contract Moolah is
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
     _grantRole(MANAGER, manager);
     _grantRole(PAUSER, pauser);
+
+    minLoanValue = _minLoanValue;
   }
 
   /* ONLY MANAGER FUNCTIONS */

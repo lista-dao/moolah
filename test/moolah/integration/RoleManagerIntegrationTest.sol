@@ -12,7 +12,7 @@ contract RoleManagerIntegrationTest is BaseTest {
     vm.expectRevert(bytes(ErrorsLib.ZERO_ADDRESS));
     new ERC1967Proxy(
       address(moolahImpl),
-      abi.encodeWithSelector(moolahImpl.initialize.selector, address(0), address(0), address(0))
+      abi.encodeWithSelector(moolahImpl.initialize.selector, address(0), address(0), address(0), 0)
     );
   }
 
