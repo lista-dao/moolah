@@ -184,6 +184,8 @@ contract Moolah is
     market[id].lastUpdate = uint128(block.timestamp);
     market[id].fee = DEFAULT_FEE;
     idToMarketParams[id] = marketParams;
+    IOracle(marketParams.oracle).peek(marketParams.loanToken);
+    IOracle(marketParams.oracle).peek(marketParams.collateralToken);
 
     emit EventsLib.CreateMarket(id, marketParams);
 

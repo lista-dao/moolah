@@ -194,6 +194,8 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
       uint256 out = SafeTransferLib.balanceOf(arb.loanToken, address(this)) - before;
 
       if (out < repaidAssets) revert NoProfit();
+
+      SafeTransferLib.safeApprove(arb.collateralToken, arb.pair, 0);
     }
 
     SafeTransferLib.safeApprove(arb.loanToken, MOOLAH, repaidAssets);

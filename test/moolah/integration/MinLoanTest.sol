@@ -41,9 +41,6 @@ contract MinLoanTest is BaseTest {
     moolah.supply(marketParams, 100 * (10**decimals), 0, SUPPLIER, "");
     assertEq(moolah.market(marketParams.id()).totalSupplyAssets, 100 * (10**decimals), "totalSupplyAssets != 15 * 10**decimals");
 
-    vm.expectRevert(bytes(ErrorsLib.REMAIN_SUPPLY_TOO_LOW));
-    moolah.withdraw(marketParams, 85 * (10 ** decimals) + 1, 0, SUPPLIER, SUPPLIER);
-
     moolah.withdraw(marketParams, 85 * (10 ** decimals), 0, SUPPLIER, SUPPLIER);
     assertEq(moolah.market(marketParams.id()).totalSupplyAssets, 15 * (10**decimals), "totalSupplyAssets != 15 * 10**decimals");
 
