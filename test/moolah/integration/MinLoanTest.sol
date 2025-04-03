@@ -117,7 +117,7 @@ contract MinLoanTest is BaseTest {
     uint256 borrowShares = moolah.position(marketParams.id(), BORROWER).borrowShares;
 
     vm.startPrank(LIQUIDATOR);
-    vm.expectRevert(bytes(ErrorsLib.REMAIN_BORROW_TOO_LOW));
+    vm.expectRevert(bytes(ErrorsLib.UNHEALTHY_POSITION));
     moolah.liquidate(marketParams, BORROWER, 0, 1, "");
 
     moolah.liquidate(marketParams, BORROWER, 0, borrowShares, "");
