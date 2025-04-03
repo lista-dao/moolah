@@ -469,7 +469,7 @@ contract Moolah is
 
     IERC20(marketParams.loanToken).safeTransferFrom(msg.sender, address(this), repaidAssets);
 
-    require(_checkBorrowAssets(marketParams, borrower), ErrorsLib.REMAIN_BORROW_TOO_LOW);
+    require(_isHealthyAfterLiquidate(marketParams, borrower), ErrorsLib.UNHEALTHY_POSITION);
 
     return (seizedAssets, repaidAssets);
   }
@@ -655,6 +655,23 @@ contract Moolah is
         market[id].totalBorrowAssets,
         market[id].totalBorrowShares
       ) >= minLoan(marketParams);
+  }
+
+  function _isHealthyAfterLiquidate(MarketParams memory marketParams, address account) internal view returns (bool) {
+    Id id = marketParams.id();
+    if (position[id][account].borrowShares == 0 || position[id][account].collateral == 0) {
+      return true;
+    }
+
+    uint256 borrowAssets = uint256(position[id][msg.sender].borrowShares).
+      toAssetsDown(
+        market[id].totalBorrowAssets,
+        market[id].totalBorrowShares
+      );
+    if (borrowAssets >= minLoan(marketParams)) {
+      return true;
+    }
+    return _isHealthy(marketParams, marketParams.id(), account, getPrice(marketParams));
   }
 
   /// @inheritdoc IMoolahBase

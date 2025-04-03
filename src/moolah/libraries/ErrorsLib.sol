@@ -53,6 +53,9 @@ library ErrorsLib {
   /// @notice Thrown when the position to liquidate is healthy.
   string internal constant HEALTHY_POSITION = "position is healthy";
 
+  /// @notice Thrown when the position to liquidate is healthy.
+  string internal constant UNHEALTHY_POSITION = "position is unhealthy";
+
   /// @notice Thrown when the authorization signature is invalid.
   string internal constant INVALID_SIGNATURE = "invalid signature";
 

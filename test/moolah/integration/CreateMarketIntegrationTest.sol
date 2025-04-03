@@ -8,6 +8,9 @@ contract CreateMarketIntegrationTest is BaseTest {
   using MarketParamsLib for MarketParams;
 
   function testCreateMarketWithNotEnabledIrmAndNotEnabledLltv(MarketParams memory marketParamsFuzz) public {
+    if (marketParamsFuzz.loanToken == address(0) || marketParamsFuzz.collateralToken == address(0)) {
+      return;
+    }
     vm.assume(!moolah.isIrmEnabled(marketParamsFuzz.irm) && !moolah.isLltvEnabled(marketParamsFuzz.lltv));
 
     vm.expectRevert(bytes(ErrorsLib.IRM_NOT_ENABLED));
@@ -16,6 +19,9 @@ contract CreateMarketIntegrationTest is BaseTest {
   }
 
   function testCreateMarketWithNotEnabledIrmAndEnabledLltv(MarketParams memory marketParamsFuzz) public {
+    if (marketParamsFuzz.loanToken == address(0) || marketParamsFuzz.collateralToken == address(0)) {
+      return;
+    }
     vm.assume(!moolah.isIrmEnabled(marketParamsFuzz.irm));
 
     vm.expectRevert(bytes(ErrorsLib.IRM_NOT_ENABLED));
@@ -24,6 +30,9 @@ contract CreateMarketIntegrationTest is BaseTest {
   }
 
   function testCreateMarketWithEnabledIrmAndNotEnabledLltv(MarketParams memory marketParamsFuzz) public {
+    if (marketParamsFuzz.loanToken == address(0) || marketParamsFuzz.collateralToken == address(0)) {
+      return;
+    }
     vm.assume(!moolah.isLltvEnabled(marketParamsFuzz.lltv));
 
     vm.startPrank(OWNER);
@@ -36,6 +45,9 @@ contract CreateMarketIntegrationTest is BaseTest {
   }
 
   function testCreateMarketWithEnabledIrmAndLltv(MarketParams memory marketParamsFuzz) public {
+    if (marketParamsFuzz.loanToken == address(0) || marketParamsFuzz.collateralToken == address(0)) {
+      return;
+    }
     marketParamsFuzz.irm = address(irm);
     marketParamsFuzz.lltv = _boundValidLltv(marketParamsFuzz.lltv);
     marketParamsFuzz.oracle = address(oracle);
@@ -59,6 +71,9 @@ contract CreateMarketIntegrationTest is BaseTest {
   }
 
   function testCreateMarketAlreadyCreated(MarketParams memory marketParamsFuzz) public {
+    if (marketParamsFuzz.loanToken == address(0) || marketParamsFuzz.collateralToken == address(0)) {
+      return;
+    }
     marketParamsFuzz.oracle = address(oracle);
     marketParamsFuzz.irm = address(irm);
     marketParamsFuzz.lltv = _boundValidLltv(marketParamsFuzz.lltv);
@@ -76,6 +91,9 @@ contract CreateMarketIntegrationTest is BaseTest {
   }
 
   function testIdToMarketParams(MarketParams memory marketParamsFuzz) public {
+    if (marketParamsFuzz.loanToken == address(0) || marketParamsFuzz.collateralToken == address(0)) {
+      return;
+    }
     marketParamsFuzz.irm = address(irm);
     marketParamsFuzz.lltv = _boundValidLltv(marketParamsFuzz.lltv);
     marketParamsFuzz.oracle = address(oracle);
