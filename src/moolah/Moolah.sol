@@ -663,7 +663,7 @@ contract Moolah is
       return true;
     }
 
-    uint256 borrowAssets = uint256(position[id][msg.sender].borrowShares).
+    uint256 borrowAssets = uint256(position[id][account].borrowShares).
       toAssetsDown(
         market[id].totalBorrowAssets,
         market[id].totalBorrowShares
