@@ -6,7 +6,7 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 
 import { OracleAdaptor } from "../src/oracle/OracleAdaptor.sol";
 
-contract MoolahDeploy is Script {
+contract OracleAdaptorDeploy is Script {
   address oracle = 0x79e9675cDe605Ef9965AbCE185C5FD08d0DE16B1;
 
   function run() public {
