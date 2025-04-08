@@ -1,14 +1,13 @@
 //SPDX-License-Identifier: MIT
 pragma solidity ^0.8.10;
 
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
+import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 import { IOracle, TokenConfig } from "../moolah/interfaces/IOracle.sol";
 import { IStakeManager } from "./interfaces/IStakeManager.sol";
 
-contract OracleAdaptor is Initializable, AccessControlUpgradeable, UUPSUpgradeable, IOracle {
+contract OracleAdaptor is AccessControlEnumerableUpgradeable, UUPSUpgradeable, IOracle {
   // @dev resilient oracle address
   address public constant RESILIENT_ORACLE = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   // @dev WBNB token address
@@ -20,6 +19,8 @@ contract OracleAdaptor is Initializable, AccessControlUpgradeable, UUPSUpgradeab
   // @dev asset mapping
   mapping(address => address) public assetMap;
 
+  event AssetMapUpdated(address indexed srcAsset, address indexed targetAsset);
+
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor() {
     _disableInitializers();
@@ -27,7 +28,10 @@ contract OracleAdaptor is Initializable, AccessControlUpgradeable, UUPSUpgradeab
 
   function initialize(address admin, address[] memory srcAsset, address[] memory targetAsset) external initializer {
     require(admin != address(0), "Invalid admin address");
+
+    __AccessControl_init();
     __UUPSUpgradeable_init();
+
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
 
     require(srcAsset.length == targetAsset.length, "OracleAdaptor: Invalid asset length");
@@ -35,6 +39,8 @@ contract OracleAdaptor is Initializable, AccessControlUpgradeable, UUPSUpgradeab
       require(srcAsset[i] != targetAsset[i], "OracleAdaptor: Invalid asset");
       require(targetAsset[i] != address(0), "OracleAdaptor: Target asset cannot be zero address"); // Use WBNB for BNB
       assetMap[srcAsset[i]] = targetAsset[i];
+
+      emit AssetMapUpdated(srcAsset[i], targetAsset[i]);
     }
   }
 
@@ -42,7 +48,7 @@ contract OracleAdaptor is Initializable, AccessControlUpgradeable, UUPSUpgradeab
     // Handle slisBNB
     if (asset == SLISBNB) {
       uint256 price = IOracle(RESILIENT_ORACLE).peek(WBNB);
-      return price * IStakeManager(STAKE_MANAGER).convertSnBnbToBnb(1e10) / 1e10;
+      return (price * IStakeManager(STAKE_MANAGER).convertSnBnbToBnb(1e10)) / 1e10;
     }
 
     address targetAsset = assetMap[asset];
@@ -73,6 +79,17 @@ contract OracleAdaptor is Initializable, AccessControlUpgradeable, UUPSUpgradeab
       // Handle pt-clisBNB-25apr
       return IOracle(RESILIENT_ORACLE).getTokenConfig(targetAsset);
     }
+  }
+
+  /// @dev only admin can update the asset mapping
+  /// @param srcAsset source asset address
+  /// @param targetAsset target asset address
+  function updateAssetMap(address srcAsset, address targetAsset) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    require(srcAsset != targetAsset, "OracleAdaptor: Invalid mapping");
+    require(targetAsset != address(0), "OracleAdaptor: Target asset cannot be zero address");
+    assetMap[srcAsset] = targetAsset;
+
+    emit AssetMapUpdated(srcAsset, targetAsset);
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
