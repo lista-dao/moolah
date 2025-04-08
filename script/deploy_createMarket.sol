@@ -9,7 +9,7 @@ import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 contract CreateMarketDeploy is Script {
   using MarketParamsLib for MarketParams;
 
-  // todo update moolah irm multiOracle liquidator
+  // todo update moolah irm liquidator oracleAdapter
   Moolah moolah = Moolah(0x61E1a5D17F01A4ed4788e9B1Ca4110C2925f8975);
   address WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
   address BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
@@ -18,6 +18,7 @@ contract CreateMarketDeploy is Script {
   address solvBTC = 0x4aae823a6a0b376De6A78e74eCC5b079d38cBCf7;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
+  address oracleAdapter = 0xf3afD82A4071f272F403dC176916141f44E6c750;
 
   address bot = 0x08E83A96F4dA5DecC0e6E9084dDe049A3E84ca04;
   address liquidator = 0x65c559d41904a43cCf7bd9BF7B5B34896a39EBea;
@@ -45,7 +46,7 @@ contract CreateMarketDeploy is Script {
     params[1] = MarketParams({
       loanToken: WBNB,
       collateralToken: slisBNB,
-      oracle: multiOracle,
+      oracle: oracleAdapter,
       irm: irm,
       lltv: lltv80
     });
@@ -53,7 +54,7 @@ contract CreateMarketDeploy is Script {
     params[2] = MarketParams({
       loanToken: WBNB,
       collateralToken: ptClisBNB25apr,
-      oracle: multiOracle,
+      oracle: oracleAdapter,
       irm: irm,
       lltv: lltv90
     });

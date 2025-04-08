@@ -8,7 +8,7 @@ import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 
 contract LiquidatorConfigDeploy is Script {
   using MarketParamsLib for MarketParams;
-  // todo update liquidator irm multiOracle
+  // todo update liquidator irm oracleAdapter
   Liquidator liquidator = Liquidator(payable(0x65c559d41904a43cCf7bd9BF7B5B34896a39EBea));
 
   address WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
@@ -17,6 +17,7 @@ contract LiquidatorConfigDeploy is Script {
   address ptClisBNB25apr = 0xE8F1C9804770e11Ab73395bE54686Ad656601E9e;
   address solvBTC = 0x4aae823a6a0b376De6A78e74eCC5b079d38cBCf7;
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
+  address oracleAdapter = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address irm = 0x803da834B2Ff96D9055F1057dd8907AD776bEAA1;
   address pair = 0x111111125421cA6dc452d289314280a0f8842A65;
 
@@ -46,7 +47,7 @@ contract LiquidatorConfigDeploy is Script {
     MarketParams memory slisBNBParams = MarketParams({
       loanToken: WBNB,
       collateralToken: slisBNB,
-      oracle: multiOracle,
+      oracle: oracleAdapter,
       irm: irm,
       lltv: lltv80
     });
@@ -54,7 +55,7 @@ contract LiquidatorConfigDeploy is Script {
     MarketParams memory ptClisBNB25aprParams = MarketParams({
       loanToken: WBNB,
       collateralToken: ptClisBNB25apr,
-      oracle: multiOracle,
+      oracle: oracleAdapter,
       irm: irm,
       lltv: lltv90
     });
