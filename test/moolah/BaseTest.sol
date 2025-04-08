@@ -129,6 +129,7 @@ contract BaseTest is Test {
     vm.startPrank(OWNER);
     if (!moolah.isLltvEnabled(lltv)) moolah.enableLltv(lltv);
     if (moolah.market(marketParams.id()).lastUpdate == 0) moolah.createMarket(marketParams);
+    moolah.setFee(marketParams, 0);
     vm.stopPrank();
 
     _forward(1);
@@ -419,7 +420,7 @@ contract BaseTest is Test {
 
     ERC1967Proxy moolahProxy = new ERC1967Proxy(
       address(moolahImpl),
-      abi.encodeWithSelector(moolahImpl.initialize.selector, admin, manager, pauser)
+      abi.encodeWithSelector(moolahImpl.initialize.selector, admin, manager, pauser, 0)
     );
 
     return IMoolah(address(moolahProxy));

@@ -53,6 +53,9 @@ library ErrorsLib {
   /// @notice Thrown when the position to liquidate is healthy.
   string internal constant HEALTHY_POSITION = "position is healthy";
 
+  /// @notice Thrown when the position to liquidate is healthy.
+  string internal constant UNHEALTHY_POSITION = "position is unhealthy";
+
   /// @notice Thrown when the authorization signature is invalid.
   string internal constant INVALID_SIGNATURE = "invalid signature";
 
@@ -79,4 +82,8 @@ library ErrorsLib {
 
   /// @notice Thrown when account is not in the liquidation whitelist.
   string internal constant NOT_LIQUIDATION_WHITELIST = "not liquidation whitelist";
+
+  string internal constant REMAIN_SUPPLY_TOO_LOW = "remain supply too low";
+
+  string internal constant REMAIN_BORROW_TOO_LOW = "remain borrow too low";
 }

@@ -82,7 +82,7 @@ contract BaseTest is Test {
 
     idleParams = MarketParams({
       loanToken: address(loanToken),
-      collateralToken: address(0),
+      collateralToken: address(collateralToken),
       oracle: address(oracle),
       irm: address(irm),
       lltv: 0
@@ -211,7 +211,7 @@ contract BaseTest is Test {
 
     ERC1967Proxy moolahProxy = new ERC1967Proxy(
       address(moolahImpl),
-      abi.encodeWithSelector(moolahImpl.initialize.selector, admin, manager, pauser)
+      abi.encodeWithSelector(moolahImpl.initialize.selector, admin, manager, pauser, 0)
     );
 
     return IMoolah(address(moolahProxy));

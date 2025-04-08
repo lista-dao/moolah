@@ -17,6 +17,7 @@ contract AccrueInterestIntegrationTest is BaseTest {
   function testAccrueInterestIrmZero(MarketParams memory marketParamsFuzz, uint256 blocks) public {
     marketParamsFuzz.irm = address(0);
     marketParamsFuzz.lltv = 0;
+    marketParamsFuzz.oracle = address(oracle);
     blocks = _boundBlocks(blocks);
 
     vm.startPrank(OWNER);

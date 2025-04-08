@@ -111,6 +111,7 @@ interface IMoolahBase {
   /// overflow.
   /// - The oracle can revert on `price`. Note that this can be used to prevent `borrow`, `withdrawCollateral` and
   /// `liquidate` from being used under certain market conditions.
+  /// - The price from the oracle must have 8 decimals.
   /// - A very high price returned by the oracle can make the computation of `maxBorrow` in `_isHealthy` overflow, or
   /// the computation of `assetsRepaid` in `liquidate` overflow.
   /// @dev The borrow share price of a market with less than 1e4 assets borrowed can be decreased by manipulations, to
@@ -296,6 +297,11 @@ interface IMoolahBase {
 
   /// @notice Returns whether `account` is in the liquidation whitelist of the market `id`.
   function isLiquidationWhitelist(Id id, address account) external view returns (bool);
+  /// @notice Set the minimum loan token assets(USD) (supply and borrow).
+  function setMinLoanValue(uint256 minLoan) external;
+
+  /// @notice get the minimum loan token assets (supply and borrow) for the market.
+  function minLoan(MarketParams memory marketParams) external view returns (uint256);
 }
 
 /// @dev This interface is inherited by Moolah so that function signatures are checked by the compiler.

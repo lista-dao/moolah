@@ -27,11 +27,16 @@ contract SupplyCollateralIntegrationTest is BaseTest {
   }
 
   function testSupplyCollateralTokenNotCreated(uint256 amount, address token) public {
+    if (token == address(0)) {
+      return;
+    }
     amount = bound(amount, 1, MAX_TEST_AMOUNT);
 
     vm.assume(token.code.length == 0);
 
+    marketParams.loanToken = token;
     marketParams.collateralToken = token;
+    marketParams.oracle = address(oracle);
 
     vm.startPrank(OWNER);
     moolah.createMarket(marketParams);

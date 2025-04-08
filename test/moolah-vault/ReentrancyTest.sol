@@ -32,7 +32,7 @@ contract ReentrancyTest is IntegrationTest, IERC1820Implementer {
 
     idleParams = MarketParams({
       loanToken: address(reentrantToken),
-      collateralToken: address(0),
+      collateralToken: address(collateralToken),
       oracle: address(oracle),
       irm: address(irm),
       lltv: 0

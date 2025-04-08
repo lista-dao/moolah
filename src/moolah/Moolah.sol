@@ -67,6 +67,8 @@ contract Moolah is
   mapping(Id => MarketParams) public idToMarketParams;
   /// marketId => liquidation whitelist addresses
   mapping(Id => EnumerableSet.AddressSet) private liquidationWhitelist;
+  /// The minimum loan token position value, using the same precision as the oracle (8 decimals).
+  uint256 public minLoanValue;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant PAUSER = keccak256("PAUSER"); // pauser role
@@ -82,7 +84,7 @@ contract Moolah is
   /// @param admin The new admin of the contract.
   /// @param manager The new manager of the contract.
   /// @param pauser The new pauser of the contract.
-  function initialize(address admin, address manager, address pauser) public initializer {
+  function initialize(address admin, address manager, address pauser, uint256 _minLoanValue) public initializer {
     require(admin != address(0), ErrorsLib.ZERO_ADDRESS);
     require(manager != address(0), ErrorsLib.ZERO_ADDRESS);
     require(pauser != address(0), ErrorsLib.ZERO_ADDRESS);
@@ -94,6 +96,8 @@ contract Moolah is
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
     _grantRole(MANAGER, manager);
     _grantRole(PAUSER, pauser);
+
+    minLoanValue = _minLoanValue;
   }
 
   /* ONLY MANAGER FUNCTIONS */
@@ -143,6 +147,14 @@ contract Moolah is
   }
 
   /// @inheritdoc IMoolahBase
+  function setMinLoanValue(uint256 _minLoanValue) external onlyRole(MANAGER) {
+    require(_minLoanValue != minLoanValue, ErrorsLib.ALREADY_SET);
+    minLoanValue = _minLoanValue;
+
+    emit EventsLib.SetMinLoanValue(_minLoanValue);
+  }
+
+  /// @inheritdoc IMoolahBase
   function addLiquidationWhitelist(Id id, address account) external onlyRole(MANAGER) {
     require(!liquidationWhitelist[id].contains(account), ErrorsLib.ALREADY_SET);
     liquidationWhitelist[id].add(account);
@@ -167,10 +179,15 @@ contract Moolah is
     require(isLltvEnabled[marketParams.lltv], ErrorsLib.LLTV_NOT_ENABLED);
     require(market[id].lastUpdate == 0, ErrorsLib.MARKET_ALREADY_CREATED);
     require(marketParams.oracle != address(0), ErrorsLib.ZERO_ADDRESS);
+    require(marketParams.loanToken != address(0), ErrorsLib.ZERO_ADDRESS);
+    require(marketParams.collateralToken != address(0), ErrorsLib.ZERO_ADDRESS);
 
     // Safe "unchecked" cast.
     market[id].lastUpdate = uint128(block.timestamp);
+    market[id].fee = DEFAULT_FEE;
     idToMarketParams[id] = marketParams;
+    IOracle(marketParams.oracle).peek(marketParams.loanToken);
+    IOracle(marketParams.oracle).peek(marketParams.collateralToken);
 
     emit EventsLib.CreateMarket(id, marketParams);
 
@@ -207,6 +224,9 @@ contract Moolah is
     if (data.length > 0) IMoolahSupplyCallback(msg.sender).onMoolahSupply(assets, data);
 
     IERC20(marketParams.loanToken).safeTransferFrom(msg.sender, address(this), assets);
+
+
+    require(_checkSupplyAssets(marketParams, onBehalf), ErrorsLib.REMAIN_SUPPLY_TOO_LOW);
 
     return (assets, shares);
   }
@@ -277,6 +297,8 @@ contract Moolah is
 
     IERC20(marketParams.loanToken).safeTransfer(receiver, assets);
 
+    require(_checkBorrowAssets(marketParams, onBehalf), ErrorsLib.REMAIN_BORROW_TOO_LOW);
+
     return (assets, shares);
   }
 
@@ -308,6 +330,8 @@ contract Moolah is
     if (data.length > 0) IMoolahRepayCallback(msg.sender).onMoolahRepay(assets, data);
 
     IERC20(marketParams.loanToken).safeTransferFrom(msg.sender, address(this), assets);
+
+    require(_checkBorrowAssets(marketParams, onBehalf), ErrorsLib.REMAIN_BORROW_TOO_LOW);
 
     return (assets, shares);
   }
@@ -444,6 +468,8 @@ contract Moolah is
     if (data.length > 0) IMoolahLiquidateCallback(msg.sender).onMoolahLiquidate(repaidAssets, data);
 
     IERC20(marketParams.loanToken).safeTransferFrom(msg.sender, address(this), repaidAssets);
+
+    require(_isHealthyAfterLiquidate(marketParams, borrower), ErrorsLib.UNHEALTHY_POSITION);
 
     return (seizedAssets, repaidAssets);
   }
@@ -601,6 +627,58 @@ contract Moolah is
 
   function _checkLiquidationWhiteList(Id id, address account) internal view returns (bool) {
     return liquidationWhitelist[id].length() == 0 || liquidationWhitelist[id].contains(account);
+  }
+
+  function _checkSupplyAssets(MarketParams memory marketParams, address account) internal view returns (bool) {
+    Id id = marketParams.id();
+    if (position[id][account].supplyShares == 0) {
+      return true;
+    }
+
+
+    return uint256(position[id][account].supplyShares).
+      toAssetsDown(
+        market[id].totalSupplyAssets,
+        market[id].totalSupplyShares
+      ) >= minLoan(marketParams);
+
+  }
+
+  function _checkBorrowAssets(MarketParams memory marketParams, address account) internal view returns (bool) {
+    Id id = marketParams.id();
+    if (position[id][account].borrowShares == 0) {
+      return true;
+    }
+
+    return uint256(position[id][account].borrowShares).
+      toAssetsDown(
+        market[id].totalBorrowAssets,
+        market[id].totalBorrowShares
+      ) >= minLoan(marketParams);
+  }
+
+  function _isHealthyAfterLiquidate(MarketParams memory marketParams, address account) internal view returns (bool) {
+    Id id = marketParams.id();
+    if (position[id][account].borrowShares == 0 || position[id][account].collateral == 0) {
+      return true;
+    }
+
+    uint256 borrowAssets = uint256(position[id][account].borrowShares).
+      toAssetsDown(
+        market[id].totalBorrowAssets,
+        market[id].totalBorrowShares
+      );
+    if (borrowAssets >= minLoan(marketParams)) {
+      return true;
+    }
+    return _isHealthy(marketParams, marketParams.id(), account, getPrice(marketParams));
+  }
+
+  /// @inheritdoc IMoolahBase
+  function minLoan(MarketParams memory marketParams) public view returns (uint256) {
+    uint256 price = IOracle(marketParams.oracle).peek(marketParams.loanToken);
+    uint8 decimals = IERC20Metadata(marketParams.loanToken).decimals();
+    return price == 0 ? 0 : minLoanValue.mulDivDown(10 ** decimals, price);
   }
 
   /**

@@ -8,8 +8,11 @@ import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
 import "./ILiquidator.sol";
 
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
+import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 
 contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
+  using MarketParamsLib for IMoolah.MarketParams;
+
   /// @dev Thrown when passing the zero address.
   string internal constant ZERO_ADDRESS = "zero address";
   error NoProfit();
@@ -21,11 +24,15 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
 
   address public immutable MOOLAH;
   mapping(address => bool) public tokenWhitelist;
+  mapping(bytes32 => bool) public marketWhitelist;
+  mapping(address => bool) public pairWhitelist;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // manager role
 
   event TokenWhitelistChanged(address indexed token, bool added);
+  event MarketWhitelistChanged(bytes32 id, bool added);
+  event PairWhitelistChanged(address pair, bool added);
   event SellToken(address pair, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin);
 
   /// @custom:oz-upgrades-unsafe-allow constructor
@@ -73,6 +80,26 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     emit TokenWhitelistChanged(token, status);
   }
 
+  /// @dev sets the market whitelist.
+  /// @param id The id of the market.
+  /// @param status The status of the market.
+  function setMarketWhitelist(bytes32 id, bool status) external onlyRole(MANAGER) {
+    require(IMoolah(MOOLAH).idToMarketParams(id).loanToken != address(0), "Invalid market");
+    require(marketWhitelist[id] != status, WhitelistSameStatus());
+    marketWhitelist[id] = status;
+    emit MarketWhitelistChanged(id, status);
+  }
+
+  /// @dev sets the pair whitelist.
+  /// @param pair The address of the pair.
+  /// @param status The status of the pair.
+  function setPairWhitelist(address pair, bool status) external onlyRole(MANAGER) {
+    require(pair != address(0), ZERO_ADDRESS);
+    require(pairWhitelist[pair] != status, WhitelistSameStatus());
+    pairWhitelist[pair] = status;
+    emit PairWhitelistChanged(pair, status);
+  }
+
   /// @dev sell tokens.
   /// @param pair The address of the pair.
   /// @param tokenIn The address of the input token.
@@ -90,6 +117,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   ) external onlyRole(BOT) {
     require(tokenWhitelist[tokenIn], NotWhitelisted());
     require(tokenWhitelist[tokenOut], NotWhitelisted());
+    require(pairWhitelist[pair], NotWhitelisted());
 
     require(SafeTransferLib.balanceOf(tokenIn, address(this)) >= amountIn, ExceedAmount());
 
@@ -122,6 +150,8 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     address pair,
     bytes calldata swapData
   ) external payable onlyRole(BOT) {
+    require(marketWhitelist[id], NotWhitelisted());
+    require(pairWhitelist[pair], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
     IMoolah(MOOLAH).liquidate(
       params,
@@ -136,15 +166,15 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   /// @param id The id of the market.
   /// @param borrower The address of the borrower.
   /// @param seizedAssets The amount of assets to seize.
-  /// @param pair The address of the pair.
-  function liquidate(bytes32 id, address borrower, uint256 seizedAssets, address pair) external payable onlyRole(BOT) {
+  function liquidate(bytes32 id, address borrower, uint256 seizedAssets, uint256 repaidShares) external payable onlyRole(BOT) {
+    require(marketWhitelist[id], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
     IMoolah(MOOLAH).liquidate(
       params,
       borrower,
       seizedAssets,
-      0,
-      abi.encode(MoolahLiquidateData(params.collateralToken, params.loanToken, seizedAssets, pair, "", false))
+      repaidShares,
+      abi.encode(MoolahLiquidateData(params.collateralToken, params.loanToken, seizedAssets, address(0), "", false))
     );
   }
 
@@ -164,6 +194,8 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
       uint256 out = SafeTransferLib.balanceOf(arb.loanToken, address(this)) - before;
 
       if (out < repaidAssets) revert NoProfit();
+
+      SafeTransferLib.safeApprove(arb.collateralToken, arb.pair, 0);
     }
 
     SafeTransferLib.safeApprove(arb.loanToken, MOOLAH, repaidAssets);
