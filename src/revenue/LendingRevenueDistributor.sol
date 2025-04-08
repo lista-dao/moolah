@@ -1,8 +1,7 @@
 //SPDX-License-Identifier: MIT
 pragma solidity ^0.8.10;
 
-import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import { SafeERC20, IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -11,7 +10,7 @@ import { ErrorsLib } from "../moolah/libraries/ErrorsLib.sol";
 
 /// @title Lending Revenue Distributor
 /// @notice Distribute Lending Vault revenue to the revenueReceiver
-contract LendingRevenueDistributor is Initializable, AccessControlUpgradeable, PausableUpgradeable, UUPSUpgradeable {
+contract LendingRevenueDistributor is AccessControlEnumerableUpgradeable, PausableUpgradeable, UUPSUpgradeable {
   using SafeERC20 for IERC20;
 
   /// @dev the percentage of revenue to send to the revenueReceiver; the rest goes to the risk fund
