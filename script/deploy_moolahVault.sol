@@ -7,12 +7,12 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 
 contract MoolahVaultDeploy is Script {
-  // todo update moolah vaultAllocator
-  address moolah = 0x61E1a5D17F01A4ed4788e9B1Ca4110C2925f8975;
+  address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
+
   address asset = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c; // WBNB
   string name = "Lista DAO BNB Vault";
   string symbol = "ListaBNB";
-  address vaultAllocator = 0x16689558357c1F8f9104FAC5908e15FaB6a6560A;
+  address vaultAllocator = 0x9ECF66f016FCaA853FdA24d223bdb4276E5b524a;
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -35,7 +35,7 @@ contract MoolahVaultDeploy is Script {
     // setup roles
     vault.grantRole(vault.ALLOCATOR(), vaultAllocator);
 
-    console.log("setup role done!");
+    console.log("setup ALLOCATOR role done!");
     vm.stopBroadcast();
   }
 }

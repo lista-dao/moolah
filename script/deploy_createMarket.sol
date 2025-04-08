@@ -10,7 +10,7 @@ contract CreateMarketDeploy is Script {
   using MarketParamsLib for MarketParams;
 
   // todo update moolah irm liquidator oracleAdapter
-  Moolah moolah = Moolah(0x61E1a5D17F01A4ed4788e9B1Ca4110C2925f8975);
+  Moolah moolah = Moolah(0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C);
   address WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
   address BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
   address slisBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B;
@@ -18,11 +18,11 @@ contract CreateMarketDeploy is Script {
   address solvBTC = 0x4aae823a6a0b376De6A78e74eCC5b079d38cBCf7;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
-  address oracleAdapter = 0xf3afD82A4071f272F403dC176916141f44E6c750;
+  address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
 
   address bot = 0x08E83A96F4dA5DecC0e6E9084dDe049A3E84ca04;
-  address liquidator = 0x65c559d41904a43cCf7bd9BF7B5B34896a39EBea;
-  address irm = 0x803da834B2Ff96D9055F1057dd8907AD776bEAA1;
+  address liquidator = 0x6a87C15598929B2db22cF68a9a0dDE5Bf297a59a;
+  address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
 
   uint256 lltv70 = 70 * 1e16;
   uint256 lltv80 = 80 * 1e16;

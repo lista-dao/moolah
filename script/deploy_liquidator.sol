@@ -7,8 +7,7 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { Liquidator } from "liquidator/Liquidator.sol";
 
 contract LiquidatorDeploy is Script {
-  // todo: update moolah address
-  address moolah = 0x61E1a5D17F01A4ed4788e9B1Ca4110C2925f8975;
+  address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
   address bot = 0x08E83A96F4dA5DecC0e6E9084dDe049A3E84ca04;
 
   function run() public {

@@ -7,8 +7,8 @@ import { VaultAllocator } from "vault-allocator/VaultAllocator.sol";
 
 contract LiquidatorDeploy is Script {
   // todo update allocator vault
-  VaultAllocator allocator = VaultAllocator(0x16689558357c1F8f9104FAC5908e15FaB6a6560A);
-  address vault = 0xA5edCb7c60448f7779361afc2F92f858f3A6dd1E;
+  VaultAllocator allocator = VaultAllocator(0x9ECF66f016FCaA853FdA24d223bdb4276E5b524a);
+  address vault = 0x57134a64B7cD9F9eb72F8255A671F5Bf2fe3E2d0;
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
