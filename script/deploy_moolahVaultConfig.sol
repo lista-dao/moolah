@@ -8,7 +8,7 @@ import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 
 contract MoolahVaultConfigDeploy is Script {
   using MarketParamsLib for MarketParams;
-  // todo update vault feeRecipient ptClisBNB25apr multiOracle irm
+  // todo update vault feeRecipient multiOracle irm
   MoolahVault vault = MoolahVault(0xA5edCb7c60448f7779361afc2F92f858f3A6dd1E);
   uint256 fee = 10 * 1e16;
   address feeRecipient = 0x05E3A7a66945ca9aF73f66660f22ffB36332FA54;
@@ -17,7 +17,7 @@ contract MoolahVaultConfigDeploy is Script {
   address WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
   address BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
   address slisBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B;
-  address ptClisBNB25apr = 0x0A9498fb5B811E1AC4369bcdce427f7a3D2816eB;
+  address ptClisBNB25apr = 0xE8F1C9804770e11Ab73395bE54686Ad656601E9e;
   address solvBTC = 0x4aae823a6a0b376De6A78e74eCC5b079d38cBCf7;
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address irm = 0x803da834B2Ff96D9055F1057dd8907AD776bEAA1;

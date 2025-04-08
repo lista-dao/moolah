@@ -8,13 +8,13 @@ import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 
 contract LiquidatorConfigDeploy is Script {
   using MarketParamsLib for MarketParams;
-  // todo update liquidator ptClisBNB25apr irm multiOracle
+  // todo update liquidator irm multiOracle
   Liquidator liquidator = Liquidator(payable(0x65c559d41904a43cCf7bd9BF7B5B34896a39EBea));
 
   address WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
   address BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
   address slisBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B;
-  address ptClisBNB25apr = 0x0A9498fb5B811E1AC4369bcdce427f7a3D2816eB;
+  address ptClisBNB25apr = 0xE8F1C9804770e11Ab73395bE54686Ad656601E9e;
   address solvBTC = 0x4aae823a6a0b376De6A78e74eCC5b079d38cBCf7;
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address irm = 0x803da834B2Ff96D9055F1057dd8907AD776bEAA1;
