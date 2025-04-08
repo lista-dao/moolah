@@ -9,12 +9,12 @@ import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 contract CreateMarketDeploy is Script {
   using MarketParamsLib for MarketParams;
 
-  // todo update moolah ptClisBNB25apr irm multiOracle liquidator
+  // todo update moolah irm multiOracle liquidator
   Moolah moolah = Moolah(0x61E1a5D17F01A4ed4788e9B1Ca4110C2925f8975);
   address WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
   address BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
   address slisBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B;
-  address ptClisBNB25apr = 0x0A9498fb5B811E1AC4369bcdce427f7a3D2816eB;
+  address ptClisBNB25apr = 0xE8F1C9804770e11Ab73395bE54686Ad656601E9e;
   address solvBTC = 0x4aae823a6a0b376De6A78e74eCC5b079d38cBCf7;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;

@@ -7,11 +7,9 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { TimeLock } from "timelock/TimeLock.sol";
 
 contract TimeLockDeploy is Script {
-  // todo
-  address proposer = 0x05E3A7a66945ca9aF73f66660f22ffB36332FA54;
-  address executor = 0x05E3A7a66945ca9aF73f66660f22ffB36332FA54;
-  address canceller = 0x05E3A7a66945ca9aF73f66660f22ffB36332FA54;
-  address admin = 0x05E3A7a66945ca9aF73f66660f22ffB36332FA54;
+  address proposer = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
+  address executor = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
+  address canceller = 0xEEfebb1546d88EA0909435DF6f615084DD3c5Bd8;
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -29,7 +27,7 @@ contract TimeLockDeploy is Script {
 
     // setup roles
     timeLock.grantRole(timeLock.CANCELLER_ROLE(), canceller);
-    timeLock.grantRole(timeLock.DEFAULT_ADMIN_ROLE(), admin);
+    timeLock.grantRole(timeLock.DEFAULT_ADMIN_ROLE(), address(timeLock));
     timeLock.revokeRole(timeLock.DEFAULT_ADMIN_ROLE(), deployer);
 
     console.log("setup role done!");
