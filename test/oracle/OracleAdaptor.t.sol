@@ -13,6 +13,7 @@ contract OracleAdaptorTest is Test {
   OracleAdaptor oracleAdaptor;
   ERC20Mock ptClisBnb;
   address wBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
+  address admin = address(0x01);
 
   function setUp() public {
     vm.createSelectFork("https://bsc-dataseed.bnbchain.org");
@@ -25,7 +26,7 @@ contract OracleAdaptorTest is Test {
     OracleAdaptor impl = new OracleAdaptor();
     ERC1967Proxy proxy_ = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(OracleAdaptor.initialize.selector, address(this), srcAsset, targetAsset)
+      abi.encodeWithSelector(OracleAdaptor.initialize.selector, admin, srcAsset, targetAsset)
     );
     oracleAdaptor = OracleAdaptor(address(proxy_));
 
@@ -59,5 +60,14 @@ contract OracleAdaptorTest is Test {
 
     price = oracleAdaptor.peek(address(ptClisBnb));
     assertEq(price, 62377900546);
+  }
+
+  function test_updateAssetMap() public {
+    address newAsset = address(new ERC20Mock());
+    vm.expectRevert();
+    oracleAdaptor.updateAssetMap(address(ptClisBnb), newAsset);
+    vm.prank(admin);
+    oracleAdaptor.updateAssetMap(address(ptClisBnb), newAsset);
+    assertEq(oracleAdaptor.assetMap(address(ptClisBnb)), newAsset);
   }
 }

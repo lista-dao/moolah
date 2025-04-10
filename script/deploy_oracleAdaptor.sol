@@ -7,8 +7,6 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { OracleAdaptor } from "../src/oracle/OracleAdaptor.sol";
 
 contract OracleAdaptorDeploy is Script {
-  address oracle = 0x79e9675cDe605Ef9965AbCE185C5FD08d0DE16B1;
-
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
@@ -19,9 +17,9 @@ contract OracleAdaptorDeploy is Script {
     OracleAdaptor impl = new OracleAdaptor();
     console.log("OracleAdaptor implementation: ", address(impl));
     address[] memory srcAsset = new address[](1);
-    srcAsset[0] = 0xA35743F08E958a5e9Cf40F9AF23dcC5DED1faDE0; // testnet pt-clisBNB-25apr
+    srcAsset[0] = 0xE8F1C9804770e11Ab73395bE54686Ad656601E9e; // mainnnet pt-clisBNB-25apr
     address[] memory targetAsset = new address[](1);
-    targetAsset[0] = 0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd; // testnet WBNB
+    targetAsset[0] = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c; // mainnet WBNB
 
     // Deploy OracleAdaptor proxy
     ERC1967Proxy proxy = new ERC1967Proxy(
