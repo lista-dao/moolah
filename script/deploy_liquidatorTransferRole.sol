@@ -8,8 +8,7 @@ import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 
 contract LiquidatorConfigDeploy is Script {
   using MarketParamsLib for MarketParams;
-  // todo update liquidator
-  Liquidator liquidator = Liquidator(payable(0x65c559d41904a43cCf7bd9BF7B5B34896a39EBea));
+  Liquidator liquidator = Liquidator(payable(0x6a87C15598929B2db22cF68a9a0dDE5Bf297a59a));
 
   address admin = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253;
   address manager = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;

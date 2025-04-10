@@ -2,14 +2,11 @@ pragma solidity 0.8.28;
 
 import "forge-std/Script.sol";
 
-import { MoolahVault } from "moolah-vault/MoolahVault.sol";
+import { VaultAllocator } from "vault-allocator/VaultAllocator.sol";
 
 contract MoolahVaultTransferRoleDeploy is Script {
-  MoolahVault vault = MoolahVault(0x57134a64B7cD9F9eb72F8255A671F5Bf2fe3E2d0);
+  VaultAllocator vaultAllocator = VaultAllocator(0x9ECF66f016FCaA853FdA24d223bdb4276E5b524a);
   address admin = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253; // timelock
-  address manager = 0x2e2807F88C381Cb0CC55c808a751fC1E3fcCbb85; // timelock
-  address allocator = 0x85CE862C5BB61938FFcc97DA4A80C8aaE43C6A27;
-  address curator = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
 
   bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
   bytes32 public constant MANAGER = keccak256("MANAGER");
@@ -24,15 +21,8 @@ contract MoolahVaultTransferRoleDeploy is Script {
     vm.startBroadcast(deployerPrivateKey);
 
     // setup roles
-    vault.grantRole(DEFAULT_ADMIN_ROLE, admin);
-    vault.grantRole(MANAGER, manager);
-    vault.grantRole(ALLOCATOR, allocator);
-    vault.grantRole(CURATOR, curator);
-
-    vault.revokeRole(CURATOR, deployer);
-    vault.revokeRole(ALLOCATOR, deployer);
-    vault.revokeRole(MANAGER, deployer);
-    vault.revokeRole(DEFAULT_ADMIN_ROLE, deployer);
+    vaultAllocator.grantRole(DEFAULT_ADMIN_ROLE, admin);
+    vaultAllocator.revokeRole(DEFAULT_ADMIN_ROLE, deployer);
 
     vm.stopBroadcast();
 

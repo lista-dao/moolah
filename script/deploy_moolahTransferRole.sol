@@ -5,8 +5,7 @@ import "forge-std/Script.sol";
 import { Moolah } from "moolah/Moolah.sol";
 
 contract MoolahTransferRoleDeploy is Script {
-  // todo update moolah
-  Moolah moolah = Moolah(0x32A88180f2681fABB5AFF98F6A0284aeBfa05532);
+  Moolah moolah = Moolah(0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C);
   address feeRecipient = 0x34B504A5CF0fF41F8A480580533b6Dda687fa3Da;
   address admin = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253;
   address manager = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
