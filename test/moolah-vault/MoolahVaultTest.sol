@@ -42,6 +42,9 @@ contract MoolahVaultTest is Test {
     vault.setSupplyQueue(supplyQueue);
     vault.updateWithdrawQueue(indexes);
     vm.stopPrank();
+    for (uint256 i = 0; i < vault.withdrawQueueLength(); i++) {
+      console.logBytes32(Id.unwrap(vault.withdrawQueue(i)));
+    }
   }
 }
 
