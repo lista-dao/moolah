@@ -58,4 +58,29 @@ contract TimeLockTest is Test {
     }
   }
 
+  function test_setFeeRecipient() public {
+    address target = 0x57134a64B7cD9F9eb72F8255A671F5Bf2fe3E2d0;
+
+    bytes memory data = hex"e74b981b00000000000000000000000044dc4cc17081b05a50aa970ed8ddd6c047bd549b";
+
+    bytes32 predecessor = 0x0000000000000000000000000000000000000000000000000000000000000000;
+    bytes32 salt = 0x0000000000000000000000000000000000000000000000000000000000000001;
+    uint256 delay = 86400;
+
+    vm.startPrank(proposer);
+    timeLock.schedule(target, 0, data, predecessor, salt, delay);
+    vm.stopPrank();
+
+    skip(delay);
+
+    vm.startPrank(proposer);
+    timeLock.execute(target, 0, data, predecessor, salt);
+    vm.stopPrank();
+
+    console.log("set fee recipient done!");
+
+    address feeRecipient = vault.feeRecipient();
+    console.log("feeRecipient", feeRecipient);
+  }
+
 }
