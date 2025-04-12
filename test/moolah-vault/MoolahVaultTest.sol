@@ -3,10 +3,14 @@ pragma solidity 0.8.28;
 
 import { Test, console } from "forge-std/Test.sol";
 import { MoolahVault } from "moolah-vault/MoolahVault.sol";
-import { MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
+import { MarketParams, Id, IMoolah, Market } from "moolah/interfaces/IMoolah.sol";
+import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
+import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
 import { MarketAllocation } from "moolah-vault/interfaces/IMoolahVault.sol";
 
 contract MoolahVaultTest is Test {
+  using MarketParamsLib for MarketParams;
+  using SharesMathLib for uint256;
   MoolahVault vault = MoolahVault(0x57134a64B7cD9F9eb72F8255A671F5Bf2fe3E2d0);
   address curator = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
   address allocator = 0x85CE862C5BB61938FFcc97DA4A80C8aaE43C6A27;
@@ -99,11 +103,11 @@ contract MoolahVaultTest is Test {
     MarketAllocation[] memory allocations = new MarketAllocation[](3);
     allocations[0] = MarketAllocation({
       marketParams: BTCBParams,
-      assets: 11700 ether
+      assets: 149295.13 ether
     });
     allocations[1] = MarketAllocation({
       marketParams: ptClisBNB25aprParams,
-      assets: 4500 ether
+      assets: 30000 ether
     });
     allocations[2] = MarketAllocation({
       marketParams: solvBTCParams,
@@ -113,6 +117,17 @@ contract MoolahVaultTest is Test {
     vault.reallocate(allocations);
 
     vm.stopPrank();
+
+    Market memory solvBTCMarket = IMoolah(moolah).market(solvBTCParams.id());
+    uint256 solvBTCSupplyShares = IMoolah(moolah).position(solvBTCParams.id(), address(vault)).supplyShares;
+    uint256 solvBTCSupplyAssets = solvBTCSupplyShares.toAssetsDown(solvBTCMarket.totalSupplyAssets, solvBTCMarket.totalSupplyShares);
+    console.log("solvBTC supplyAssets", solvBTCSupplyAssets);
+
+    Market memory ptClisBNB25aprMarket = IMoolah(moolah).market(ptClisBNB25aprParams.id());
+    uint256 ptClisBNB25aprSupplyShares = IMoolah(moolah).position(ptClisBNB25aprParams.id(), address(vault)).supplyShares;
+    uint256 ptClisBNB25aprSupplyAssets = ptClisBNB25aprSupplyShares.toAssetsDown(ptClisBNB25aprMarket.totalSupplyAssets, ptClisBNB25aprMarket.totalSupplyShares);
+    console.log("pt clisBNB supplyAssets", ptClisBNB25aprSupplyAssets);
+
   }
 }
 
