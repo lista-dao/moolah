@@ -9,7 +9,7 @@ contract MoolahVaultTransferRoleDeploy is Script {
   address admin = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253; // timelock
   address manager = 0x2e2807F88C381Cb0CC55c808a751fC1E3fcCbb85; // timelock
   address allocator = 0x85CE862C5BB61938FFcc97DA4A80C8aaE43C6A27;
-  address curator = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
+  address curator = 0x2e2807F88C381Cb0CC55c808a751fC1E3fcCbb85;
 
   bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
   bytes32 public constant MANAGER = keccak256("MANAGER");
