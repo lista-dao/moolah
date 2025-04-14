@@ -109,6 +109,8 @@ interface IMoolahVaultBase {
   /// @dev A supply in a reallocation step will make the reallocation revert if the amount is greater than the net
   /// amount from previous steps (i.e. total withdrawn minus total supplied).
   function reallocate(MarketAllocation[] calldata allocations) external;
+  function setBotRole(address _address) external;
+  function revokeBotRole(address _address) external;
 }
 
 /// @dev This interface is inherited by MoolahVault so that function signatures are checked by the compiler.

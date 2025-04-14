@@ -96,7 +96,7 @@ contract RoleTest is IntegrationTest {
     vault.updateWithdrawQueue(withdrawQueueFromRanks);
 
     vm.expectRevert(
-      abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, caller, ALLOCATOR_ROLE)
+      "not allocator or bot"
     );
     vault.reallocate(allocation);
 

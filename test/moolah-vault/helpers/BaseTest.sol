@@ -51,6 +51,7 @@ contract BaseTest is Test {
   address internal SKIM_RECIPIENT = makeAddr("SkimRecipient");
   address internal MOOLAH_OWNER = makeAddr("MoolahOwner");
   address internal MOOLAH_FEE_RECIPIENT = makeAddr("MoolahFeeRecipient");
+  address internal BOT_ADDR = makeAddr("Bot");
 
   IMoolah internal moolah;
   ERC20Mock internal loanToken = new ERC20Mock("loan", "B");
