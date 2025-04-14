@@ -11,13 +11,14 @@ import { MarketAllocation } from "moolah-vault/interfaces/IMoolahVault.sol";
 contract MoolahVaultTest is Test {
   using MarketParamsLib for MarketParams;
   using SharesMathLib for uint256;
-  MoolahVault vault = MoolahVault(0x57134a64B7cD9F9eb72F8255A671F5Bf2fe3E2d0);
+  MoolahVault vault = MoolahVault(0xfa27f172e0b6ebcEF9c51ABf817E2cb142FbE627);
   address curator = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
   address allocator = 0x85CE862C5BB61938FFcc97DA4A80C8aaE43C6A27;
   address admin = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253;
 
   address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
 
+  address USD1 = 0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d;
   address WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
   address BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
   address slisBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B;
@@ -76,41 +77,29 @@ contract MoolahVaultTest is Test {
 
     // collateral-BTCB loan-WBNB lltv-80%
     MarketParams memory BTCBParams = MarketParams({
-      loanToken: WBNB,
+      loanToken: USD1,
       collateralToken: BTCB,
       oracle: multiOracle,
       irm: irm,
-      lltv: lltv80
+      lltv: lltv70
     });
     // collateral-ptClisBNB25apr loan-WBNB lltv-90%
-    MarketParams memory ptClisBNB25aprParams = MarketParams({
-      loanToken: WBNB,
-      collateralToken: ptClisBNB25apr,
-      oracle: oracleAdapter,
-      irm: irm,
-      lltv: lltv90
-    });
-    // collateral-solvBTC loan-WBNB lltv-70%
-    MarketParams memory solvBTCParams = MarketParams({
-      loanToken: WBNB,
-      collateralToken: solvBTC,
+    MarketParams memory WBNBParams = MarketParams({
+      loanToken: USD1,
+      collateralToken: WBNB,
       oracle: multiOracle,
       irm: irm,
       lltv: lltv70
     });
 
     vm.startPrank(allocator);
-    MarketAllocation[] memory allocations = new MarketAllocation[](3);
+    MarketAllocation[] memory allocations = new MarketAllocation[](2);
     allocations[0] = MarketAllocation({
       marketParams: BTCBParams,
-      assets: 149295.13 ether
+      assets: 10000000 ether
     });
     allocations[1] = MarketAllocation({
-      marketParams: ptClisBNB25aprParams,
-      assets: 30000 ether
-    });
-    allocations[2] = MarketAllocation({
-      marketParams: solvBTCParams,
+      marketParams: WBNBParams,
       assets: type(uint256).max
     });
 
@@ -118,15 +107,15 @@ contract MoolahVaultTest is Test {
 
     vm.stopPrank();
 
-    Market memory solvBTCMarket = IMoolah(moolah).market(solvBTCParams.id());
-    uint256 solvBTCSupplyShares = IMoolah(moolah).position(solvBTCParams.id(), address(vault)).supplyShares;
-    uint256 solvBTCSupplyAssets = solvBTCSupplyShares.toAssetsDown(solvBTCMarket.totalSupplyAssets, solvBTCMarket.totalSupplyShares);
-    console.log("solvBTC supplyAssets", solvBTCSupplyAssets);
+    Market memory BTCBMarket = IMoolah(moolah).market(BTCBParams.id());
+    uint256 BTCBSupplyShares = IMoolah(moolah).position(BTCBParams.id(), address(vault)).supplyShares;
+    uint256 BTCBSupplyAssets = BTCBSupplyShares.toAssetsDown(BTCBMarket.totalSupplyAssets, BTCBMarket.totalSupplyShares);
+    console.log("BTCB supplyAssets", BTCBSupplyAssets);
 
-    Market memory ptClisBNB25aprMarket = IMoolah(moolah).market(ptClisBNB25aprParams.id());
-    uint256 ptClisBNB25aprSupplyShares = IMoolah(moolah).position(ptClisBNB25aprParams.id(), address(vault)).supplyShares;
-    uint256 ptClisBNB25aprSupplyAssets = ptClisBNB25aprSupplyShares.toAssetsDown(ptClisBNB25aprMarket.totalSupplyAssets, ptClisBNB25aprMarket.totalSupplyShares);
-    console.log("pt clisBNB supplyAssets", ptClisBNB25aprSupplyAssets);
+    Market memory WBNBMarket = IMoolah(moolah).market(WBNBParams.id());
+    uint256 WBNBSupplyShares = IMoolah(moolah).position(WBNBParams.id(), address(vault)).supplyShares;
+    uint256 WBNBSupplyAssets = WBNBSupplyShares.toAssetsDown(WBNBMarket.totalSupplyAssets, WBNBMarket.totalSupplyShares);
+    console.log("WBNB supplyAssets", WBNBSupplyAssets);
 
   }
 }
