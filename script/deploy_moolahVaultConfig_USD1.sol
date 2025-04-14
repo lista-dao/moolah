@@ -8,8 +8,7 @@ import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 
 contract MoolahVaultConfigDeploy is Script {
   using MarketParamsLib for MarketParams;
-  // todo update vault
-  MoolahVault vault = MoolahVault(0x57134a64B7cD9F9eb72F8255A671F5Bf2fe3E2d0);
+  MoolahVault vault = MoolahVault(0xfa27f172e0b6ebcEF9c51ABf817E2cb142FbE627);
   uint256 fee = 10 * 1e16;
   address feeRecipient = 0x2E2Eed557FAb1d2E11fEA1E1a23FF8f1b23551f3;
   address skimRecipient = 0x1d60bBBEF79Fb9540D271Dbb01925380323A8f66;
