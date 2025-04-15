@@ -73,8 +73,14 @@ contract MoolahVault is
   uint256 public lastTotalAssets;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
-  bytes32 public constant CURATOR = keccak256("CURATOR"); // manager role
-  bytes32 public constant ALLOCATOR = keccak256("ALLOCATOR"); // manager role
+  bytes32 public constant CURATOR = keccak256("CURATOR"); // curator role
+  bytes32 public constant ALLOCATOR = keccak256("ALLOCATOR"); // allocator role
+  bytes32 public constant BOT = keccak256("BOT"); // bot role
+
+  modifier onlyAllocatorOrBot() {
+    require(hasRole(ALLOCATOR, msg.sender) || hasRole(BOT, msg.sender), "not allocator or bot");
+    _;
+  }
 
   /* CONSTRUCTOR */
 
@@ -239,7 +245,7 @@ contract MoolahVault is
   }
 
   /// @inheritdoc IMoolahVaultBase
-  function reallocate(MarketAllocation[] calldata allocations) external onlyRole(ALLOCATOR) {
+  function reallocate(MarketAllocation[] calldata allocations) external onlyAllocatorOrBot {
     uint256 totalSupplied;
     uint256 totalWithdrawn;
     for (uint256 i; i < allocations.length; ++i) {
@@ -292,6 +298,18 @@ contract MoolahVault is
     }
 
     if (totalWithdrawn != totalSupplied) revert ErrorsLib.InconsistentReallocation();
+  }
+
+  /// @inheritdoc IMoolahVaultBase
+  function setBotRole(address _address) onlyRole(ALLOCATOR) external override {
+    require(_address != address(0), ErrorsLib.ZeroAddress());
+    require(_grantRole(BOT, _address), ErrorsLib.SetBotFailed());
+  }
+
+  /// @inheritdoc IMoolahVaultBase
+  function revokeBotRole(address _address) onlyRole(ALLOCATOR) external override {
+    require(_address != address(0), ErrorsLib.ZeroAddress());
+    require(_revokeRole(BOT, _address), ErrorsLib.RevokeBotFailed());
   }
 
   /* EXTERNAL */

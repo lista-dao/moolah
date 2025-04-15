@@ -79,4 +79,10 @@ library ErrorsLib {
 
   /// @notice Thrown when all caps have been reached.
   error AllCapsReached();
+
+  /// @notice Thrown when revoke bot role failed
+  error RevokeBotFailed();
+
+  /// @notice Thrown when set bot role failed
+  error SetBotFailed();
 }

@@ -62,5 +62,40 @@ contract ReallocateIdleTest is IntegrationTest {
 
     uint256 expectedIdle = idleBefore - suppliedAssets[0] - suppliedAssets[1] - suppliedAssets[2];
     assertApproxEqAbs(_idle(), expectedIdle, 3, "idle");
+
+  }
+  function testBotReallocateSupplyIdle(uint256[3] memory suppliedAssets) public {
+    suppliedAssets[0] = bound(suppliedAssets[0], 1, CAP2);
+    suppliedAssets[1] = bound(suppliedAssets[1], 1, CAP2);
+    suppliedAssets[2] = bound(suppliedAssets[2], 1, CAP2);
+
+    allocations.push(MarketAllocation(idleParams, 0));
+    allocations.push(MarketAllocation(allMarkets[0], suppliedAssets[0]));
+    allocations.push(MarketAllocation(allMarkets[1], suppliedAssets[1]));
+    allocations.push(MarketAllocation(allMarkets[2], suppliedAssets[2]));
+    allocations.push(MarketAllocation(idleParams, type(uint256).max));
+
+    vm.startPrank(BOT_ADDR);
+    vm.expectRevert(bytes("not allocator or bot"));
+    vault.reallocate(allocations);
+    vm.stopPrank();
+
+    vm.startPrank(ALLOCATOR_ADDR);
+    vault.setBotRole(BOT_ADDR);
+    vm.stopPrank();
+
+    vm.startPrank(BOT_ADDR);
+    vault.reallocate(allocations);
+    vm.stopPrank();
+
+    vm.startPrank(ALLOCATOR_ADDR);
+    vault.revokeBotRole(BOT_ADDR);
+    vm.stopPrank();
+
+    vm.startPrank(BOT_ADDR);
+    vm.expectRevert(bytes("not allocator or bot"));
+    vault.reallocate(allocations);
+    vm.stopPrank();
+
   }
 }
