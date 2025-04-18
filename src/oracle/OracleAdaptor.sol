@@ -103,6 +103,7 @@ contract OracleAdaptor is AccessControlEnumerableUpgradeable, UUPSUpgradeable, I
     // Handle slisBNB
     if (asset == SLISBNB) {
       TokenConfig memory config = IOracle(RESILIENT_ORACLE).getTokenConfig(WBNB);
+      config.asset = SLISBNB;
       config.oracles[0] = address(this);
       config.enableFlagsForOracles[0] = true;
       return config;
@@ -112,7 +113,9 @@ contract OracleAdaptor is AccessControlEnumerableUpgradeable, UUPSUpgradeable, I
       return IOracle(RESILIENT_ORACLE).getTokenConfig(asset);
     } else {
       // Handle pt-clisBNB-25apr
-      return IOracle(RESILIENT_ORACLE).getTokenConfig(targetAsset);
+      TokenConfig memory config = IOracle(RESILIENT_ORACLE).getTokenConfig(targetAsset);
+      config.asset = asset;
+      return config;
     }
   }
 

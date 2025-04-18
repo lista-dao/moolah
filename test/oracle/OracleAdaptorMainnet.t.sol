@@ -8,7 +8,7 @@ import { OracleAdaptor } from "../../src/oracle/OracleAdaptor.sol";
 import { ERC20Mock } from "../../src/moolah/mocks/ERC20Mock.sol";
 import { IStakeManager } from "../../src/oracle/interfaces/IStakeManager.sol";
 import { PTOracleType, PTOracleConfig, ILinearDiscountOracle } from "../../src/oracle/interfaces/IPTOracle.sol";
-import { IOracle } from "../../src/moolah/interfaces/IOracle.sol";
+import { IOracle, TokenConfig } from "../../src/moolah/interfaces/IOracle.sol";
 
 interface IPTExpiry {
   function expiry() external view returns (uint256);
@@ -128,6 +128,40 @@ contract OracleAdaptorTest is Test {
     vm.prank(manager);
     oracleAdaptor.updateAssetMap(address(ptClisBNB25apr), newAsset);
     assertEq(oracleAdaptor.assetMap(address(ptClisBNB25apr)), newAsset);
+  }
+
+  function test_getTokenConfig() public {
+    TokenConfig memory config = oracleAdaptor.getTokenConfig(address(ptClisBNB25apr));
+    TokenConfig memory wBNBConfig = oracleAdaptor.getTokenConfig(WBNB);
+    assertEq(config.asset, address(ptClisBNB25apr));
+    assertEq(config.oracles[0], wBNBConfig.oracles[0]);
+    assertEq(config.oracles[1], wBNBConfig.oracles[1]);
+    assertEq(config.oracles[2], wBNBConfig.oracles[2]);
+    assertEq(config.enableFlagsForOracles[0], wBNBConfig.enableFlagsForOracles[0]);
+    assertEq(config.enableFlagsForOracles[1], wBNBConfig.enableFlagsForOracles[1]);
+    assertEq(config.enableFlagsForOracles[2], wBNBConfig.enableFlagsForOracles[2]);
+    assertEq(config.timeDeltaTolerance, wBNBConfig.timeDeltaTolerance);
+
+    TokenConfig memory slisBnbConfig = oracleAdaptor.getTokenConfig(oracleAdaptor.SLISBNB());
+    assertEq(slisBnbConfig.asset, oracleAdaptor.SLISBNB());
+    assertEq(slisBnbConfig.oracles[0], address(oracleAdaptor));
+    assertEq(slisBnbConfig.oracles[1], wBNBConfig.oracles[1]);
+    assertEq(slisBnbConfig.oracles[2], wBNBConfig.oracles[2]);
+    assertEq(slisBnbConfig.enableFlagsForOracles[0], true);
+    assertEq(slisBnbConfig.enableFlagsForOracles[1], wBNBConfig.enableFlagsForOracles[1]);
+    assertEq(slisBnbConfig.enableFlagsForOracles[2], wBNBConfig.enableFlagsForOracles[2]);
+    assertEq(slisBnbConfig.timeDeltaTolerance, wBNBConfig.timeDeltaTolerance);
+
+    test_config_ptOracle();
+    TokenConfig memory ptConfig = oracleAdaptor.getTokenConfig(address(ptSusde26Jun2025));
+    assertEq(ptConfig.asset, address(ptSusde26Jun2025));
+    assertEq(ptConfig.oracles[0], address(oracleAdaptor));
+    assertEq(ptConfig.oracles[1], address(0));
+    assertEq(ptConfig.oracles[2], address(0));
+    assertEq(ptConfig.enableFlagsForOracles[0], true);
+    assertEq(ptConfig.enableFlagsForOracles[1], false);
+    assertEq(ptConfig.enableFlagsForOracles[2], false);
+    assertEq(ptConfig.timeDeltaTolerance, 0);
   }
 
   function getImplementation(address _proxyAddress) public view returns (address) {
