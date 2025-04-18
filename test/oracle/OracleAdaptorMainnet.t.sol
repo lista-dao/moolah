@@ -145,11 +145,11 @@ contract OracleAdaptorTest is Test {
     TokenConfig memory slisBnbConfig = oracleAdaptor.getTokenConfig(oracleAdaptor.SLISBNB());
     assertEq(slisBnbConfig.asset, oracleAdaptor.SLISBNB());
     assertEq(slisBnbConfig.oracles[0], address(oracleAdaptor));
-    assertEq(slisBnbConfig.oracles[1], wBNBConfig.oracles[1]);
-    assertEq(slisBnbConfig.oracles[2], wBNBConfig.oracles[2]);
+    assertEq(slisBnbConfig.oracles[1], address(0));
+    assertEq(slisBnbConfig.oracles[2], address(0));
     assertEq(slisBnbConfig.enableFlagsForOracles[0], true);
-    assertEq(slisBnbConfig.enableFlagsForOracles[1], wBNBConfig.enableFlagsForOracles[1]);
-    assertEq(slisBnbConfig.enableFlagsForOracles[2], wBNBConfig.enableFlagsForOracles[2]);
+    assertEq(slisBnbConfig.enableFlagsForOracles[1], false);
+    assertEq(slisBnbConfig.enableFlagsForOracles[2], false);
     assertEq(slisBnbConfig.timeDeltaTolerance, wBNBConfig.timeDeltaTolerance);
 
     test_config_ptOracle();

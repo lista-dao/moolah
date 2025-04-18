@@ -104,8 +104,8 @@ contract OracleAdaptor is AccessControlEnumerableUpgradeable, UUPSUpgradeable, I
     if (asset == SLISBNB) {
       TokenConfig memory config = IOracle(RESILIENT_ORACLE).getTokenConfig(WBNB);
       config.asset = SLISBNB;
-      config.oracles[0] = address(this);
-      config.enableFlagsForOracles[0] = true;
+      config.oracles = [address(this), address(0), address(0)];
+      config.enableFlagsForOracles = [true, false, false];
       return config;
     }
 
