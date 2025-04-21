@@ -44,6 +44,9 @@ library ErrorsLib {
   /// @notice Thrown when the caller is not authorized to conduct an action.
   string internal constant UNAUTHORIZED = "unauthorized";
 
+  /// @notice Thrown when the caller is not provider.
+  string internal constant NOT_PROVIDER = "not provider";
+
   /// @notice Thrown when the collateral is insufficient to `borrow` or `withdrawCollateral`.
   string internal constant INSUFFICIENT_COLLATERAL = "insufficient collateral";
 

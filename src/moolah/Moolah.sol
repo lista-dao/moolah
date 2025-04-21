@@ -23,6 +23,7 @@ import { SharesMathLib } from "./libraries/SharesMathLib.sol";
 import { MarketParamsLib } from "./libraries/MarketParamsLib.sol";
 import { SafeTransferLib } from "./libraries/SafeTransferLib.sol";
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import { IProvider } from "./interfaces/IProvider.sol";
 
 /// @title Moolah
 /// @author Lista DAO
@@ -69,6 +70,8 @@ contract Moolah is
   mapping(Id => EnumerableSet.AddressSet) private liquidationWhitelist;
   /// The minimum loan token position value, using the same precision as the oracle (8 decimals).
   uint256 public minLoanValue;
+  /// token => provider address
+  mapping(address => address) public providers;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant PAUSER = keccak256("PAUSER"); // pauser role
@@ -168,6 +171,27 @@ contract Moolah is
     liquidationWhitelist[id].remove(account);
 
     emit EventsLib.RemoveLiquidationWhitelist(id, account);
+  }
+
+  function addProvider(address token, address provider) external onlyRole(MANAGER) {
+    require(token != address(0), ErrorsLib.ZERO_ADDRESS);
+    require(provider != address(0), ErrorsLib.ZERO_ADDRESS);
+    require(providers[token] != provider, ErrorsLib.ALREADY_SET);
+
+    providers[token] = provider;
+
+    emit EventsLib.AddProvider(token, provider);
+  }
+
+  function removeProvider(address token) external onlyRole(MANAGER) {
+    require(token != address(0), ErrorsLib.ZERO_ADDRESS);
+    require(providers[token] != address(0), ErrorsLib.NOT_SET);
+
+    address provider = providers[token];
+
+    delete providers[token];
+
+    emit EventsLib.RemoveProvider(token, provider);
   }
 
   /* MARKET CREATION */
@@ -279,7 +303,11 @@ contract Moolah is
     require(UtilsLib.exactlyOneZero(assets, shares), ErrorsLib.INCONSISTENT_INPUT);
     require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
     // No need to verify that onBehalf != address(0) thanks to the following authorization check.
-    require(_isSenderAuthorized(onBehalf), ErrorsLib.UNAUTHORIZED);
+    if (providers[marketParams.loanToken] == msg.sender) {
+      require(receiver == providers[marketParams.loanToken], ErrorsLib.NOT_PROVIDER);
+    } else {
+      require(_isSenderAuthorized(onBehalf), ErrorsLib.UNAUTHORIZED);
+    }
 
     _accrueInterest(marketParams, id);
 
@@ -349,7 +377,9 @@ contract Moolah is
     require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
     require(assets != 0, ErrorsLib.ZERO_ASSETS);
     require(onBehalf != address(0), ErrorsLib.ZERO_ADDRESS);
-
+    if (providers[marketParams.collateralToken] != address(0)) {
+      require(msg.sender == providers[marketParams.collateralToken], ErrorsLib.NOT_PROVIDER);
+    }
     // Don't accrue interest because it's not required and it saves gas.
 
     position[id][onBehalf].collateral += assets.toUint128();
@@ -373,7 +403,11 @@ contract Moolah is
     require(assets != 0, ErrorsLib.ZERO_ASSETS);
     require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
     // No need to verify that onBehalf != address(0) thanks to the following authorization check.
-    require(_isSenderAuthorized(onBehalf), ErrorsLib.UNAUTHORIZED);
+    if (providers[marketParams.collateralToken] != address(0)) {
+      require(msg.sender == providers[marketParams.collateralToken] && receiver == providers[marketParams.collateralToken], ErrorsLib.NOT_PROVIDER);
+    } else {
+      require(_isSenderAuthorized(onBehalf), ErrorsLib.UNAUTHORIZED);
+    }
 
     _accrueInterest(marketParams, id);
 
@@ -470,6 +504,10 @@ contract Moolah is
     IERC20(marketParams.loanToken).safeTransferFrom(msg.sender, address(this), repaidAssets);
 
     require(_isHealthyAfterLiquidate(marketParams, borrower), ErrorsLib.UNHEALTHY_POSITION);
+
+    if (providers[marketParams.collateralToken] != address(0)) {
+      IProvider(providers[marketParams.collateralToken]).liquidate(id, borrower);
+    }
 
     return (seizedAssets, repaidAssets);
   }
