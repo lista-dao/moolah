@@ -301,13 +301,13 @@ contract MoolahVault is
   }
 
   /// @inheritdoc IMoolahVaultBase
-  function setBotRole(address _address) onlyRole(ALLOCATOR) external override {
+  function setBotRole(address _address) external override onlyRole(ALLOCATOR) {
     require(_address != address(0), ErrorsLib.ZeroAddress());
     require(_grantRole(BOT, _address), ErrorsLib.SetBotFailed());
   }
 
   /// @inheritdoc IMoolahVaultBase
-  function revokeBotRole(address _address) onlyRole(ALLOCATOR) external override {
+  function revokeBotRole(address _address) external override onlyRole(ALLOCATOR) {
     require(_address != address(0), ErrorsLib.ZeroAddress());
     require(_revokeRole(BOT, _address), ErrorsLib.RevokeBotFailed());
   }
@@ -411,6 +411,29 @@ contract MoolahVault is
     _withdraw(_msgSender(), receiver, owner, assets, shares);
   }
 
+  /// @dev Withdraws `assets` from the vault and sends them to `receiver`.
+  /// @dev This function is called by providers to withdraw assets from the vault.
+  /// @dev It is not a standard ERC4626 function and should not be used directly.
+  /// @param assets The amount of assets to withdraw.
+  /// @param owner The address of the owner of the shares; shares are burned from owner.
+  /// @param sender The address of the caller who initiated the withdrawal via the provider.
+  function withdrawFor(uint256 assets, address owner, address sender) external returns (uint256 shares) {
+    address provider = MOOLAH.providers(asset());
+    require(provider != address(0), ErrorsLib.ZeroAddress());
+    require(msg.sender == provider, ErrorsLib.NotProvider());
+
+    uint256 newTotalAssets = _accrueFee();
+
+    // Do not call expensive `maxWithdraw` and optimistically withdraw assets.
+
+    shares = _convertToSharesWithTotals(assets, totalSupply(), newTotalAssets, Math.Rounding.Ceil);
+
+    // `newTotalAssets - assets` may be a little off from `totalAssets()`.
+    _updateLastTotalAssets(newTotalAssets.zeroFloorSub(assets));
+
+    _withdraw(sender, provider, owner, assets, shares);
+  }
+
   /// @inheritdoc IERC4626
   function redeem(uint256 shares, address receiver, address owner) public override returns (uint256 assets) {
     uint256 newTotalAssets = _accrueFee();
@@ -423,6 +446,29 @@ contract MoolahVault is
     _updateLastTotalAssets(newTotalAssets.zeroFloorSub(assets));
 
     _withdraw(_msgSender(), receiver, owner, assets, shares);
+  }
+
+  /// @dev Redeems `shares` from the vault and sends them to `receiver`.
+  /// @dev This function is called by providers to redeem shares from the vault.
+  /// @dev It is not a standard ERC4626 function and should not be used directly.
+  /// @param shares The amount of shares to redeem.
+  /// @param owner The address of the owner of the shares; shares are burned from owner.
+  /// @param sender The address of the caller who initiated the redemption via the provider.
+  function redeemFor(uint256 shares, address owner, address sender) external returns (uint256 assets) {
+    address provider = MOOLAH.providers(asset());
+    require(provider != address(0), ErrorsLib.ZeroAddress());
+    require(msg.sender == provider, ErrorsLib.NotProvider());
+
+    uint256 newTotalAssets = _accrueFee();
+
+    // Do not call expensive `maxRedeem` and optimistically redeem shares.
+
+    assets = _convertToAssetsWithTotals(shares, totalSupply(), newTotalAssets, Math.Rounding.Floor);
+
+    // `newTotalAssets - assets` may be a little off from `totalAssets()`.
+    _updateLastTotalAssets(newTotalAssets.zeroFloorSub(assets));
+
+    _withdraw(sender, provider, owner, assets, shares);
   }
 
   /// @inheritdoc IERC4626

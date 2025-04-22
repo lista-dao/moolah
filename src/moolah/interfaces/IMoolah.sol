@@ -373,4 +373,7 @@ interface IMoolah is IMoolahBase {
   function idToMarketParams(Id id) external view returns (MarketParams memory);
 
   function getPrice(MarketParams calldata marketParams) external view returns (uint256);
+
+  /// @notice The address of the provider for the given loan/collateral token.
+  function providers(address token) external view returns (address);
 }
