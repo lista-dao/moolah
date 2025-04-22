@@ -308,6 +308,9 @@ interface IMoolahBase {
 
   /// @notice remove the provider for the token.
   function removeProvider(address token) external;
+
+  /// @notice get the provider for the token.
+  function providers(address token) external view returns (address);
 }
 
 /// @dev This interface is inherited by Moolah so that function signatures are checked by the compiler.
