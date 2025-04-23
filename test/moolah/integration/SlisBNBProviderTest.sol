@@ -6,19 +6,19 @@ import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.so
 import "../BaseTest.sol";
 import { MockStakeManager } from "../mocks/MockStakeManager.sol";
 import { MockLpToken } from "../mocks/MockLpToken.sol";
-import { MoolahSlisBNBProvider } from "moolah/MoolahSlisBNBProvider.sol";
+import { SlisBNBProvider } from "moolah/SlisBNBProvider.sol";
 
-contract MoolahSlisBNBProviderTest is BaseTest {
+contract SlisBNBProviderTest is BaseTest {
   using MarketParamsLib for MarketParams;
 
   MockStakeManager stakeManager;
-  MoolahSlisBNBProvider provider;
+  SlisBNBProvider provider;
   MockLpToken lpToken;
-  address reserveAddress;
+  address MPC;
   function setUp() public override {
     super.setUp();
 
-    reserveAddress = makeAddr("RESERVE");
+    MPC = makeAddr("MPC");
 
     lpToken = new MockLpToken();
 
@@ -26,19 +26,19 @@ contract MoolahSlisBNBProviderTest is BaseTest {
     stakeManager.setExchangeRate(1 ether);
 
 
-    provider = newMoolahSlisBNBProvider(
+    provider = newSlisBNBProvider(
       OWNER,
       OWNER,
       address(moolah),
       address(collateralToken),
       address(stakeManager),
       address(lpToken),
-      0.997 ether,
-      reserveAddress
+      0.997 ether
     );
 
     vm.startPrank(OWNER);
     moolah.addProvider(address(collateralToken), address(provider));
+    provider.addMPCWallet(MPC, type(uint256).max);
     vm.stopPrank();
 
     vm.startPrank(SUPPLIER);
@@ -160,17 +160,16 @@ contract MoolahSlisBNBProviderTest is BaseTest {
 
   }
 
-  function newMoolahSlisBNBProvider(
+  function newSlisBNBProvider(
     address admin,
     address manager,
     address _moolah,
     address _token,
     address _stakeManager,
     address _lpToken,
-    uint128 _userLpRate,
-    address _lpReserveAddress
-  ) public returns (MoolahSlisBNBProvider) {
-    MoolahSlisBNBProvider providerImpl = new MoolahSlisBNBProvider();
+    uint128 _userLpRate
+  ) public returns (SlisBNBProvider) {
+    SlisBNBProvider providerImpl = new SlisBNBProvider();
 
     ERC1967Proxy moolahProxy = new ERC1967Proxy(
       address(providerImpl),
@@ -182,11 +181,10 @@ contract MoolahSlisBNBProviderTest is BaseTest {
         _token,
         _stakeManager,
         _lpToken,
-        _userLpRate,
-        _lpReserveAddress
+        _userLpRate
       )
     );
-    return MoolahSlisBNBProvider(address(moolahProxy));
+    return SlisBNBProvider(address(moolahProxy));
   }
 
 }

@@ -12,9 +12,15 @@ import { MarketParamsLib } from "./libraries/MarketParamsLib.sol";
 import {Moolah} from "./Moolah.sol";
 import {IStakeManager} from "../oracle/interfaces/IStakeManager.sol";
 
-contract MoolahSlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
+contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   using SafeERC20 for IERC20;
   using MarketParamsLib for MarketParams;
+
+  struct MPCWallet {
+    address walletAddress;
+    uint256 balance;
+    uint256 cap;
+  }
 
   // slisBNB token address
   address public token;
@@ -37,12 +43,12 @@ contract MoolahSlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgrad
   uint128 public exchangeRate;
   // rate of lpToken to user when deposit
   uint128 public userLpRate;
-  // should be a mpc wallet address
-  address public lpReserveAddress;
   // user account > sum reserved lpToken
   mapping(address => uint256) public userReservedLp;
   // total reserved lpToken
   uint256 public totalReservedLp;
+  // mpc wallets
+  MPCWallet[] public mpcWallets;
 
   uint128 public constant RATE_DENOMINATOR = 1e18;
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
@@ -51,10 +57,12 @@ contract MoolahSlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgrad
   event UserLpRebalanced(address account, uint256 userLp, uint256 reservedLp);
   event ExchangeRateChanged(uint128 rate);
   event UserLpRateChanged(uint128 rate);
-  event LpReserveAddressChanged(address newAddress);
   event Deposit(address indexed account, uint256 amount, uint256 lPAmount);
   event Withdrawal(address indexed owner, uint256 amount);
   event ChangeDelegateTo(address account, address oldDelegatee, address newDelegatee);
+  event MpcWalletCapChanged(address wallet, uint256 oldCap, uint256 newCap);
+  event MpcWalletRemoved(address wallet);
+  event MpcWalletAdded(address wallet, uint256 cap);
 
 
   /// @custom:oz-upgrades-unsafe-allow constructor
@@ -71,7 +79,6 @@ contract MoolahSlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgrad
   /// @param _stakeManager The address of the StakeManager contract.
   /// @param _lpToken The address of the LP token contract.
   /// @param _userLpRate The rate of LP token to user when deposit.
-  /// @param _lpReserveAddress The address of the LP reserve.
   function initialize(
       address admin,
       address manager,
@@ -79,8 +86,7 @@ contract MoolahSlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgrad
       address _token,
       address _stakeManager,
       address _lpToken,
-      uint128 _userLpRate,
-      address _lpReserveAddress
+      uint128 _userLpRate
   ) public initializer {
     require(admin != address(0), "admin is the zero address");
     require(manager != address(0), "manager is the zero address");
@@ -88,7 +94,6 @@ contract MoolahSlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgrad
     require(_token != address(0), "token is the zero address");
     require(_stakeManager != address(0), "stakeManager is the zero address");
     require(_lpToken != address(0), "lpToken is the zero address");
-    require(_lpReserveAddress != address(0), "lpReserveAddress is the zero address");
 
     __AccessControl_init();
 
@@ -100,7 +105,6 @@ contract MoolahSlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgrad
     stakeManager = IStakeManager(_stakeManager);
     lpToken = ILpToken(_lpToken);
     userLpRate = _userLpRate;
-    lpReserveAddress = _lpReserveAddress;
   }
 
   /// @dev Supply collateral to the Moolah contract. And mint lpToken to user
@@ -216,10 +220,10 @@ contract MoolahSlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgrad
 
     // ---- [3] handle reserved LP
     if (oldReservedLp > newReservedLp) {
-      _safeBurnLp(lpReserveAddress, oldReservedLp - newReservedLp);
+      _burnFromMPCs(oldReservedLp - newReservedLp);
       totalReservedLp -= (oldReservedLp - newReservedLp);
     } else if (oldReservedLp < newReservedLp) {
-      lpToken.mint(lpReserveAddress, newReservedLp - oldReservedLp);
+      _mintToMPCs(newReservedLp - oldReservedLp);
       totalReservedLp += (newReservedLp - oldReservedLp);
     }
     userReservedLp[account] = newReservedLp;
@@ -229,6 +233,7 @@ contract MoolahSlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgrad
     // account as the default delegatee if holder is not set
     if(holder == address(0)) {
       holder = account;
+      delegation[account] = holder;
     }
     if (oldUserLp > newUserLp) {
       _safeBurnLp(holder, oldUserLp - newUserLp);
@@ -306,26 +311,137 @@ contract MoolahSlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgrad
     }
   }
 
-  /* ----------------------------------- Admin functions ----------------------------------- */
+  /* ----------------------------------- MANAGER functions ----------------------------------- */
   function setUserLpRate(uint128 _userLpRate) external onlyRole(MANAGER) {
     require(_userLpRate <= 1e18 && _userLpRate <= exchangeRate, "userLpRate invalid");
 
     userLpRate = _userLpRate;
     emit UserLpRateChanged(userLpRate);
   }
+  /**
+ * @dev Set the cap of the MPC wallet
+   * @param idx - index of the MPC wallet
+   * @param cap - new cap of the MPC wallet
+   */
+  function setMpcWalletCap(uint256 idx, uint256 cap) external onlyRole(MANAGER) {
+    require(idx < mpcWallets.length, "Invalid index");
+    require(cap > 0 && cap != mpcWallets[idx].cap, "Invalid cap");
+    // get the current wallet
+    MPCWallet storage wallet = mpcWallets[idx];
+    // save old cap
+    uint256 oldCap = wallet.cap;
+    // set the cap
+    wallet.cap = cap;
+    // if cap less than the balance
+    // we need to burn the difference, and mint to other MPCs
+    if (cap < wallet.balance) {
+      uint256 toBurn = wallet.balance - cap;
+      // burn lpToken from MPC
+      lpToken.burn(wallet.walletAddress, toBurn);
+      // deduct balance
+      wallet.balance -= toBurn;
+      // mint lpToken to the other MPCs
+      _mintToMPCs(toBurn);
+    }
+    // emit event
+    emit MpcWalletCapChanged(wallet.walletAddress, oldCap, cap);
+  }
 
   /**
-   * change lpReserveAddress, all reserved lpToken will be burned from original address and be minted to new address
-   * @param _lpTokenReserveAddress new lpTokenReserveAddress
-     */
-  function setLpReserveAddress(address _lpTokenReserveAddress) external onlyRole(MANAGER) {
-    require(_lpTokenReserveAddress != address(0) && _lpTokenReserveAddress != lpReserveAddress, "lpTokenReserveAddress invalid");
-    if (totalReservedLp > 0) {
-      lpToken.burn(lpReserveAddress, totalReservedLp);
-      lpToken.mint(_lpTokenReserveAddress, totalReservedLp);
+   * @dev Remove MPC wallet
+   * @param idx - index of the MPC wallet
+   */
+  function removeMPCWallet(uint256 idx) external onlyRole(MANAGER) {
+    require(idx < mpcWallets.length, "Invalid index");
+    // get the current wallet
+    MPCWallet storage wallet = mpcWallets[idx];
+    // cache address
+    address walletAddress = wallet.walletAddress;
+    // check if the balance is 0
+    require(wallet.balance == 0, "Balance not zero");
+    // remove the wallet
+    mpcWallets[idx] = mpcWallets[mpcWallets.length - 1];
+    mpcWallets.pop();
+    // emit event
+    emit MpcWalletRemoved(walletAddress);
+  }
+
+  /**
+   * @dev Add MPC wallet
+   * @param walletAddress - address of the MPC wallet
+   * @param cap - cap of the MPC wallet
+   */
+  function addMPCWallet(address walletAddress, uint256 cap) external onlyRole(MANAGER) {
+    require(walletAddress != address(0), "zero address provided");
+    // check if the wallet already exists
+    for (uint256 i = 0; i < mpcWallets.length; ++i) {
+      require(mpcWallets[i].walletAddress != walletAddress, "Wallet already exists");
     }
-    lpReserveAddress = _lpTokenReserveAddress;
-    emit LpReserveAddressChanged(lpReserveAddress);
+    // add the wallet
+    mpcWallets.push(MPCWallet(walletAddress, 0, cap));
+    // emit event
+    emit MpcWalletAdded(walletAddress, cap);
+  }
+
+
+  /**
+   * @dev Mint lpToken to MPC wallets
+   *      mint the lpToken as the amount of totalToken increment
+   *      first mint, last burn
+   * @param amount - amount of lpToken to mint
+   */
+  function _mintToMPCs(uint256 amount) internal {
+    uint256 leftToMint = amount;
+    // loop through the MPC wallets
+    for (uint256 i = 0; i < mpcWallets.length; ++i) {
+      // mint completed
+      if (leftToMint == 0) break;
+      // get the current wallet
+      MPCWallet storage wallet = mpcWallets[i];
+      // get lpToken balance
+      uint256 balance = wallet.balance;
+      // balance not reached the cap yet
+      if (balance <= wallet.cap) {
+        uint256 toMint = balance + leftToMint > wallet.cap ? wallet.cap - balance : leftToMint;
+        // mint lpToken to the wallet
+        lpToken.mint(wallet.walletAddress, toMint);
+        // add up balance
+        wallet.balance += toMint;
+        // deduct leftToMint
+        leftToMint -= toMint;
+      }
+    }
+
+    require(leftToMint == 0, "Not enough MPC wallets to mint");
+  }
+
+  /**
+   * @dev Burn lpToken from MPC wallets
+   *      burn the lpToken as the amount of totalToken decrement
+   *      burn from the last MPC wallet
+   * @param amount - amount of lpToken to burn
+   */
+  function _burnFromMPCs(uint256 amount) internal {
+    uint256 leftToBurn = amount;
+    // loop through the MPC wallets
+    for (uint256 i = mpcWallets.length; i > 0; i--) {
+      // burn completed
+      if (leftToBurn == 0) break;
+      // get the current wallet
+      MPCWallet storage wallet = mpcWallets[i - 1];
+      // get lpToken balance
+      uint256 balance = wallet.balance;
+      // balance not reached the cap yet
+      if (balance > 0) {
+        uint256 toBurn = balance < leftToBurn ? balance : leftToBurn;
+        // burn lpToken from MPC
+        lpToken.burn(wallet.walletAddress, toBurn);
+        // deduct balance
+        wallet.balance -= toBurn;
+        // deduct leftToMint
+        leftToBurn -= toBurn;
+      }
+    }
   }
 
   /**
