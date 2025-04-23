@@ -8,9 +8,9 @@ import { ILinearDiscountOracle } from "./interfaces/ILinearDiscountOracle.sol";
 
 contract PTLinearDiscountOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   /// @dev PT token address
-  address asset;
+  address public asset;
   /// @dev Linear discount oracle address
-  address discountOracle;
+  address public discountOracle;
 
   bytes32 public constant MANAGER = keccak256("MANAGER");
 
@@ -23,7 +23,7 @@ contract PTLinearDiscountOracle is UUPSUpgradeable, AccessControlEnumerableUpgra
     require(admin != address(0), "Invalid admin address");
     require(manager != address(0), "Invalid manager address");
     require(_asset != address(0), "Invalid asset address");
-    require(asset == ILinearDiscountOracle(linearDiscount).PT(), "Asset mismatch");
+    require(_asset == ILinearDiscountOracle(linearDiscount).PT(), "Asset mismatch");
     require(ILinearDiscountOracle(linearDiscount).decimals() == 18, "Invalid discount oracle");
 
     asset = _asset;
