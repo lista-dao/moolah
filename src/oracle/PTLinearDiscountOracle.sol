@@ -27,10 +27,11 @@ contract PTLinearDiscountOracle is UUPSUpgradeable, AccessControlEnumerableUpgra
     require(ILinearDiscountOracle(linearDiscount).decimals() == 18, "Invalid discount oracle");
 
     asset = _asset;
+    discountOracle = linearDiscount;
     __AccessControl_init();
 
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
-    _grantRole(MANAGER, admin);
+    _grantRole(MANAGER, manager);
   }
 
   function peek(address _asset) public view returns (uint256) {
