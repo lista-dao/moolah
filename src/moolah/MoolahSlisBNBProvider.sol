@@ -63,8 +63,15 @@ contract MoolahSlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgrad
   }
 
 
+  /// @dev Initializes the contract with the given parameters.
   /// @param admin The new admin of the contract.
   /// @param manager The new manager of the contract.
+  /// @param moolah The address of the Moolah contract.
+  /// @param _token The address of the token contract.
+  /// @param _stakeManager The address of the StakeManager contract.
+  /// @param _lpToken The address of the LP token contract.
+  /// @param _userLpRate The rate of LP token to user when deposit.
+  /// @param _lpReserveAddress The address of the LP reserve.
   function initialize(
       address admin,
       address manager,
@@ -96,6 +103,7 @@ contract MoolahSlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgrad
     lpReserveAddress = _lpReserveAddress;
   }
 
+  /// @dev Supply collateral to the Moolah contract. And mint lpToken to user
   function supplyCollateral(
     MarketParams memory marketParams,
     uint256 assets,
@@ -131,6 +139,7 @@ contract MoolahSlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgrad
   }
 
 
+  /// @dev Withdraws the specified amount of collateral from the Moolah contract. And rebalance lpToken
   function withdrawCollateral(
     MarketParams memory marketParams,
     uint256 assets,
@@ -151,7 +160,11 @@ contract MoolahSlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgrad
     emit Withdrawal(msg.sender, assets);
   }
 
+  /// @dev Will be called when liquidation happens
+  /// @param id The market id.
+  /// @param borrower The address of the borrower.
   function liquidate(Id id, address borrower) external {
+    require(msg.sender == address(MOOLAH), "only moolah can call this function");
     _syncPosition(id, borrower);
   }
 

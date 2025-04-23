@@ -9,6 +9,8 @@ import { MockLpToken } from "../mocks/MockLpToken.sol";
 import { MoolahSlisBNBProvider } from "moolah/MoolahSlisBNBProvider.sol";
 
 contract MoolahSlisBNBProviderTest is BaseTest {
+  using MarketParamsLib for MarketParams;
+
   MockStakeManager stakeManager;
   MoolahSlisBNBProvider provider;
   MockLpToken lpToken;
@@ -20,7 +22,7 @@ contract MoolahSlisBNBProviderTest is BaseTest {
 
     lpToken = new MockLpToken();
 
-    MockStakeManager stakeManager = new MockStakeManager();
+    stakeManager = new MockStakeManager();
     stakeManager.setExchangeRate(1 ether);
 
 
@@ -31,7 +33,7 @@ contract MoolahSlisBNBProviderTest is BaseTest {
       address(collateralToken),
       address(stakeManager),
       address(lpToken),
-      0.03 ether,
+      0.997 ether,
       reserveAddress
     );
 
@@ -40,6 +42,10 @@ contract MoolahSlisBNBProviderTest is BaseTest {
     vm.stopPrank();
 
     vm.startPrank(SUPPLIER);
+    collateralToken.approve(address(provider), type(uint256).max);
+    vm.stopPrank();
+
+    vm.startPrank(BORROWER);
     collateralToken.approve(address(provider), type(uint256).max);
     vm.stopPrank();
   }
@@ -54,6 +60,13 @@ contract MoolahSlisBNBProviderTest is BaseTest {
     provider.supplyCollateral(marketParams, 100 ether, SUPPLIER, "");
     assertEq(collateralToken.balanceOf(SUPPLIER), 0, "SUPPLIER balance error");
     vm.stopPrank();
+
+    uint256 expectUserLp = 100 ether * 0.997 ether / 1e18;
+    uint256 expectReserve = 100 ether - expectUserLp;
+
+    assertEq(provider.userLp(SUPPLIER), expectUserLp, "userLp error");
+    assertEq(provider.userReservedLp(SUPPLIER), expectReserve, "userReservedLp error");
+    assertEq(provider.totalReservedLp(), expectReserve, "totalReservedLp error");
   }
 
   function test_withdrawCollateral() public {
@@ -67,6 +80,13 @@ contract MoolahSlisBNBProviderTest is BaseTest {
     provider.withdrawCollateral(marketParams, 100 ether, SUPPLIER, SUPPLIER);
     assertEq(collateralToken.balanceOf(SUPPLIER), 100 ether, "SUPPLIER balance error");
     vm.stopPrank();
+
+    uint256 expectUserLp = 0;
+    uint256 expectReserve = 0;
+
+    assertEq(provider.userLp(SUPPLIER), expectUserLp, "userLp error");
+    assertEq(provider.userReservedLp(SUPPLIER), expectReserve, "userReservedLp error");
+    assertEq(provider.totalReservedLp(), expectReserve, "totalReservedLp error");
   }
 
   function test_addProvider() public {
@@ -82,7 +102,7 @@ contract MoolahSlisBNBProviderTest is BaseTest {
     moolah.addProvider(testToken, testProvider);
     vm.stopPrank();
 
-//    assertEq(testProvider, moolah)
+    assertEq(testProvider, moolah.providers(testToken), "provider error");
   }
 
   function test_removeProvider() public {
@@ -93,7 +113,6 @@ contract MoolahSlisBNBProviderTest is BaseTest {
     moolah.addProvider(testToken, testProvider);
     vm.stopPrank();
 
-
     vm.expectRevert(abi.encodeWithSelector(
       IAccessControl.AccessControlUnauthorizedAccount.selector, address(this), provider.MANAGER()
     ));
@@ -102,6 +121,43 @@ contract MoolahSlisBNBProviderTest is BaseTest {
     vm.startPrank(OWNER);
     moolah.removeProvider(testToken);
     vm.stopPrank();
+
+    assertEq(address(0), moolah.providers(testToken), "provider error");
+  }
+
+  function test_liquidate() public {
+    loanToken.setBalance(SUPPLIER, 100 ether);
+    collateralToken.setBalance(BORROWER, 100 ether);
+    loanToken.setBalance(LIQUIDATOR, 100 ether);
+
+    oracle.setPrice(address(loanToken), 1e8);
+    oracle.setPrice(address(collateralToken), 1e8);
+
+    vm.startPrank(SUPPLIER);
+    moolah.supply(marketParams, 100 ether, 0,SUPPLIER, "");
+    vm.stopPrank();
+
+    vm.startPrank(BORROWER);
+    provider.supplyCollateral(marketParams, 100 ether, BORROWER, "");
+    moolah.borrow(marketParams, 80 ether, 0, BORROWER, BORROWER);
+    vm.stopPrank();
+
+    oracle.setPrice(address(collateralToken), 1e8 - 1);
+
+    uint256 borrowShares = moolah.position(marketParams.id(), BORROWER).borrowShares;
+
+    vm.startPrank(LIQUIDATOR);
+    moolah.liquidate(marketParams, BORROWER, 0, borrowShares, "");
+    vm.stopPrank();
+
+    uint256 remainCollateral = moolah.position(marketParams.id(), BORROWER).collateral;
+    uint256 expectUserLp = remainCollateral * 0.997 ether / 1e18;
+    uint256 expectReserve = remainCollateral - expectUserLp;
+
+    assertEq(provider.userLp(BORROWER), expectUserLp, "userLp error");
+    assertEq(provider.userReservedLp(BORROWER), expectReserve, "userReservedLp error");
+    assertEq(provider.totalReservedLp(), expectReserve, "totalReservedLp error");
+
   }
 
   function newMoolahSlisBNBProvider(
