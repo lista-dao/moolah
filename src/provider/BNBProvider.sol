@@ -77,8 +77,7 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   /// @param receiver The address to receive the shares.
   function mint(uint256 shares, address receiver) external payable returns (uint256 assets) {
     require(shares > 0, ErrorsLib.ZERO_ASSETS);
-    // uint256 previewAssets = MOOLAH_VAULT.convertToAssets(shares);
-    uint256 previewAssets = MOOLAH_VAULT.previewMint(shares); // use preview because `convertToAssets` is not accurate, 1 wei less than expected
+    uint256 previewAssets = MOOLAH_VAULT.previewMint(shares); // ceiling rounding
     require(msg.value >= previewAssets, "invalid BNB amount");
 
     WBNB.deposit{ value: previewAssets }();
@@ -136,7 +135,7 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   /// @param onBehalf The address of the position owner to borrow from.
   /// @param receiver The address to receive the BNB.
   function borrow(
-    MarketParams memory marketParams,
+    MarketParams calldata marketParams,
     uint256 assets,
     uint256 shares,
     address onBehalf,
@@ -199,7 +198,11 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   /// @param marketParams The market parameters.
   /// @param onBehalf The address of the position owner to supply collateral to.
   /// @param data The data to pass to the Moolah contract.
-  function supplyCollateral(MarketParams memory marketParams, address onBehalf, bytes calldata data) external payable {
+  function supplyCollateral(
+    MarketParams calldata marketParams,
+    address onBehalf,
+    bytes calldata data
+  ) external payable {
     uint256 assets = msg.value;
     require(assets > 0, ErrorsLib.ZERO_ASSETS);
     require(marketParams.collateralToken == address(WBNB), "invalid collateral token");
@@ -218,7 +221,7 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   /// @param onBehalf The address of the position owner to withdraw collateral from. msg.sender must be authorized to manage onBehalf's position.
   /// @param receiver The address to receive the assets.
   function withdrawCollateral(
-    MarketParams memory marketParams,
+    MarketParams calldata marketParams,
     uint256 assets,
     address onBehalf,
     address payable receiver
