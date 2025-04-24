@@ -85,4 +85,7 @@ library ErrorsLib {
 
   /// @notice Thrown when set bot role failed
   error SetBotFailed();
+
+  /// @notice Thrown when the address is not a provider.
+  error NotProvider();
 }

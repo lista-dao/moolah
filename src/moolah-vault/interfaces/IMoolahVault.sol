@@ -138,4 +138,14 @@ interface IMoolahVault is IMoolahVaultBase, IERC4626, IERC20Permit, IOwnable, IM
 
   /// @notice revokes `role` from `account`.
   function revokeRole(bytes32 role, address account) external;
+
+  /// @notice called by provider to withdraw assets from the vault.
+  function withdrawFor(
+    uint256 assets,
+    address owner,
+    address sender
+  ) external returns (uint256 shares);
+
+  /// @notice called by provider to redeem shares from the vault.
+  function redeemFor(uint256 shares, address owner, address sender) external returns (uint256 assets);
 }
