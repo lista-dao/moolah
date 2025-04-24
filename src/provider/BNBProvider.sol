@@ -86,7 +86,6 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     require(msg.value >= previewAssets, "invalid BNB amount");
 
     WBNB.deposit{ value: previewAssets }();
-    require(WBNB.balanceOf(address(this)) >= previewAssets, "not enough WBNB");
     require(WBNB.approve(address(MOOLAH_VAULT), previewAssets));
     assets = MOOLAH_VAULT.mint(shares, receiver);
 
@@ -102,7 +101,6 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   /// @param owner The address of the owner of the shares.
   function withdraw(uint256 assets, address payable receiver, address owner) external returns (uint256 shares) {
     require(assets > 0, ErrorsLib.ZERO_ASSETS);
-    uint256 previewShares = MOOLAH_VAULT.previewWithdraw(assets);
 
     // 1. withdraw WBNB from moolah vault
     shares = MOOLAH_VAULT.withdrawFor(assets, owner, msg.sender);
