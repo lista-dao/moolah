@@ -399,9 +399,7 @@ contract MoolahVault is
 
   /// @inheritdoc IERC4626
   function withdraw(uint256 assets, address receiver, address owner) public override returns (uint256 shares) {
-    shares = _accureFeeAndUpdateAssetsForWithdraw(assets);
-
-    _withdraw(_msgSender(), receiver, owner, assets, shares);
+    shares = _withdrawInternal(assets, receiver, owner, _msgSender());
   }
 
   /// @dev Withdraws `assets` from the vault and sends them to `receiver`.
@@ -415,16 +413,12 @@ contract MoolahVault is
     require(provider != address(0), ErrorsLib.ZeroAddress());
     require(msg.sender == provider, ErrorsLib.NotProvider());
 
-    shares = _accureFeeAndUpdateAssetsForWithdraw(assets);
-
-    _withdraw(sender, provider, owner, assets, shares);
+    shares = _withdrawInternal(assets, provider, owner, sender);
   }
 
   /// @inheritdoc IERC4626
   function redeem(uint256 shares, address receiver, address owner) public override returns (uint256 assets) {
-    assets = _accureAndUpdateAssetsForRedeem(shares);
-
-    _withdraw(_msgSender(), receiver, owner, assets, shares);
+    assets = _redeemInternal(shares, receiver, owner, _msgSender());
   }
 
   /// @dev Redeems `shares` from the vault and sends them to `receiver`.
@@ -438,9 +432,7 @@ contract MoolahVault is
     require(provider != address(0), ErrorsLib.ZeroAddress());
     require(msg.sender == provider, ErrorsLib.NotProvider());
 
-    assets = _accureAndUpdateAssetsForRedeem(shares);
-
-    _withdraw(sender, provider, owner, assets, shares);
+    assets = _redeemInternal(shares, provider, owner, sender);
   }
 
   /// @inheritdoc IERC4626
@@ -554,7 +546,12 @@ contract MoolahVault is
     super._withdraw(caller, receiver, owner, assets, shares);
   }
 
-  function _accureFeeAndUpdateAssetsForWithdraw(uint256 assets) internal returns (uint256 shares) {
+  function _withdrawInternal(
+    uint256 assets,
+    address receiver,
+    address owner,
+    address sender
+  ) private returns (uint256 shares) {
     uint256 newTotalAssets = _accrueFee();
 
     // Do not call expensive `maxWithdraw` and optimistically withdraw assets.
@@ -563,9 +560,16 @@ contract MoolahVault is
 
     // `newTotalAssets - assets` may be a little off from `totalAssets()`.
     _updateLastTotalAssets(newTotalAssets.zeroFloorSub(assets));
+
+    _withdraw(sender, receiver, owner, assets, shares);
   }
 
-  function _accureAndUpdateAssetsForRedeem(uint256 shares) internal returns (uint256 assets) {
+  function _redeemInternal(
+    uint256 shares,
+    address receiver,
+    address owner,
+    address sender
+  ) private returns (uint256 assets) {
     uint256 newTotalAssets = _accrueFee();
 
     // Do not call expensive `maxRedeem` and optimistically redeem shares.
@@ -574,6 +578,8 @@ contract MoolahVault is
 
     // `newTotalAssets - assets` may be a little off from `totalAssets()`.
     _updateLastTotalAssets(newTotalAssets.zeroFloorSub(assets));
+
+    _withdraw(sender, receiver, owner, assets, shares);
   }
 
   /* INTERNAL */
