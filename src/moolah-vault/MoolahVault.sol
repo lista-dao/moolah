@@ -399,14 +399,7 @@ contract MoolahVault is
 
   /// @inheritdoc IERC4626
   function withdraw(uint256 assets, address receiver, address owner) public override returns (uint256 shares) {
-    uint256 newTotalAssets = _accrueFee();
-
-    // Do not call expensive `maxWithdraw` and optimistically withdraw assets.
-
-    shares = _convertToSharesWithTotals(assets, totalSupply(), newTotalAssets, Math.Rounding.Ceil);
-
-    // `newTotalAssets - assets` may be a little off from `totalAssets()`.
-    _updateLastTotalAssets(newTotalAssets.zeroFloorSub(assets));
+    shares = _accureFeeAndUpdateAssetsForWithdraw(assets);
 
     _withdraw(_msgSender(), receiver, owner, assets, shares);
   }
@@ -422,28 +415,14 @@ contract MoolahVault is
     require(provider != address(0), ErrorsLib.ZeroAddress());
     require(msg.sender == provider, ErrorsLib.NotProvider());
 
-    uint256 newTotalAssets = _accrueFee();
-
-    // Do not call expensive `maxWithdraw` and optimistically withdraw assets.
-
-    shares = _convertToSharesWithTotals(assets, totalSupply(), newTotalAssets, Math.Rounding.Ceil);
-
-    // `newTotalAssets - assets` may be a little off from `totalAssets()`.
-    _updateLastTotalAssets(newTotalAssets.zeroFloorSub(assets));
+    shares = _accureFeeAndUpdateAssetsForWithdraw(assets);
 
     _withdraw(sender, provider, owner, assets, shares);
   }
 
   /// @inheritdoc IERC4626
   function redeem(uint256 shares, address receiver, address owner) public override returns (uint256 assets) {
-    uint256 newTotalAssets = _accrueFee();
-
-    // Do not call expensive `maxRedeem` and optimistically redeem shares.
-
-    assets = _convertToAssetsWithTotals(shares, totalSupply(), newTotalAssets, Math.Rounding.Floor);
-
-    // `newTotalAssets - assets` may be a little off from `totalAssets()`.
-    _updateLastTotalAssets(newTotalAssets.zeroFloorSub(assets));
+    assets = _accureAndUpdateAssetsForRedeem(shares);
 
     _withdraw(_msgSender(), receiver, owner, assets, shares);
   }
@@ -459,14 +438,7 @@ contract MoolahVault is
     require(provider != address(0), ErrorsLib.ZeroAddress());
     require(msg.sender == provider, ErrorsLib.NotProvider());
 
-    uint256 newTotalAssets = _accrueFee();
-
-    // Do not call expensive `maxRedeem` and optimistically redeem shares.
-
-    assets = _convertToAssetsWithTotals(shares, totalSupply(), newTotalAssets, Math.Rounding.Floor);
-
-    // `newTotalAssets - assets` may be a little off from `totalAssets()`.
-    _updateLastTotalAssets(newTotalAssets.zeroFloorSub(assets));
+    assets = _accureAndUpdateAssetsForRedeem(shares);
 
     _withdraw(sender, provider, owner, assets, shares);
   }
@@ -580,6 +552,28 @@ contract MoolahVault is
     _withdrawMoolah(assets);
 
     super._withdraw(caller, receiver, owner, assets, shares);
+  }
+
+  function _accureFeeAndUpdateAssetsForWithdraw(uint256 assets) internal returns (uint256 shares) {
+    uint256 newTotalAssets = _accrueFee();
+
+    // Do not call expensive `maxWithdraw` and optimistically withdraw assets.
+
+    shares = _convertToSharesWithTotals(assets, totalSupply(), newTotalAssets, Math.Rounding.Ceil);
+
+    // `newTotalAssets - assets` may be a little off from `totalAssets()`.
+    _updateLastTotalAssets(newTotalAssets.zeroFloorSub(assets));
+  }
+
+  function _accureAndUpdateAssetsForRedeem(uint256 shares) internal returns (uint256 assets) {
+    uint256 newTotalAssets = _accrueFee();
+
+    // Do not call expensive `maxRedeem` and optimistically redeem shares.
+
+    assets = _convertToAssetsWithTotals(shares, totalSupply(), newTotalAssets, Math.Rounding.Floor);
+
+    // `newTotalAssets - assets` may be a little off from `totalAssets()`.
+    _updateLastTotalAssets(newTotalAssets.zeroFloorSub(assets));
   }
 
   /* INTERNAL */
