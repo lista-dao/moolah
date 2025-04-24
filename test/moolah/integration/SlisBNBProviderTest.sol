@@ -169,7 +169,7 @@ contract SlisBNBProviderTest is BaseTest {
     address _lpToken,
     uint128 _userLpRate
   ) public returns (SlisBNBProvider) {
-    SlisBNBProvider providerImpl = new SlisBNBProvider();
+    SlisBNBProvider providerImpl = new SlisBNBProvider(_moolah, _token, _stakeManager, _lpToken);
 
     ERC1967Proxy moolahProxy = new ERC1967Proxy(
       address(providerImpl),
@@ -177,10 +177,6 @@ contract SlisBNBProviderTest is BaseTest {
         providerImpl.initialize.selector,
         admin,
         manager,
-        _moolah,
-        _token,
-        _stakeManager,
-        _lpToken,
         _userLpRate
       )
     );

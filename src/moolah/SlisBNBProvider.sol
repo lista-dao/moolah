@@ -23,13 +23,13 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   }
 
   // slisBNB token address
-  address public token;
+  address public immutable token;
   // Moolah contract address
-  IMoolah public MOOLAH;
+  IMoolah public immutable MOOLAH;
   // StakeManager contract address
-  IStakeManager public stakeManager;
+  IStakeManager public immutable stakeManager;
   // User will get this LP token as proof of staking ERC20-LP, e.g clisXXX
-  ILpToken public lpToken;
+  ILpToken public immutable lpToken;
   // delegatee fully holds user's lpToken, NO PARTIAL delegation
   // account > delegatee
   mapping(address => address) public delegation;
@@ -66,44 +66,45 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
 
 
   /// @custom:oz-upgrades-unsafe-allow constructor
-  constructor() {
-    _disableInitializers();
+  /// @param moolah The address of the Moolah contract.
+  /// @param _token The address of the token contract.
+  /// @param _stakeManager The address of the StakeManager contract.
+  /// @param _lpToken The address of the LP token contract.
+  constructor(
+    address moolah,
+    address _token,
+    address _stakeManager,
+    address _lpToken
+  ) {
+    require(moolah != address(0), "moolah is the zero address");
+    require(_token != address(0), "token is the zero address");
+    require(_stakeManager != address(0), "stakeManager is the zero address");
+    require(_lpToken != address(0), "lpToken is the zero address");
+
+    MOOLAH = IMoolah(moolah);
+    token = _token;
+    stakeManager = IStakeManager(_stakeManager);
+    lpToken = ILpToken(_lpToken);
   }
 
 
   /// @dev Initializes the contract with the given parameters.
   /// @param admin The new admin of the contract.
   /// @param manager The new manager of the contract.
-  /// @param moolah The address of the Moolah contract.
-  /// @param _token The address of the token contract.
-  /// @param _stakeManager The address of the StakeManager contract.
-  /// @param _lpToken The address of the LP token contract.
   /// @param _userLpRate The rate of LP token to user when deposit.
   function initialize(
       address admin,
       address manager,
-      address moolah,
-      address _token,
-      address _stakeManager,
-      address _lpToken,
       uint128 _userLpRate
   ) public initializer {
     require(admin != address(0), "admin is the zero address");
     require(manager != address(0), "manager is the zero address");
-    require(moolah != address(0), "moolah is the zero address");
-    require(_token != address(0), "token is the zero address");
-    require(_stakeManager != address(0), "stakeManager is the zero address");
-    require(_lpToken != address(0), "lpToken is the zero address");
 
     __AccessControl_init();
 
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
     _grantRole(MANAGER, manager);
 
-    MOOLAH = IMoolah(moolah);
-    token = _token;
-    stakeManager = IStakeManager(_stakeManager);
-    lpToken = ILpToken(_lpToken);
     userLpRate = _userLpRate;
   }
 
