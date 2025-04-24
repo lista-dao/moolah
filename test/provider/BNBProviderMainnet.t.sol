@@ -31,6 +31,7 @@ contract BNBProviderTest is Test {
   address manager = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
 
   address user = makeAddr("user");
+  address user2 = makeAddr("user2");
 
   function setUp() public {
     vm.createSelectFork("https://bsc-dataseed.bnbchain.org");
@@ -186,7 +187,7 @@ contract BNBProviderTest is Test {
     assertEq(moolahVault.totalAssets(), totalAssets - assets);
   }
 
-  function test_supplyCollateral() public {
+  function test_supplyCollateral() public returns (MarketParams memory) {
     deal(user, 100 ether);
 
     address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
@@ -211,23 +212,12 @@ contract BNBProviderTest is Test {
     assertEq(borrowShares, 0);
     assertEq(collateral, 1 ether);
     assertEq(user.balance, bnbBalanceBefore - 1 ether);
+
+    return param;
   }
 
   function test_withdrawCollateral() public {
-    test_supplyCollateral();
-
-    address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
-    address USD1 = 0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d;
-    address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
-    uint256 lltv70 = 70 * 1e16;
-
-    MarketParams memory param = MarketParams({
-      loanToken: USD1,
-      collateralToken: WBNB,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv70
-    });
+    MarketParams memory param = test_supplyCollateral();
 
     uint256 bnbBalanceBefore = user.balance;
     vm.startPrank(user);
@@ -238,6 +228,24 @@ contract BNBProviderTest is Test {
     assertEq(borrowShares, 0);
     assertEq(collateral, 0);
     assertEq(user.balance, bnbBalanceBefore + 1 ether);
+  }
+
+  function test_withdrawCollateral_onBehalf() public {
+    MarketParams memory param = test_supplyCollateral();
+    vm.stopPrank();
+
+    uint256 bnbBalanceBefore = user2.balance;
+    vm.prank(user);
+    moolah.setAuthorization(user2, true);
+
+    vm.startPrank(user2);
+    bnbProvider.withdrawCollateral(param, 1 ether, user, payable(user2));
+
+    (uint256 supplyShares, uint128 borrowShares, uint128 collateral) = moolah.position(param.id(), user);
+    assertEq(supplyShares, 0);
+    assertEq(borrowShares, 0);
+    assertEq(collateral, 0);
+    assertEq(user2.balance, bnbBalanceBefore + 1 ether);
   }
 
   function test_supplyCollateral_btcb() public returns (MarketParams memory) {
@@ -297,6 +305,37 @@ contract BNBProviderTest is Test {
     assertEq(borrowShares, shares);
     assertEq(collateral, 1 ether);
     assertEq(user.balance, balanceBefore + assets);
+
+    return param;
+  }
+
+  function test_borrow_onBehalf() public returns (MarketParams memory) {
+    MarketParams memory param = test_supplyCollateral_btcb();
+    vm.stopPrank();
+
+    uint256 balanceBefore = user2.balance;
+    vm.prank(user);
+    moolah.setAuthorization(user2, true);
+
+    vm.startPrank(user2);
+    bnbProvider.borrow(param, 1 ether, 0, user, payable(user2));
+
+    uint256 assets = 1 ether;
+    (
+      uint128 totalSupplyAssets,
+      uint128 totalSupplyShares,
+      uint128 totalBorrowAssets,
+      uint128 totalBorrowShares,
+      uint128 lastUpdate,
+      uint128 fee
+    ) = moolah.market(param.id());
+
+    uint256 shares = assets.toSharesUp(totalBorrowAssets, totalBorrowShares);
+    (uint256 supplyShares, uint128 borrowShares, uint128 collateral) = moolah.position(param.id(), user);
+    assertEq(supplyShares, 0);
+    assertEq(borrowShares, shares);
+    assertEq(collateral, 1 ether);
+    assertEq(user2.balance, balanceBefore + assets);
 
     return param;
   }
