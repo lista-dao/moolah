@@ -29,6 +29,11 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
 
   bytes32 public constant MANAGER = keccak256("MANAGER");
 
+  modifier onlyMoolah() {
+    require(msg.sender == address(MOOLAH), "not moolah");
+    _;
+  }
+
   /* CONSTRUCTOR */
 
   /// @custom:oz-upgrades-unsafe-allow constructor
@@ -240,8 +245,9 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     require(success, "transfer failed");
   }
 
-  /// @dev empty function
-  function liquidate(Id id, address borrower) external {}
+  /// @dev empty function to allow moolah to do liquidation
+  /// @dev may support burn clisBnb in the future (mint clisBnb by providing BNB)
+  function liquidate(Id id, address borrower) external onlyMoolah {}
 
   /// @dev Returns whether the sender is authorized to manage `onBehalf`'s positions.
   /// @param sender The address of the sender to check.
