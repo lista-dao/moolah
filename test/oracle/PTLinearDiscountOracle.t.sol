@@ -39,7 +39,7 @@ contract PTLinearDiscountOracleTest is Test {
     assertEq(ptLinearDiscountOracle.decimals(), 8);
   }
 
-  function test_peek() public {
+  function test_peek() public view {
     uint256 price = ptLinearDiscountOracle.peek(ptSusde26Jun2025);
     uint256 maturity = IPTExpiry(ptSusde26Jun2025).expiry();
     uint256 timeLeft = (maturity > block.timestamp) ? maturity - block.timestamp : 0;
