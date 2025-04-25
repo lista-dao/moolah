@@ -20,7 +20,6 @@ contract PTLinearDiscountOracleTest is Test {
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
 
   address admin = address(0x01);
-  address manager = address(0x02);
 
   function setUp() public {
     vm.createSelectFork("https://bsc-dataseed.bnbchain.org");
@@ -31,7 +30,6 @@ contract PTLinearDiscountOracleTest is Test {
       abi.encodeWithSelector(
         PTLinearDiscountPriceOracle.initialize.selector,
         admin,
-        manager,
         ptClisBNB30OCT2025,
         discountOracle,
         WBNB,
@@ -45,7 +43,6 @@ contract PTLinearDiscountOracleTest is Test {
     assertEq(ptLinearDiscountOracle.decimals(), 8);
     assertEq(ptLinearDiscountOracle.baseToken(), WBNB);
     assertEq(address(ptLinearDiscountOracle.baseTokenOracle()), multiOracle);
-    assertTrue(ptLinearDiscountOracle.hasRole(ptLinearDiscountOracle.MANAGER(), manager));
     assertTrue(ptLinearDiscountOracle.hasRole(ptLinearDiscountOracle.DEFAULT_ADMIN_ROLE(), admin));
   }
 

@@ -20,8 +20,6 @@ contract PTLinearDiscountPriceOracle is UUPSUpgradeable, AccessControlEnumerable
   /// @dev Base token oracle address which implements `peek` function
   IOracle public baseTokenOracle;
 
-  bytes32 public constant MANAGER = keccak256("MANAGER");
-
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor() {
     _disableInitializers();
@@ -29,21 +27,18 @@ contract PTLinearDiscountPriceOracle is UUPSUpgradeable, AccessControlEnumerable
 
   /// @notice Initializes the contract
   /// @param admin The address of the admin
-  /// @param manager The address of the manager
   /// @param _asset The address of the PT asset
   /// @param linearDiscount The address of the linear discount oracle for the PT asset
   /// @param _baseToken The address of the base token; WBNB for pt-clisBnb
   /// @param _baseTokenOracle The address of the base token oracle, for example: Lista ResilientOracle
   function initialize(
     address admin,
-    address manager,
     address _asset,
     address linearDiscount,
     address _baseToken,
     address _baseTokenOracle
   ) external initializer {
     require(admin != address(0), "Invalid admin address");
-    require(manager != address(0), "Invalid manager address");
     require(_asset != address(0), "Invalid asset address");
     require(linearDiscount != address(0), "Invalid linear discount oracle address");
     require(_baseToken != address(0), "Invalid base token address");
@@ -61,7 +56,6 @@ contract PTLinearDiscountPriceOracle is UUPSUpgradeable, AccessControlEnumerable
     __AccessControl_init();
 
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
-    _grantRole(MANAGER, manager);
   }
 
   function peek(address _asset) public view returns (uint256) {
