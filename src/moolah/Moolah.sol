@@ -515,7 +515,7 @@ contract Moolah is
   /* FLASH LOANS */
 
   /// @inheritdoc IMoolahBase
-  function flashLoan(address token, uint256 assets, bytes calldata data) external whenNotPaused nonReentrant {
+  function flashLoan(address token, uint256 assets, bytes calldata data) external whenNotPaused {
     require(assets != 0, ErrorsLib.ZERO_ASSETS);
 
     emit EventsLib.FlashLoan(msg.sender, token, assets);
