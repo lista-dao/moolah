@@ -9,7 +9,7 @@ import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 contract MoolahVaultConfigDeploy is Script {
   using MarketParamsLib for MarketParams;
   // todo update vault feeRecipient oracleAdapter irm
-  MoolahVault vault = MoolahVault(0x57134a64B7cD9F9eb72F8255A671F5Bf2fe3E2d0);
+  MoolahVault vault = MoolahVault(0xE46b8E65006e6450bdd8cb7D3274AB4F76f4C705);
   uint256 fee = 10 * 1e16;
   address feeRecipient = 0xea55952a51ddd771d6eBc45Bd0B512276dd0b866;
   address skimRecipient = 0x1d60bBBEF79Fb9540D271Dbb01925380323A8f66;
@@ -91,7 +91,7 @@ contract MoolahVaultConfigDeploy is Script {
 
     vault.setSupplyQueue(supplyQueue);
 
-    uint256[] memory withdrawQueue = new uint256[](4);
+    uint256[] memory withdrawQueue = new uint256[](3);
     withdrawQueue[0] = 2;
     withdrawQueue[1] = 1;
     withdrawQueue[2] = 0;
