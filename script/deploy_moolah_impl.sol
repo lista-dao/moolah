@@ -19,13 +19,6 @@ contract MoolahImplDeploy is Script {
     Moolah impl = new Moolah();
     console.log("Moolah implementation: ", address(impl));
 
-    // Deploy Moolah proxy
-    ERC1967Proxy proxy = new ERC1967Proxy(
-      address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, deployer, oracle)
-    );
-    console.log("Moolah proxy: ", address(proxy));
-
     vm.stopBroadcast();
   }
 }
