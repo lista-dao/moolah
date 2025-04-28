@@ -11,7 +11,7 @@ contract MoolahVaultConfigDeploy is Script {
   // todo update vault feeRecipient oracleAdapter irm
   MoolahVault vault = MoolahVault(0xE46b8E65006e6450bdd8cb7D3274AB4F76f4C705);
   uint256 fee = 10 * 1e16;
-  address feeRecipient = 0xea55952a51ddd771d6eBc45Bd0B512276dd0b866;
+  address feeRecipient = 0x2E2Eed557FAb1d2E11fEA1E1a23FF8f1b23551f3;
   address skimRecipient = 0x1d60bBBEF79Fb9540D271Dbb01925380323A8f66;
 
   address WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
