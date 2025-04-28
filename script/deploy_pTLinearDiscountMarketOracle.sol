@@ -33,6 +33,8 @@ contract PTLinearDiscountMarketOracleDeploy is Script {
         admin,
         ptClisBNB30OCT2025,
         discountOracle,
+        WBNB,
+        multiOracle,
         loanAsset,
         loanTokenOracle
       )
