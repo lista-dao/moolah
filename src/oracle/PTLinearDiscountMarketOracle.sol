@@ -79,8 +79,6 @@ contract PTLinearDiscountMarketOracle is UUPSUpgradeable, AccessControlEnumerabl
   /// @notice Returns the price of the PT asset or the loan asset
   /// @param _asset The address of the PT asset or the loan asset; must be either asset or loanAsset
   function peek(address _asset) public view returns (uint256) {
-    require(_asset == asset || _asset == loanAsset, "PTLinearDiscountOracle: Invalid asset");
-
     if (_asset == asset) {
       (, int256 answer, , , ) = ILinearDiscountOracle(discountOracle).latestRoundData();
       uint256 basePrice = baseTokenOracle.peek(baseToken);

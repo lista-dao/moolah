@@ -52,8 +52,6 @@ contract PTLinearDiscountOracle is UUPSUpgradeable, AccessControlEnumerableUpgra
   }
 
   function peek(address _asset) public view returns (uint256) {
-    require(_asset == asset || _asset == loanAsset, "PTLinearDiscountOracle: Invalid asset");
-
     if (_asset == asset) {
       (, int256 answer, , , ) = ILinearDiscountOracle(discountOracle).latestRoundData();
       uint256 price = uint256(answer) / 1e10;

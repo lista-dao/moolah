@@ -56,5 +56,6 @@ contract PTLinearDiscountOracleTest is Test {
 
     uint256 loanPrice = IOracle(loanTokenOracle).peek(loanAsset);
     assertEq(loanPrice, 1e8);
+    assertEq(loanPrice, ptLinearDiscountOracle.peek(loanAsset));
   }
 }
