@@ -74,11 +74,11 @@ contract MoolahVaultConfigDeploy is Script {
     // config vault
     vault.setFee(fee);
 
-    // WBNB cap 500 WBNB
+    // WBNB cap 500 BTCB
     vault.setCap(WBNBParams, 500 ether);
-    // USD1 cap 300 WBNB
+    // USD1 cap 300 BTCB
     vault.setCap(USD1Params, 300 ether);
-    // solvBTC cap 200 WBNB
+    // solvBTC cap 200 BTCB
     vault.setCap(solvBTCParams, 200 ether);
 
     Id WBNBId = WBNBParams.id();
@@ -92,9 +92,9 @@ contract MoolahVaultConfigDeploy is Script {
     vault.setSupplyQueue(supplyQueue);
 
     uint256[] memory withdrawQueue = new uint256[](4);
-    withdrawQueue[0] = 3;
-    withdrawQueue[1] = 2;
-    withdrawQueue[2] = 1;
+    withdrawQueue[0] = 2;
+    withdrawQueue[1] = 1;
+    withdrawQueue[2] = 0;
     vault.updateWithdrawQueue(withdrawQueue);
 
     vm.stopBroadcast();
