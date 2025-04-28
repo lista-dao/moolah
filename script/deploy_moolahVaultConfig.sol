@@ -16,16 +16,17 @@ contract MoolahVaultConfigDeploy is Script {
 
   address WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
   address BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
-  address slisBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B;
-  address ptClisBNB25apr = 0xE8F1C9804770e11Ab73395bE54686Ad656601E9e;
   address solvBTC = 0x4aae823a6a0b376De6A78e74eCC5b079d38cBCf7;
+  address USD1 = 0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d;
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
   address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
+  address bot = 0x91fC4BA20685339781888eCA3E9E1c12d40F0e13;
 
   uint256 lltv70 = 70 * 1e16;
   uint256 lltv80 = 80 * 1e16;
   uint256 lltv90 = 90 * 1e16;
+  uint256 lltv965 = 965 * 1e15;
 
   bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
   bytes32 public constant MANAGER = keccak256("MANAGER");
@@ -37,33 +38,25 @@ contract MoolahVaultConfigDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    // collateral-BTCB loan-WBNB lltv-80%
-    MarketParams memory BTCBParams = MarketParams({
-      loanToken: WBNB,
-      collateralToken: BTCB,
+    // collateral-WBNB loan-BTCB lltv-80%
+    MarketParams memory WBNBParams = MarketParams({
+      loanToken: BTCB,
+      collateralToken: WBNB,
       oracle: multiOracle,
       irm: irm,
       lltv: lltv80
     });
-    // collateral-slisBNB loan-WBNB lltv-80%
-    MarketParams memory slisBNBParams = MarketParams({
-      loanToken: WBNB,
-      collateralToken: slisBNB,
-      oracle: oracleAdapter,
+    // collateral-USD1 loan-BTCB lltv-80%
+    MarketParams memory USD1Params = MarketParams({
+      loanToken: BTCB,
+      collateralToken: USD1,
+      oracle: multiOracle,
       irm: irm,
       lltv: lltv80
     });
-    // collateral-ptClisBNB25apr loan-WBNB lltv-90%
-    MarketParams memory ptClisBNB25aprParams = MarketParams({
-      loanToken: WBNB,
-      collateralToken: ptClisBNB25apr,
-      oracle: oracleAdapter,
-      irm: irm,
-      lltv: lltv90
-    });
-    // collateral-solvBTC loan-WBNB lltv-70%
+    // collateral-solvBTC loan-BTCB lltv-70%
     MarketParams memory solvBTCParams = MarketParams({
-      loanToken: WBNB,
+      loanToken: BTCB,
       collateralToken: solvBTC,
       oracle: multiOracle,
       irm: irm,
@@ -76,28 +69,25 @@ contract MoolahVaultConfigDeploy is Script {
 
     vault.grantRole(CURATOR, deployer);
     vault.grantRole(ALLOCATOR, deployer);
+    vault.setBotRole(bot);
 
     // config vault
     vault.setFee(fee);
 
-    // BTCB cap 89286 WBNB
-    vault.setCap(BTCBParams, 89286 ether);
-    // slisBNB cap 16234 WBNB
-    vault.setCap(slisBNBParams, 16234 ether);
-    // ptClisBNB25apr cap 40584 WBNB
-    vault.setCap(ptClisBNB25aprParams, 40584 ether);
-    // solvBTC cap 16234 WBNB
-    vault.setCap(solvBTCParams, 16234 ether);
+    // WBNB cap 500 WBNB
+    vault.setCap(WBNBParams, 500 ether);
+    // USD1 cap 300 WBNB
+    vault.setCap(USD1Params, 300 ether);
+    // solvBTC cap 200 WBNB
+    vault.setCap(solvBTCParams, 200 ether);
 
-    Id BTCBId = BTCBParams.id();
-    Id slisBNBId = slisBNBParams.id();
-    Id ptClisBNB25aprId = ptClisBNB25aprParams.id();
+    Id WBNBId = WBNBParams.id();
+    Id USD1Id = USD1Params.id();
     Id solvBTCId = solvBTCParams.id();
-    Id[] memory supplyQueue = new Id[](4);
-    supplyQueue[0] = BTCBId;
-    supplyQueue[1] = slisBNBId;
-    supplyQueue[2] = ptClisBNB25aprId;
-    supplyQueue[3] = solvBTCId;
+    Id[] memory supplyQueue = new Id[](3);
+    supplyQueue[0] = WBNBId;
+    supplyQueue[1] = USD1Id;
+    supplyQueue[2] = solvBTCId;
 
     vault.setSupplyQueue(supplyQueue);
 
@@ -105,7 +95,6 @@ contract MoolahVaultConfigDeploy is Script {
     withdrawQueue[0] = 3;
     withdrawQueue[1] = 2;
     withdrawQueue[2] = 1;
-    withdrawQueue[3] = 0;
     vault.updateWithdrawQueue(withdrawQueue);
 
     vm.stopBroadcast();
