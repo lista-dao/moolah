@@ -4,12 +4,14 @@ pragma solidity 0.8.28;
 import "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 
-import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
-import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
+import { IWBNB } from "./interfaces/IWBNB.sol";
+
+import { MarketParamsLib } from "../moolah/libraries/MarketParamsLib.sol";
+import { SharesMathLib } from "../moolah/libraries/SharesMathLib.sol";
 import { IMoolahVault } from "../moolah-vault/interfaces/IMoolahVault.sol";
 import { Id, IMoolah, MarketParams, Market } from "../moolah/interfaces/IMoolah.sol";
-import { IWBNB } from "./interfaces/IWBNB.sol";
 import { ErrorsLib } from "../moolah/libraries/ErrorsLib.sol";
+import { UtilsLib } from "../moolah/libraries/UtilsLib.sol";
 
 /// @title BNB Provider for Lista Lending
 /// @author Lista DAO
@@ -172,6 +174,7 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     address onBehalf,
     bytes calldata data
   ) external payable returns (uint256 _assets, uint256 _shares) {
+    require(UtilsLib.exactlyOneZero(assets, shares), ErrorsLib.INCONSISTENT_INPUT);
     require(marketParams.loanToken == address(WBNB), "invalid loan token");
     require(msg.value >= assets, "invalid BNB amount");
 
