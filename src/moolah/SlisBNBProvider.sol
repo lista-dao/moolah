@@ -146,11 +146,11 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     // withdraw from distributor
     MOOLAH.withdrawCollateral(marketParams, assets, onBehalf, address(this));
     // rebalance user's lpToken
-    _syncPosition(marketParams.id(), msg.sender);
+    _syncPosition(marketParams.id(), onBehalf);
 
     // transfer token to user
     IERC20(token).safeTransfer(receiver, assets);
-    emit Withdrawal(msg.sender, assets);
+    emit Withdrawal(onBehalf, assets);
   }
 
   /// @dev Will be called when liquidation happens
