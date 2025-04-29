@@ -15,10 +15,12 @@ contract SlisBNBProviderTest is BaseTest {
   SlisBNBProvider provider;
   MockLpToken lpToken;
   address MPC;
+  address DELEGATOR;
   function setUp() public override {
     super.setUp();
 
     MPC = makeAddr("MPC");
+    DELEGATOR = makeAddr("DELEGATOR");
 
     lpToken = new MockLpToken();
 
@@ -158,6 +160,42 @@ contract SlisBNBProviderTest is BaseTest {
     assertEq(provider.userReservedLp(BORROWER), expectReserve, "userReservedLp error");
     assertEq(provider.totalReservedLp(), expectReserve, "totalReservedLp error");
 
+  }
+
+  function test_delegateAllTo() public {
+    collateralToken.setBalance(SUPPLIER, 100 ether);
+
+    vm.startPrank(SUPPLIER);
+    provider.supplyCollateral(marketParams, 10 ether, SUPPLIER, "");
+    assertEq(collateralToken.balanceOf(SUPPLIER), 90 ether, "SUPPLIER balance error");
+    assertEq(lpToken.balanceOf(SUPPLIER), 9.97 ether, "SUPPLIER lp balance error");
+    provider.delegateAllTo(DELEGATOR);
+
+    assertEq(lpToken.balanceOf(DELEGATOR), 9.97 ether, "DELEGATOR lp balance error");
+    provider.supplyCollateral(marketParams, 90 ether, SUPPLIER, "");
+
+    assertEq(lpToken.balanceOf(DELEGATOR), 99.7 ether, "DELEGATOR lp balance error");
+    vm.stopPrank();
+
+    uint256 expectUserLp = 100 ether * 0.997 ether / 1e18;
+    uint256 expectReserve = 100 ether - expectUserLp;
+
+    assertEq(provider.userLp(SUPPLIER), expectUserLp, "userLp error");
+    assertEq(provider.userReservedLp(SUPPLIER), expectReserve, "userReservedLp error");
+    assertEq(provider.totalReservedLp(), expectReserve, "totalReservedLp error");
+
+    vm.startPrank(SUPPLIER);
+    provider.withdrawCollateral(marketParams, 100 ether, SUPPLIER, SUPPLIER);
+    vm.stopPrank();
+
+    assertEq(lpToken.balanceOf(DELEGATOR), 0, "DELEGATOR lp balance error");
+
+    expectUserLp = 0;
+    expectReserve = 0;
+
+    assertEq(provider.userLp(SUPPLIER), expectUserLp, "userLp error");
+    assertEq(provider.userReservedLp(SUPPLIER), expectReserve, "userReservedLp error");
+    assertEq(provider.totalReservedLp(), expectReserve, "totalReservedLp error");
   }
 
   function newSlisBNBProvider(
