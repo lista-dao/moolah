@@ -125,18 +125,6 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     IERC20(token).safeIncreaseAllowance(address(MOOLAH), assets);
     MOOLAH.supplyCollateral(marketParams, assets, onBehalf, data);
 
-
-    // get current delegatee
-    address oldDelegatee = delegation[onBehalf];
-    // burn all lpToken from old delegatee
-    if (oldDelegatee != onBehalf && oldDelegatee != address(0)) {
-      _safeBurnLp(oldDelegatee, userLp[onBehalf]);
-      // clear user's lpToken record
-      userLp[onBehalf] = 0;
-    }
-    // update delegatee
-    delegation[onBehalf] = onBehalf;
-
     // rebalance user's lpToken
     (,uint256 latestLpBalance) = _syncPosition(marketParams.id(), onBehalf);
 
