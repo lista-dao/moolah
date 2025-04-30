@@ -5,7 +5,7 @@ pragma solidity ^0.8.10;
 import "forge-std/Test.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { PTLinearDiscountMarketOracle, ILinearDiscountOracle } from "../../src/oracle/PTLinearDiscountMarketOracle.sol";
-import { IOracle } from "../../src/moolah/interfaces/IOracle.sol";
+import { IOracle, TokenConfig } from "../../src/moolah/interfaces/IOracle.sol";
 
 interface IPTExpiry {
   function expiry() external view returns (uint256);
@@ -70,5 +70,32 @@ contract PTLinearDiscountMarketOracleTest is Test {
     uint256 loanPrice = IOracle(multiOracle).peek(loanAsset);
 
     assertEq(price, loanPrice); // price equals to the loan asset price
+  }
+
+  function test_getTokenConfig() public {
+    TokenConfig memory config = ptLinearDiscountOracle.getTokenConfig(ptClisBNB30OCT2025);
+    assertEq(config.asset, ptClisBNB30OCT2025);
+    assertEq(config.oracles[0], address(ptLinearDiscountOracle));
+    assertEq(config.oracles[1], address(0));
+    assertEq(config.oracles[2], address(0));
+    assertEq(config.enableFlagsForOracles[0], true);
+    assertEq(config.enableFlagsForOracles[1], false);
+    assertEq(config.enableFlagsForOracles[2], false);
+    assertEq(config.timeDeltaTolerance, 0);
+
+    TokenConfig memory loanConfig = ptLinearDiscountOracle.getTokenConfig(loanAsset);
+    TokenConfig memory expectLoanConfig = IOracle(loanTokenOracle).getTokenConfig(loanAsset);
+    assertEq(loanConfig.asset, loanAsset);
+    assertEq(loanConfig.oracles[0], expectLoanConfig.oracles[0]);
+    assertEq(loanConfig.oracles[1], expectLoanConfig.oracles[1]);
+    assertEq(loanConfig.oracles[2], expectLoanConfig.oracles[2]);
+    assertEq(loanConfig.enableFlagsForOracles[0], expectLoanConfig.enableFlagsForOracles[0]);
+    assertEq(loanConfig.enableFlagsForOracles[1], expectLoanConfig.enableFlagsForOracles[1]);
+    assertEq(loanConfig.enableFlagsForOracles[2], expectLoanConfig.enableFlagsForOracles[2]);
+    assertEq(loanConfig.timeDeltaTolerance, expectLoanConfig.timeDeltaTolerance);
+
+    address foo = makeAddr("foo");
+    vm.expectRevert("PTLinearDiscountOracle: Invalid asset");
+    ptLinearDiscountOracle.getTokenConfig(foo);
   }
 }

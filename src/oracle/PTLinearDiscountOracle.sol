@@ -5,9 +5,9 @@ import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgr
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 
 import { ILinearDiscountOracle } from "./interfaces/ILinearDiscountOracle.sol";
-import { IOracle } from "../moolah/interfaces/IOracle.sol";
+import { IOracle, TokenConfig } from "../moolah/interfaces/IOracle.sol";
 
-contract PTLinearDiscountOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
+contract PTLinearDiscountOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IOracle {
   /// @dev PT token address
   address public asset;
 
@@ -70,6 +70,25 @@ contract PTLinearDiscountOracle is UUPSUpgradeable, AccessControlEnumerableUpgra
 
   function decimals() external pure returns (uint8) {
     return 8;
+  }
+
+  function getTokenConfig(address _asset) external view override returns (TokenConfig memory) {
+    if (_asset == asset) {
+      return
+        TokenConfig({
+          asset: asset,
+          oracles: [address(this), address(0), address(0)],
+          enableFlagsForOracles: [true, false, false],
+          timeDeltaTolerance: 0
+        });
+    }
+
+    if (_asset == loanAsset) {
+      TokenConfig memory config = loanTokenOracle.getTokenConfig(loanAsset);
+      return config;
+    }
+
+    revert("PTLinearDiscountOracle: Invalid asset");
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
