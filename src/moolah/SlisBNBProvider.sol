@@ -39,8 +39,6 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   mapping(address => uint256) public userTotalDeposit;
   // user account > total amount of lpToken minted to user
   mapping(address => uint256) public userLp;
-  // token to lpToken exchange rate
-  uint128 public exchangeRate;
   // rate of lpToken to user when deposit
   uint128 public userLpRate;
   // user account > sum reserved lpToken
@@ -55,7 +53,6 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
 
   /* ------------------ Events ------------------ */
   event UserLpRebalanced(address account, uint256 userLp, uint256 reservedLp);
-  event ExchangeRateChanged(uint128 rate);
   event UserLpRateChanged(uint128 rate);
   event Deposit(address indexed account, uint256 amount, uint256 lPAmount);
   event Withdrawal(address indexed owner, uint256 amount);
@@ -302,7 +299,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
 
   /* ----------------------------------- MANAGER functions ----------------------------------- */
   function setUserLpRate(uint128 _userLpRate) external onlyRole(MANAGER) {
-    require(_userLpRate <= 1e18 && _userLpRate <= exchangeRate, "userLpRate invalid");
+    require(_userLpRate <= 1e18, "userLpRate invalid");
 
     userLpRate = _userLpRate;
     emit UserLpRateChanged(userLpRate);
