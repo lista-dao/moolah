@@ -280,6 +280,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     * @param _account user address to sync
     */
   function syncUserLp(Id id, address _account) external {
+    require(MOOLAH.idToMarketParams(id).collateralToken == token && MOOLAH.providers(id) == address(this), "invalid market");
     (bool rebalanced,) = _syncPosition(id, _account);
     require(rebalanced, "already synced");
   }
@@ -291,6 +292,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   function bulkSyncUserLp(Id[] calldata ids, address[] calldata _accounts) external {
     for (uint256 i = 0; i < _accounts.length; i++) {
       for (uint256 j = 0; j < ids.length; j++) {
+        require(MOOLAH.idToMarketParams(ids[j]).collateralToken == token && MOOLAH.providers(ids[j]) == address(this), "invalid market");
         // sync user's lpToken balance
         _syncPosition(ids[j], _accounts[i]);
       }

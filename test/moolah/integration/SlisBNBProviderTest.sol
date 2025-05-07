@@ -7,6 +7,7 @@ import "../BaseTest.sol";
 import { MockStakeManager } from "../mocks/MockStakeManager.sol";
 import { MockLpToken } from "../mocks/MockLpToken.sol";
 import { SlisBNBProvider } from "moolah/SlisBNBProvider.sol";
+import {MarketParamsLibTest} from "../MarketParamsLibTest.sol";
 
 contract SlisBNBProviderTest is BaseTest {
   using MarketParamsLib for MarketParams;
@@ -39,7 +40,7 @@ contract SlisBNBProviderTest is BaseTest {
     );
 
     vm.startPrank(OWNER);
-    moolah.addProvider(address(collateralToken), address(provider));
+    moolah.addProvider(marketParams.id(), address(provider));
     provider.addMPCWallet(MPC, type(uint256).max);
     vm.stopPrank();
 
@@ -95,36 +96,56 @@ contract SlisBNBProviderTest is BaseTest {
     address testProvider = makeAddr("PROVIDER");
     address testToken = makeAddr("TOKEN");
 
+    MarketParams memory testMarketParams = MarketParams({
+      loanToken: marketParams.loanToken,
+      collateralToken: testToken,
+      oracle: marketParams.oracle,
+      irm: marketParams.irm,
+      lltv: marketParams.lltv
+    });
+
+    moolah.createMarket(testMarketParams);
+
     vm.expectRevert(abi.encodeWithSelector(
       IAccessControl.AccessControlUnauthorizedAccount.selector, address(this), provider.MANAGER()
     ));
-    moolah.addProvider(testToken, testProvider);
+    moolah.addProvider(testMarketParams.id(), testProvider);
 
     vm.startPrank(OWNER);
-    moolah.addProvider(testToken, testProvider);
+    moolah.addProvider(testMarketParams.id(), testProvider);
     vm.stopPrank();
 
-    assertEq(testProvider, moolah.providers(testToken), "provider error");
+    assertEq(testProvider, moolah.providers(testMarketParams.id()), "provider error");
   }
 
   function test_removeProvider() public {
     address testProvider = makeAddr("PROVIDER");
     address testToken = makeAddr("TOKEN");
 
+    MarketParams memory testMarketParams = MarketParams({
+      loanToken: marketParams.loanToken,
+      collateralToken: testToken,
+      oracle: marketParams.oracle,
+      irm: marketParams.irm,
+      lltv: marketParams.lltv
+    });
+
+    moolah.createMarket(testMarketParams);
+
     vm.startPrank(OWNER);
-    moolah.addProvider(testToken, testProvider);
+    moolah.addProvider(testMarketParams.id(), testProvider);
     vm.stopPrank();
 
     vm.expectRevert(abi.encodeWithSelector(
       IAccessControl.AccessControlUnauthorizedAccount.selector, address(this), provider.MANAGER()
     ));
-    moolah.removeProvider(testToken);
+    moolah.removeProvider(testMarketParams.id());
 
     vm.startPrank(OWNER);
-    moolah.removeProvider(testToken);
+    moolah.removeProvider(testMarketParams.id());
     vm.stopPrank();
 
-    assertEq(address(0), moolah.providers(testToken), "provider error");
+    assertEq(address(0), moolah.providers(testMarketParams.id()), "provider error");
   }
 
   function test_liquidate() public {

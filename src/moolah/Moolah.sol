@@ -173,25 +173,24 @@ contract Moolah is
     emit EventsLib.RemoveLiquidationWhitelist(id, account);
   }
 
-  function addProvider(address token, address provider) external onlyRole(MANAGER) {
-    require(token != address(0), ErrorsLib.ZERO_ADDRESS);
+  function addProvider(Id id, address provider) external onlyRole(MANAGER) {
+    require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
     require(provider != address(0), ErrorsLib.ZERO_ADDRESS);
-    require(providers[token] != provider, ErrorsLib.ALREADY_SET);
+    require(providers[id] != provider, ErrorsLib.ALREADY_SET);
 
-    providers[token] = provider;
+    providers[id] = provider;
 
-    emit EventsLib.AddProvider(token, provider);
+    emit EventsLib.AddProvider(id, provider);
   }
 
-  function removeProvider(address token) external onlyRole(MANAGER) {
-    require(token != address(0), ErrorsLib.ZERO_ADDRESS);
-    require(providers[token] != address(0), ErrorsLib.NOT_SET);
+  function removeProvider(Id id) external onlyRole(MANAGER) {
+    require(providers[id] != address(0), ErrorsLib.NOT_SET);
 
-    address provider = providers[token];
+    address provider = providers[id];
 
-    delete providers[token];
+    delete providers[id];
 
-    emit EventsLib.RemoveProvider(token, provider);
+    emit EventsLib.RemoveProvider(id, provider);
   }
 
   /* MARKET CREATION */
@@ -303,8 +302,8 @@ contract Moolah is
     require(UtilsLib.exactlyOneZero(assets, shares), ErrorsLib.INCONSISTENT_INPUT);
     require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
     // No need to verify that onBehalf != address(0) thanks to the following authorization check.
-    if (providers[marketParams.loanToken] == msg.sender) {
-      require(receiver == providers[marketParams.loanToken], ErrorsLib.NOT_PROVIDER);
+    if (providers[id] == msg.sender) {
+      require(receiver == providers[id], ErrorsLib.NOT_PROVIDER);
     } else {
       require(_isSenderAuthorized(onBehalf), ErrorsLib.UNAUTHORIZED);
     }
@@ -377,8 +376,8 @@ contract Moolah is
     require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
     require(assets != 0, ErrorsLib.ZERO_ASSETS);
     require(onBehalf != address(0), ErrorsLib.ZERO_ADDRESS);
-    if (providers[marketParams.collateralToken] != address(0)) {
-      require(msg.sender == providers[marketParams.collateralToken], ErrorsLib.NOT_PROVIDER);
+    if (providers[id] != address(0)) {
+      require(msg.sender == providers[id], ErrorsLib.NOT_PROVIDER);
     }
     // Don't accrue interest because it's not required and it saves gas.
 
@@ -403,8 +402,8 @@ contract Moolah is
     require(assets != 0, ErrorsLib.ZERO_ASSETS);
     require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
     // No need to verify that onBehalf != address(0) thanks to the following authorization check.
-    if (providers[marketParams.collateralToken] != address(0)) {
-      require(msg.sender == providers[marketParams.collateralToken] && receiver == providers[marketParams.collateralToken], ErrorsLib.NOT_PROVIDER);
+    if (providers[id] != address(0)) {
+      require(msg.sender == providers[id] && receiver == providers[id], ErrorsLib.NOT_PROVIDER);
     } else {
       require(_isSenderAuthorized(onBehalf), ErrorsLib.UNAUTHORIZED);
     }
@@ -505,8 +504,8 @@ contract Moolah is
 
     require(_isHealthyAfterLiquidate(marketParams, borrower), ErrorsLib.UNHEALTHY_POSITION);
 
-    if (providers[marketParams.collateralToken] != address(0)) {
-      IProvider(providers[marketParams.collateralToken]).liquidate(id, borrower);
+    if (providers[id] != address(0)) {
+      IProvider(providers[id]).liquidate(id, borrower);
     }
 
     return (seizedAssets, repaidAssets);
