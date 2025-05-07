@@ -71,7 +71,7 @@ contract Moolah is
   /// The minimum loan token position value, using the same precision as the oracle (8 decimals).
   uint256 public minLoanValue;
   /// @inheritdoc IMoolahBase
-  mapping(address => address) public providers;
+  mapping(Id => address) public providers;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant PAUSER = keccak256("PAUSER"); // pauser role
