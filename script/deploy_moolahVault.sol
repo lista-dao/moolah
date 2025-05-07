@@ -9,9 +9,9 @@ import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 contract MoolahVaultDeploy is Script {
   address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
 
-  address asset = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c; // BTCB
-  string name = "Lista BTC Vault";
-  string symbol = "ListaBTCB";
+  address asset = 0x55d398326f99059fF775485246999027B3197955; //USDT
+  string name = "Lista USDT Vault";
+  string symbol = "ListaUSDT";
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
