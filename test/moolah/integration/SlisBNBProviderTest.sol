@@ -6,7 +6,7 @@ import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.so
 import "../BaseTest.sol";
 import { MockStakeManager } from "../mocks/MockStakeManager.sol";
 import { MockLpToken } from "../mocks/MockLpToken.sol";
-import { SlisBNBProvider } from "moolah/SlisBNBProvider.sol";
+import { SlisBNBProvider } from "../../../src/provider/SlisBNBProvider.sol";
 import {MarketParamsLibTest} from "../MarketParamsLibTest.sol";
 
 contract SlisBNBProviderTest is BaseTest {

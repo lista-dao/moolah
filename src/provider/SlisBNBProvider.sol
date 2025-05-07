@@ -6,11 +6,11 @@ import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgrade
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-import { IMoolah, MarketParams, Id, Position } from "./interfaces/IMoolah.sol";
+import { IMoolah, MarketParams, Id, Position } from "moolah/interfaces/IMoolah.sol";
 import { ILpToken } from "./interfaces/ILpToken.sol";
-import { MarketParamsLib } from "./libraries/MarketParamsLib.sol";
-import {Moolah} from "./Moolah.sol";
-import {IStakeManager} from "../oracle/interfaces/IStakeManager.sol";
+import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
+import { Moolah } from "moolah/Moolah.sol";
+import { IStakeManager } from "../oracle/interfaces/IStakeManager.sol";
 
 contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   using SafeERC20 for IERC20;
