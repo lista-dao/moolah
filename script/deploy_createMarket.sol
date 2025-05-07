@@ -66,7 +66,7 @@ contract CreateMarketDeploy is Script {
       collateralToken: slisBNB,
       oracle: oracleAdapter,
       irm: irm,
-      lltv: lltv70
+      lltv: lltv80
     });
 
     vm.startBroadcast(deployerPrivateKey);
