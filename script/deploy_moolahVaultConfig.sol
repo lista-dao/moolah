@@ -9,11 +9,12 @@ import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 contract MoolahVaultConfigDeploy is Script {
   using MarketParamsLib for MarketParams;
   // todo update vault feeRecipient oracleAdapter irm
-  MoolahVault vault = MoolahVault(0xE46b8E65006e6450bdd8cb7D3274AB4F76f4C705);
+  MoolahVault vault = MoolahVault(0x6d6783C146F2B0B2774C1725297f1845dc502525);
   uint256 fee = 10 * 1e16;
   address feeRecipient = 0x2E2Eed557FAb1d2E11fEA1E1a23FF8f1b23551f3;
   address skimRecipient = 0x1d60bBBEF79Fb9540D271Dbb01925380323A8f66;
 
+  address ETH = 0x2170Ed0880ac9A755fd29B2688956BD959F933F8;
   address WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
   address BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
   address solvBTC = 0x4aae823a6a0b376De6A78e74eCC5b079d38cBCf7;

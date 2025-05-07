@@ -5,7 +5,7 @@ import "forge-std/Script.sol";
 import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 
 contract MoolahVaultTransferRoleDeploy is Script {
-  MoolahVault vault = MoolahVault(0xE46b8E65006e6450bdd8cb7D3274AB4F76f4C705);
+  MoolahVault vault = MoolahVault(0x6d6783C146F2B0B2774C1725297f1845dc502525);
   address admin = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253; // timelock
   address manager = 0x2e2807F88C381Cb0CC55c808a751fC1E3fcCbb85; // timelock
   address allocator = 0x85CE862C5BB61938FFcc97DA4A80C8aaE43C6A27;
