@@ -15,6 +15,9 @@ contract CreateMarketDeploy is Script {
   address solvBTC = 0x4aae823a6a0b376De6A78e74eCC5b079d38cBCf7;
   address ptClisBNB30Otc = 0xb84cEC1Ab2af11b530ae0d8594B1493556be49Cd;
   address USD1 = 0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d;
+  address slisBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B;
+  address ETH = 0x2170Ed0880ac9A755fd29B2688956BD959F933F8;
+  address USDT = 0x55d398326f99059fF775485246999027B3197955;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
@@ -33,35 +36,35 @@ contract CreateMarketDeploy is Script {
     console.log("Deployer: ", deployer);
 
     MarketParams[] memory params = new MarketParams[](4);
-    // collateral-ptClisBNB30Otc loan-WBNB lltv-96.5%
+    // collateral-BTCB loan-USDT lltv-80%
     params[0] = MarketParams({
-      loanToken: WBNB,
-      collateralToken: ptClisBNB30Otc,
-      oracle: ptOracle,
+      loanToken: USDT,
+      collateralToken: BTCB,
+      oracle: multiOracle,
       irm: irm,
-      lltv: lltv965
+      lltv: lltv80
     });
-    // collateral-WBNB loan-BTCB lltv-80%
+    // collateral-ETH loan-USDT lltv-80%
     params[1] = MarketParams({
-      loanToken: BTCB,
+      loanToken: USDT,
+      collateralToken: ETH,
+      oracle: multiOracle,
+      irm: irm,
+      lltv: lltv80
+    });
+    // collateral-WBNB loan-USDT lltv-80%
+    params[2] = MarketParams({
+      loanToken: USDT,
       collateralToken: WBNB,
       oracle: multiOracle,
       irm: irm,
       lltv: lltv80
     });
-    // collateral-USD1 loan-BTCB lltv-80%
-    params[2] = MarketParams({
-      loanToken: BTCB,
-      collateralToken: USD1,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv80
-    });
-    // collateral-solvBTC loan-BTCB lltv-70%
+    // collateral-slisBNB loan-USDT lltv-80%
     params[3] = MarketParams({
-      loanToken: BTCB,
-      collateralToken: solvBTC,
-      oracle: multiOracle,
+      loanToken: USDT,
+      collateralToken: slisBNB,
+      oracle: oracleAdapter,
       irm: irm,
       lltv: lltv70
     });
