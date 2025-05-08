@@ -53,6 +53,8 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPr
     MOOLAH = IMoolah(moolah);
     MOOLAH_VAULT = IMoolahVault(moolahVault);
     TOKEN = wbnb;
+
+    _disableInitializers();
   }
 
   /// @param admin The admin of the contract.
