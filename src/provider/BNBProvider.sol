@@ -187,6 +187,7 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
       require(shares > 0, ErrorsLib.ZERO_ASSETS);
       Market memory market = MOOLAH.market(marketParams.id());
       wrapAmount = shares.toAssetsUp(market.totalBorrowAssets, market.totalBorrowShares);
+      require(msg.value >= wrapAmount, "insufficient funds");
     }
 
     // 1. wrap BNB to WBNB

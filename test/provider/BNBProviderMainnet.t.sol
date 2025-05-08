@@ -373,7 +373,7 @@ contract BNBProviderTest is Test {
 
     skip(1 days);
 
-    moolah.accrueInterest(param);
+    //    moolah.accrueInterest(param);
     vm.startPrank(user);
     (uint256 supplySharesBefore, uint128 borrowSharesBefore, uint128 collateralBefore) = moolah.position(
       param.id(),
@@ -382,6 +382,8 @@ contract BNBProviderTest is Test {
     (, , uint128 totalBorrowAssets, uint128 totalBorrowShares, , ) = moolah.market(param.id());
     uint256 assets = uint256(borrowSharesBefore).toAssetsUp(totalBorrowAssets, totalBorrowShares);
     uint256 balanceBefore = user.balance;
+    vm.expectRevert("insufficient funds");
+    bnbProvider.repay{ value: 0 }(param, 0, borrowSharesBefore, user, "");
     bnbProvider.repay{ value: assets + 100 }(param, 0, borrowSharesBefore, user, "");
 
     (uint256 supplyShares, uint128 borrowShares, uint128 collateral) = moolah.position(param.id(), user);
