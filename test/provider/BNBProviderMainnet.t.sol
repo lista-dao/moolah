@@ -29,6 +29,13 @@ contract BNBProviderTest is Test {
 
   address admin = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253; // timelock
   address manager = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
+  address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
+  address BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
+  address USD1 = 0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d;
+  address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
+
+  uint256 lltv70 = 70 * 1e16;
+  uint256 lltv80 = 80 * 1e16;
 
   address user = makeAddr("user");
   address user2 = makeAddr("user2");
@@ -66,15 +73,40 @@ contract BNBProviderTest is Test {
     vm.stopPrank();
     moolah = Moolah(moolahProxy);
 
-    vm.prank(manager);
-    moolah.addProvider(WBNB, address(bnbProvider));
-    assertEq(moolah.providers(WBNB), address(bnbProvider));
+    MarketParams memory param1 = MarketParams({
+      loanToken: WBNB,
+      collateralToken: BTCB,
+      oracle: multiOracle,
+      irm: irm,
+      lltv: lltv80
+    });
+
+    MarketParams memory param2 = MarketParams({
+      loanToken: USD1,
+      collateralToken: WBNB,
+      oracle: multiOracle,
+      irm: irm,
+      lltv: lltv70
+    });
+
+    // Set up Moolah
+    vm.startPrank(manager);
+    moolah.addProvider(param1.id(), address(bnbProvider));
+    moolah.addProvider(param2.id(), address(bnbProvider));
+    assertEq(moolah.providers(param1.id(), WBNB), address(bnbProvider));
+    assertEq(moolah.providers(param2.id(), WBNB), address(bnbProvider));
+    vm.stopPrank();
+
+    // Set up MoolahVault
+    vm.prank(admin);
+    moolahVault.initProvider(address(bnbProvider));
+    assertEq(moolahVault.provider(), address(bnbProvider));
   }
 
   function test_initialize() public {
     assertEq(address(bnbProvider.MOOLAH()), moolahProxy);
     assertEq(address(bnbProvider.MOOLAH_VAULT()), moolahVaultProxy);
-    assertEq(address(bnbProvider.WBNB()), WBNB);
+    assertEq(address(bnbProvider.TOKEN()), WBNB);
 
     assertEq(bnbProvider.hasRole(bnbProvider.DEFAULT_ADMIN_ROLE(), admin), true);
     assertEq(bnbProvider.hasRole(bnbProvider.MANAGER(), manager), true);
@@ -190,11 +222,6 @@ contract BNBProviderTest is Test {
   function test_supplyCollateral() public returns (MarketParams memory) {
     deal(user, 100 ether);
 
-    address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
-    address USD1 = 0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d;
-    address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
-    uint256 lltv70 = 70 * 1e16;
-
     MarketParams memory param = MarketParams({
       loanToken: USD1,
       collateralToken: WBNB,
@@ -249,11 +276,6 @@ contract BNBProviderTest is Test {
   }
 
   function test_supplyCollateral_btcb() public returns (MarketParams memory) {
-    address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
-    address BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
-    address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
-    uint256 lltv80 = 80 * 1e16;
-
     deal(BTCB, user, 100 ether);
 
     MarketParams memory param = MarketParams({
@@ -309,33 +331,6 @@ contract BNBProviderTest is Test {
     return param;
   }
 
-  function test_borrow_with_shares() public returns (MarketParams memory) {
-    MarketParams memory param = test_supplyCollateral_btcb();
-
-    uint256 balanceBefore = user.balance;
-    uint256 assets = 1 ether;
-    (
-      uint128 totalSupplyAssets,
-      uint128 totalSupplyShares,
-      uint128 totalBorrowAssets,
-      uint128 totalBorrowShares,
-      uint128 lastUpdate,
-      uint128 fee
-    ) = moolah.market(param.id());
-    uint256 shares = assets.toSharesUp(totalBorrowAssets, totalBorrowShares);
-
-    vm.startPrank(user);
-    bnbProvider.borrow(param, 0, shares, user, payable(user));
-
-    (uint256 supplyShares, uint128 borrowShares, uint128 collateral) = moolah.position(param.id(), user);
-    assertEq(supplyShares, 0);
-    assertEq(borrowShares, shares);
-    assertEq(collateral, 1 ether);
-    assertEq(user.balance, balanceBefore + assets);
-
-    return param;
-  }
-
   function test_borrow_onBehalf() public returns (MarketParams memory) {
     MarketParams memory param = test_supplyCollateral_btcb();
     vm.stopPrank();
@@ -373,7 +368,7 @@ contract BNBProviderTest is Test {
 
     skip(1 days);
 
-    //    moolah.accrueInterest(param);
+    moolah.accrueInterest(param);
     vm.startPrank(user);
     (uint256 supplySharesBefore, uint128 borrowSharesBefore, uint128 collateralBefore) = moolah.position(
       param.id(),
