@@ -178,6 +178,9 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     require(marketParams.loanToken == address(WBNB), "invalid loan token");
     require(msg.value >= assets, "invalid BNB amount");
 
+    // accrue interest on the market and then calculate `wrapAmount`
+    MOOLAH.accrueInterest(marketParams);
+
     uint256 wrapAmount = assets;
     if (wrapAmount == 0) {
       // If assets is 0, we need to wrap the shares amount
