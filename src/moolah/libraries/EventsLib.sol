@@ -167,10 +167,10 @@ library EventsLib {
   /// @notice Emitted when adding a provider.
   /// @param token The token that was added.
   /// @param provider The provider that was added.
-  event AddProvider(Id token, address provider);
+  event AddProvider(Id id, address token, address provider);
 
   /// @notice Emitted when removing a provider.
   /// @param token The token that was removed.
   /// @param provider The provider that was removed.
-  event RemoveProvider(Id token, address provider);
+  event RemoveProvider(Id id, address token, address provider);
 }

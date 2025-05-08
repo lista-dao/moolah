@@ -93,8 +93,8 @@ contract SlisBNBProviderTest is BaseTest {
   }
 
   function test_addProvider() public {
-    address testProvider = makeAddr("PROVIDER");
     address testToken = makeAddr("TOKEN");
+    address testProvider = address(newSlisBNBProvider(OWNER, OWNER, address(moolah), testToken, address(stakeManager), address(lpToken), 0.997 ether));
 
     MarketParams memory testMarketParams = MarketParams({
       loanToken: marketParams.loanToken,
@@ -115,12 +115,12 @@ contract SlisBNBProviderTest is BaseTest {
     moolah.addProvider(testMarketParams.id(), testProvider);
     vm.stopPrank();
 
-    assertEq(testProvider, moolah.providers(testMarketParams.id()), "provider error");
+    assertEq(testProvider, moolah.providers(testMarketParams.id(), testToken), "provider error");
   }
 
   function test_removeProvider() public {
-    address testProvider = makeAddr("PROVIDER");
     address testToken = makeAddr("TOKEN");
+    address testProvider = address(newSlisBNBProvider(OWNER, OWNER, address(moolah), testToken, address(stakeManager), address(lpToken), 0.997 ether));
 
     MarketParams memory testMarketParams = MarketParams({
       loanToken: marketParams.loanToken,
@@ -145,13 +145,13 @@ contract SlisBNBProviderTest is BaseTest {
     moolah.removeProvider(testMarketParams.id());
     vm.stopPrank();
 
-    assertEq(address(0), moolah.providers(testMarketParams.id()), "provider error");
+    assertEq(address(0), moolah.providers(testMarketParams.id(), testToken), "provider error");
   }
 
   function test_liquidate() public {
     loanToken.setBalance(SUPPLIER, 100 ether);
     collateralToken.setBalance(BORROWER, 100 ether);
-    loanToken.setBalance(LIQUIDATOR, 100 ether);
+    loanToken.setBalance(LIQUIDATOR, 200 ether);
 
     oracle.setPrice(address(loanToken), 1e8);
     oracle.setPrice(address(collateralToken), 1e8);

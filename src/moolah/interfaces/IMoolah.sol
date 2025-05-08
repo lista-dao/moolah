@@ -309,8 +309,8 @@ interface IMoolahBase {
   /// @notice remove the provider for the token.
   function removeProvider(Id id) external;
 
-  /// @notice get the provider for the market id.
-  function providers(Id id) external view returns (address);
+  /// @notice get the provider for the market.
+  function providers(Id id, address token) external view returns (address);
 }
 
 /// @dev This interface is inherited by Moolah so that function signatures are checked by the compiler.
@@ -373,7 +373,4 @@ interface IMoolah is IMoolahBase {
   function idToMarketParams(Id id) external view returns (MarketParams memory);
 
   function getPrice(MarketParams calldata marketParams) external view returns (uint256);
-
-  /// @notice The address of the provider for the given market id.
-  function providers(Id id) external view returns (address);
 }
