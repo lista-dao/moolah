@@ -96,6 +96,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   ) public initializer {
     require(admin != address(0), "admin is the zero address");
     require(manager != address(0), "manager is the zero address");
+    require(_userLpRate <= 1e18, "userLpRate invalid");
 
     __AccessControl_init();
 
