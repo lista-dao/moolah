@@ -309,6 +309,33 @@ contract BNBProviderTest is Test {
     return param;
   }
 
+  function test_borrow_with_shares() public returns (MarketParams memory) {
+    MarketParams memory param = test_supplyCollateral_btcb();
+
+    uint256 balanceBefore = user.balance;
+    uint256 assets = 1 ether;
+    (
+      uint128 totalSupplyAssets,
+      uint128 totalSupplyShares,
+      uint128 totalBorrowAssets,
+      uint128 totalBorrowShares,
+      uint128 lastUpdate,
+      uint128 fee
+    ) = moolah.market(param.id());
+    uint256 shares = assets.toSharesUp(totalBorrowAssets, totalBorrowShares);
+
+    vm.startPrank(user);
+    bnbProvider.borrow(param, 0, shares, user, payable(user));
+
+    (uint256 supplyShares, uint128 borrowShares, uint128 collateral) = moolah.position(param.id(), user);
+    assertEq(supplyShares, 0);
+    assertEq(borrowShares, shares);
+    assertEq(collateral, 1 ether);
+    assertEq(user.balance, balanceBefore + assets);
+
+    return param;
+  }
+
   function test_borrow_onBehalf() public returns (MarketParams memory) {
     MarketParams memory param = test_supplyCollateral_btcb();
     vm.stopPrank();

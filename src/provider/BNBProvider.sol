@@ -157,7 +157,7 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     WBNB.withdraw(_assets);
 
     // 3. transfer BNB to receiver
-    (bool success, ) = receiver.call{ value: assets }("");
+    (bool success, ) = receiver.call{ value: _assets }("");
     require(success, "transfer failed");
   }
 
