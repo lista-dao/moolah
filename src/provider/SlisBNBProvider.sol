@@ -82,6 +82,8 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     TOKEN = _token;
     STAKE_MANAGER = IStakeManager(_stakeManager);
     LP_TOKEN = ILpToken(_lpToken);
+
+    _disableInitializers();
   }
 
 
@@ -96,7 +98,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   ) public initializer {
     require(admin != address(0), "admin is the zero address");
     require(manager != address(0), "manager is the zero address");
-    require(_userLpRate <= 1e18, "userLpRate invalid");
+    require(_userLpRate <= RATE_DENOMINATOR, "userLpRate invalid");
 
     __AccessControl_init();
 
@@ -301,7 +303,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
 
   /* ----------------------------------- MANAGER functions ----------------------------------- */
   function setUserLpRate(uint128 _userLpRate) external onlyRole(MANAGER) {
-    require(_userLpRate <= 1e18, "userLpRate invalid");
+    require(_userLpRate <= RATE_DENOMINATOR && _userLpRate != userLpRate, "userLpRate invalid");
 
     userLpRate = _userLpRate;
     emit UserLpRateChanged(userLpRate);
