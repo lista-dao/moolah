@@ -20,6 +20,7 @@ import { UtilsLib } from "moolah/libraries/UtilsLib.sol";
 import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { MoolahBalancesLib } from "moolah/libraries/periphery/MoolahBalancesLib.sol";
+import { IProvider } from "../provider/interfaces/IProvider.sol";
 
 /// @title MoolahVault
 /// @author Lista DAO
@@ -319,6 +320,7 @@ contract MoolahVault is
   function initProvider(address _provider) external onlyRole(DEFAULT_ADMIN_ROLE) {
     require(_provider != address(0), ErrorsLib.ZeroAddress());
     require(provider == address(0), ErrorsLib.AlreadySet());
+    require(IProvider(_provider).TOKEN() == asset(), ErrorsLib.TokenMismatch());
     provider = _provider;
 
     emit EventsLib.InitProvider(_provider);
