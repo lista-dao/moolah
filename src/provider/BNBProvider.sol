@@ -5,6 +5,7 @@ import "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnume
 import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 
 import { IWBNB } from "./interfaces/IWBNB.sol";
+import { IProvider } from "./interfaces/IProvider.sol";
 
 import { MarketParamsLib } from "../moolah/libraries/MarketParamsLib.sol";
 import { SharesMathLib } from "../moolah/libraries/SharesMathLib.sol";
@@ -19,7 +20,7 @@ import { UtilsLib } from "../moolah/libraries/UtilsLib.sol";
 /// @dev
 /// - Handles interactions with the WBNB vault for deposit, mint, withdraw, and redeem operations.
 /// - Integrates with the Moolah core contract to support borrowing, repayment, and collateral management using BNB.
-contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
+contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IProvider {
   using MarketParamsLib for MarketParams;
   using SharesMathLib for uint256;
 
@@ -27,7 +28,7 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
 
   IMoolah public immutable MOOLAH;
   IMoolahVault public immutable MOOLAH_VAULT;
-  IWBNB public immutable WBNB;
+  address public immutable TOKEN;
 
   bytes32 public constant MANAGER = keccak256("MANAGER");
 
@@ -51,7 +52,9 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
 
     MOOLAH = IMoolah(moolah);
     MOOLAH_VAULT = IMoolahVault(moolahVault);
-    WBNB = IWBNB(wbnb);
+    TOKEN = wbnb;
+
+    _disableInitializers();
   }
 
   /// @param admin The admin of the contract.
@@ -73,8 +76,8 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     uint256 assets = msg.value;
     require(assets > 0, ErrorsLib.ZERO_ASSETS);
 
-    WBNB.deposit{ value: assets }();
-    require(WBNB.approve(address(MOOLAH_VAULT), assets));
+    IWBNB(TOKEN).deposit{ value: assets }();
+    require(IWBNB(TOKEN).approve(address(MOOLAH_VAULT), assets));
 
     shares = MOOLAH_VAULT.deposit(assets, receiver);
   }
@@ -87,8 +90,8 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     uint256 previewAssets = MOOLAH_VAULT.previewMint(shares); // ceiling rounding
     require(msg.value >= previewAssets, "invalid BNB amount");
 
-    WBNB.deposit{ value: previewAssets }();
-    require(WBNB.approve(address(MOOLAH_VAULT), previewAssets));
+    IWBNB(TOKEN).deposit{ value: previewAssets }();
+    require(IWBNB(TOKEN).approve(address(MOOLAH_VAULT), previewAssets));
     assets = MOOLAH_VAULT.mint(shares, receiver);
 
     if (msg.value > assets) {
@@ -103,12 +106,13 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   /// @param owner The address of the owner of the shares.
   function withdraw(uint256 assets, address payable receiver, address owner) external returns (uint256 shares) {
     require(assets > 0, ErrorsLib.ZERO_ASSETS);
+    require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
 
     // 1. withdraw WBNB from moolah vault
     shares = MOOLAH_VAULT.withdrawFor(assets, owner, msg.sender);
 
     // 2. unwrap WBNB
-    WBNB.withdraw(assets);
+    IWBNB(TOKEN).withdraw(assets);
 
     // 3. transfer WBNB to receiver
     (bool success, ) = receiver.call{ value: assets }("");
@@ -121,12 +125,13 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   /// @param owner The address of the owner of the shares.
   function redeem(uint256 shares, address payable receiver, address owner) external returns (uint256 assets) {
     require(shares > 0, ErrorsLib.ZERO_ASSETS);
+    require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
 
     // 1. redeem WBNB from moolah vault
     assets = MOOLAH_VAULT.redeemFor(shares, owner, msg.sender);
 
     // 2. unwrap WBNB
-    WBNB.withdraw(assets);
+    IWBNB(TOKEN).withdraw(assets);
 
     // 3. transfer BNB to receiver
     (bool success, ) = receiver.call{ value: assets }("");
@@ -147,17 +152,18 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     address payable receiver
   ) external returns (uint256 _assets, uint256 _shares) {
     // No need to verify assets and shares, as they are already verified in the Moolah contract.
-    require(marketParams.loanToken == address(WBNB), "invalid loan token");
+    require(marketParams.loanToken == TOKEN, "invalid loan token");
     require(isSenderAuthorized(msg.sender, onBehalf), ErrorsLib.UNAUTHORIZED);
+    require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
 
     // 1. borrow WBNB from moolah
     (_assets, _shares) = MOOLAH.borrow(marketParams, assets, shares, onBehalf, address(this));
 
     // 2. unwrap WBNB
-    WBNB.withdraw(_assets);
+    IWBNB(TOKEN).withdraw(_assets);
 
     // 3. transfer BNB to receiver
-    (bool success, ) = receiver.call{ value: assets }("");
+    (bool success, ) = receiver.call{ value: _assets }("");
     require(success, "transfer failed");
   }
 
@@ -175,8 +181,11 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     bytes calldata data
   ) external payable returns (uint256 _assets, uint256 _shares) {
     require(UtilsLib.exactlyOneZero(assets, shares), ErrorsLib.INCONSISTENT_INPUT);
-    require(marketParams.loanToken == address(WBNB), "invalid loan token");
+    require(marketParams.loanToken == TOKEN, "invalid loan token");
     require(msg.value >= assets, "invalid BNB amount");
+
+    // accrue interest on the market and then calculate `wrapAmount`
+    MOOLAH.accrueInterest(marketParams);
 
     uint256 wrapAmount = assets;
     if (wrapAmount == 0) {
@@ -184,12 +193,13 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
       require(shares > 0, ErrorsLib.ZERO_ASSETS);
       Market memory market = MOOLAH.market(marketParams.id());
       wrapAmount = shares.toAssetsUp(market.totalBorrowAssets, market.totalBorrowShares);
+      require(msg.value >= wrapAmount, "insufficient funds");
     }
 
     // 1. wrap BNB to WBNB
-    WBNB.deposit{ value: wrapAmount }();
+    IWBNB(TOKEN).deposit{ value: wrapAmount }();
     // 2. approve moolah to transfer WBNB
-    require(WBNB.approve(address(MOOLAH), wrapAmount));
+    require(IWBNB(TOKEN).approve(address(MOOLAH), wrapAmount));
     // 3. repay WBNB to moolah
     (_assets, _shares) = MOOLAH.repay(marketParams, assets, shares, onBehalf, data);
 
@@ -211,12 +221,12 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   ) external payable {
     uint256 assets = msg.value;
     require(assets > 0, ErrorsLib.ZERO_ASSETS);
-    require(marketParams.collateralToken == address(WBNB), "invalid collateral token");
+    require(marketParams.collateralToken == TOKEN, "invalid collateral token");
 
     // 1. deposit WBNB
-    WBNB.deposit{ value: assets }();
+    IWBNB(TOKEN).deposit{ value: assets }();
     // 2. approve moolah to transfer WBNB
-    require(WBNB.approve(address(MOOLAH), assets));
+    require(IWBNB(TOKEN).approve(address(MOOLAH), assets));
     // 3. supply collateral to moolah
     MOOLAH.supplyCollateral(marketParams, assets, onBehalf, data);
   }
@@ -232,14 +242,15 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     address onBehalf,
     address payable receiver
   ) external {
-    require(marketParams.collateralToken == address(WBNB), "invalid collateral token");
+    require(marketParams.collateralToken == TOKEN, "invalid collateral token");
     require(isSenderAuthorized(msg.sender, onBehalf), ErrorsLib.UNAUTHORIZED);
+    require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
 
     // 1. withdraw WBNB from moolah by specifying the amount
     MOOLAH.withdrawCollateral(marketParams, assets, onBehalf, address(this));
 
     // 2. unwrap WBNB
-    WBNB.withdraw(assets);
+    IWBNB(TOKEN).withdraw(assets);
 
     // 3. transfer BNB to receiver
     (bool success, ) = receiver.call{ value: assets }("");

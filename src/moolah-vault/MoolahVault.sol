@@ -20,6 +20,7 @@ import { UtilsLib } from "moolah/libraries/UtilsLib.sol";
 import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { MoolahBalancesLib } from "moolah/libraries/periphery/MoolahBalancesLib.sol";
+import { IProvider } from "../provider/interfaces/IProvider.sol";
 
 /// @title MoolahVault
 /// @author Lista DAO
@@ -71,6 +72,9 @@ contract MoolahVault is
 
   /// @inheritdoc IMoolahVaultBase
   uint256 public lastTotalAssets;
+
+  /// @inheritdoc IMoolahVaultBase
+  address public provider;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant CURATOR = keccak256("CURATOR"); // curator role
@@ -312,6 +316,16 @@ contract MoolahVault is
     require(_revokeRole(BOT, _address), ErrorsLib.RevokeBotFailed());
   }
 
+  /// @inheritdoc IMoolahVaultBase
+  function initProvider(address _provider) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    require(_provider != address(0), ErrorsLib.ZeroAddress());
+    require(provider == address(0), ErrorsLib.AlreadySet());
+    require(IProvider(_provider).TOKEN() == asset(), ErrorsLib.TokenMismatch());
+    provider = _provider;
+
+    emit EventsLib.InitProvider(_provider);
+  }
+
   /* EXTERNAL */
 
   /// @inheritdoc IMoolahVaultBase
@@ -409,7 +423,6 @@ contract MoolahVault is
   /// @param owner The address of the owner of the shares; shares are burned from owner.
   /// @param sender The address of the caller who initiated the withdrawal via the provider.
   function withdrawFor(uint256 assets, address owner, address sender) external returns (uint256 shares) {
-    address provider = MOOLAH.providers(asset());
     require(provider != address(0), ErrorsLib.ZeroAddress());
     require(msg.sender == provider, ErrorsLib.NotProvider());
 
@@ -428,7 +441,6 @@ contract MoolahVault is
   /// @param owner The address of the owner of the shares; shares are burned from owner.
   /// @param sender The address of the caller who initiated the redemption via the provider.
   function redeemFor(uint256 shares, address owner, address sender) external returns (uint256 assets) {
-    address provider = MOOLAH.providers(asset());
     require(provider != address(0), ErrorsLib.ZeroAddress());
     require(msg.sender == provider, ErrorsLib.NotProvider());
 

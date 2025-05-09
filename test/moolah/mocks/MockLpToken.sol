@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import { ILpToken } from "moolah/interfaces/ILpToken.sol";
+import { ILpToken } from "../../../src/provider/interfaces/ILpToken.sol";
 
 contract MockLpToken is ILpToken {
   uint256 public totalSupply;
