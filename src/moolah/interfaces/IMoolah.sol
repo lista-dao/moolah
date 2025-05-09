@@ -307,7 +307,7 @@ interface IMoolahBase {
   function addProvider(Id id, address provider) external;
 
   /// @notice remove the provider for the token.
-  function removeProvider(Id id) external;
+  function removeProvider(Id id, address token) external;
 
   /// @notice get the provider for the market.
   function providers(Id id, address token) external view returns (address);

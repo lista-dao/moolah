@@ -185,13 +185,7 @@ contract Moolah is
     emit EventsLib.AddProvider(id, token, provider);
   }
 
-  function removeProvider(Id id) external onlyRole(MANAGER) {
-    MarketParams memory marketParams = idToMarketParams[id];
-    address token = marketParams.loanToken;
-    if (providers[id][token] == address(0)) {
-      token = marketParams.collateralToken;
-    }
-
+  function removeProvider(Id id, address token) external onlyRole(MANAGER) {
     require(providers[id][token] != address(0), ErrorsLib.NOT_SET);
 
     address provider = providers[id][token];

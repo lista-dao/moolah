@@ -139,10 +139,10 @@ contract SlisBNBProviderTest is BaseTest {
     vm.expectRevert(abi.encodeWithSelector(
       IAccessControl.AccessControlUnauthorizedAccount.selector, address(this), provider.MANAGER()
     ));
-    moolah.removeProvider(testMarketParams.id());
+    moolah.removeProvider(testMarketParams.id(), testToken);
 
     vm.startPrank(OWNER);
-    moolah.removeProvider(testMarketParams.id());
+    moolah.removeProvider(testMarketParams.id(), testToken);
     vm.stopPrank();
 
     assertEq(address(0), moolah.providers(testMarketParams.id(), testToken), "provider error");
