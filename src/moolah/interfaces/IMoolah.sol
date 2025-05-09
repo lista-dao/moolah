@@ -302,6 +302,15 @@ interface IMoolahBase {
 
   /// @notice get the minimum loan token assets (supply and borrow) for the market.
   function minLoan(MarketParams memory marketParams) external view returns (uint256);
+
+  /// @notice add a new provider for the token.
+  function addProvider(address token, address provider) external;
+
+  /// @notice remove the provider for the token.
+  function removeProvider(address token) external;
+
+  /// @notice get the provider for the token.
+  function providers(address token) external view returns (address);
 }
 
 /// @dev This interface is inherited by Moolah so that function signatures are checked by the compiler.
@@ -364,4 +373,7 @@ interface IMoolah is IMoolahBase {
   function idToMarketParams(Id id) external view returns (MarketParams memory);
 
   function getPrice(MarketParams calldata marketParams) external view returns (uint256);
+
+  /// @notice The address of the provider for the given loan/collateral token.
+  function providers(address token) external view returns (address);
 }

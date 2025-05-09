@@ -163,4 +163,14 @@ library EventsLib {
   /// @notice Emitted when setting the minimum loan.
   /// @param minLoan The new minimum loan.
   event SetMinLoanValue(uint256 minLoan);
+
+  /// @notice Emitted when adding a provider.
+  /// @param token The token that was added.
+  /// @param provider The provider that was added.
+  event AddProvider(address token, address provider);
+
+  /// @notice Emitted when removing a provider.
+  /// @param token The token that was removed.
+  /// @param provider The provider that was removed.
+  event RemoveProvider(address token, address provider);
 }
