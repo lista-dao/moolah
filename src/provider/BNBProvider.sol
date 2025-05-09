@@ -106,6 +106,7 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPr
   /// @param owner The address of the owner of the shares.
   function withdraw(uint256 assets, address payable receiver, address owner) external returns (uint256 shares) {
     require(assets > 0, ErrorsLib.ZERO_ASSETS);
+    require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
 
     // 1. withdraw WBNB from moolah vault
     shares = MOOLAH_VAULT.withdrawFor(assets, owner, msg.sender);
@@ -124,6 +125,7 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPr
   /// @param owner The address of the owner of the shares.
   function redeem(uint256 shares, address payable receiver, address owner) external returns (uint256 assets) {
     require(shares > 0, ErrorsLib.ZERO_ASSETS);
+    require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
 
     // 1. redeem WBNB from moolah vault
     assets = MOOLAH_VAULT.redeemFor(shares, owner, msg.sender);
@@ -152,6 +154,7 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPr
     // No need to verify assets and shares, as they are already verified in the Moolah contract.
     require(marketParams.loanToken == TOKEN, "invalid loan token");
     require(isSenderAuthorized(msg.sender, onBehalf), ErrorsLib.UNAUTHORIZED);
+    require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
 
     // 1. borrow WBNB from moolah
     (_assets, _shares) = MOOLAH.borrow(marketParams, assets, shares, onBehalf, address(this));
@@ -241,6 +244,7 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPr
   ) external {
     require(marketParams.collateralToken == TOKEN, "invalid collateral token");
     require(isSenderAuthorized(msg.sender, onBehalf), ErrorsLib.UNAUTHORIZED);
+    require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
 
     // 1. withdraw WBNB from moolah by specifying the amount
     MOOLAH.withdrawCollateral(marketParams, assets, onBehalf, address(this));
