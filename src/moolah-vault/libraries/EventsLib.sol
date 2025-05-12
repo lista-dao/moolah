@@ -86,6 +86,9 @@ library EventsLib {
   /// @notice Emitted when an `amount` of `token` is transferred to the skim recipient by `caller`.
   event Skim(address indexed caller, address indexed token, uint256 amount);
 
+  /// @notice Emitted when a `provider` is set to Vault.
+  event InitProvider(address indexed provider);
+
   /// @notice Emitted when a new MoolahVault vault is created.
   /// @param moolahVault The address of the MoolahVault vault.
   /// @param caller The caller of the function.

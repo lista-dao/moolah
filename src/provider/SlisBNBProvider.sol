@@ -6,11 +6,11 @@ import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgrade
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-import { IMoolah, MarketParams, Id, Position } from "./interfaces/IMoolah.sol";
+import { IMoolah, MarketParams, Id, Position } from "moolah/interfaces/IMoolah.sol";
 import { ILpToken } from "./interfaces/ILpToken.sol";
-import { MarketParamsLib } from "./libraries/MarketParamsLib.sol";
-import {Moolah} from "./Moolah.sol";
-import {IStakeManager} from "../oracle/interfaces/IStakeManager.sol";
+import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
+import { Moolah } from "moolah/Moolah.sol";
+import { IStakeManager } from "../oracle/interfaces/IStakeManager.sol";
 
 contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   using SafeERC20 for IERC20;
@@ -23,13 +23,13 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   }
 
   // slisBNB token address
-  address public immutable token;
+  address public immutable TOKEN;
   // Moolah contract address
   IMoolah public immutable MOOLAH;
   // StakeManager contract address
-  IStakeManager public immutable stakeManager;
+  IStakeManager public immutable STAKE_MANAGER;
   // User will get this LP token as proof of staking ERC20-LP, e.g clisXXX
-  ILpToken public immutable lpToken;
+  ILpToken public immutable LP_TOKEN;
   // delegatee fully holds user's lpToken, NO PARTIAL delegation
   // account > delegatee
   mapping(address => address) public delegation;
@@ -39,8 +39,6 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   mapping(address => uint256) public userTotalDeposit;
   // user account > total amount of lpToken minted to user
   mapping(address => uint256) public userLp;
-  // token to lpToken exchange rate
-  uint128 public exchangeRate;
   // rate of lpToken to user when deposit
   uint128 public userLpRate;
   // user account > sum reserved lpToken
@@ -55,7 +53,6 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
 
   /* ------------------ Events ------------------ */
   event UserLpRebalanced(address account, uint256 userLp, uint256 reservedLp);
-  event ExchangeRateChanged(uint128 rate);
   event UserLpRateChanged(uint128 rate);
   event Deposit(address indexed account, uint256 amount, uint256 lPAmount);
   event Withdrawal(address indexed owner, uint256 amount);
@@ -82,9 +79,11 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     require(_lpToken != address(0), "lpToken is the zero address");
 
     MOOLAH = IMoolah(moolah);
-    token = _token;
-    stakeManager = IStakeManager(_stakeManager);
-    lpToken = ILpToken(_lpToken);
+    TOKEN = _token;
+    STAKE_MANAGER = IStakeManager(_stakeManager);
+    LP_TOKEN = ILpToken(_lpToken);
+
+    _disableInitializers();
   }
 
 
@@ -99,6 +98,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   ) public initializer {
     require(admin != address(0), "admin is the zero address");
     require(manager != address(0), "manager is the zero address");
+    require(_userLpRate <= RATE_DENOMINATOR, "userLpRate invalid");
 
     __AccessControl_init();
 
@@ -116,13 +116,13 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     bytes calldata data
   ) external {
     require(assets > 0, "zero supply amount");
-    require(marketParams.collateralToken == token, "invalid collateral token");
+    require(marketParams.collateralToken == TOKEN, "invalid collateral token");
 
     // transfer token from user to this contract
-    IERC20(token).safeTransferFrom(msg.sender, address(this), assets);
+    IERC20(TOKEN).safeTransferFrom(msg.sender, address(this), assets);
 
     // supply to Moolah
-    IERC20(token).safeIncreaseAllowance(address(MOOLAH), assets);
+    IERC20(TOKEN).safeIncreaseAllowance(address(MOOLAH), assets);
     MOOLAH.supplyCollateral(marketParams, assets, onBehalf, data);
 
     // rebalance user's lpToken
@@ -141,16 +141,16 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   ) external {
     require(assets > 0, "zero withdrawal amount");
     require(_isSenderAuthorized(onBehalf), "unauthorized sender");
-    require(marketParams.collateralToken == token, "invalid collateral token");
+    require(marketParams.collateralToken == TOKEN, "invalid collateral token");
 
     // withdraw from distributor
     MOOLAH.withdrawCollateral(marketParams, assets, onBehalf, address(this));
     // rebalance user's lpToken
-    _syncPosition(marketParams.id(), msg.sender);
+    _syncPosition(marketParams.id(), onBehalf);
 
     // transfer token to user
-    IERC20(token).safeTransfer(receiver, assets);
-    emit Withdrawal(msg.sender, assets);
+    IERC20(TOKEN).safeTransfer(receiver, assets);
+    emit Withdrawal(onBehalf, assets);
   }
 
   /// @dev Will be called when liquidation happens
@@ -174,12 +174,12 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
      * @param amount amount to burn
      */
   function _safeBurnLp(address holder, uint256 amount) internal {
-    uint256 availableBalance = lpToken.balanceOf(holder);
+    uint256 availableBalance = LP_TOKEN.balanceOf(holder);
     if (amount <= availableBalance) {
-      lpToken.burn(holder, amount);
+      LP_TOKEN.burn(holder, amount);
     } else if (availableBalance > 0) {
       // existing users do not have enough lpToken
-      lpToken.burn(holder, availableBalance);
+      LP_TOKEN.burn(holder, availableBalance);
     }
   }
 
@@ -192,7 +192,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
 
     // ---- [1] Estimated LP value
     // Total LP(User + Reserve)
-    uint256 newTotalLp = stakeManager.convertSnBnbToBnb(userTotalDepositAmount);
+    uint256 newTotalLp = STAKE_MANAGER.convertSnBnbToBnb(userTotalDepositAmount);
     // User's LP
     uint256 newUserLp = newTotalLp * userLpRate / RATE_DENOMINATOR;
     // Reserve's LP
@@ -227,7 +227,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     if (oldUserLp > newUserLp) {
       _safeBurnLp(holder, oldUserLp - newUserLp);
     } else if (oldUserLp < newUserLp) {
-      lpToken.mint(holder, newUserLp - oldUserLp);
+      LP_TOKEN.mint(holder, newUserLp - oldUserLp);
     }
     // update user LP balance as new LP
     userLp[account] = newUserLp;
@@ -238,7 +238,11 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   }
 
   function _syncPosition(Id id, address account) internal returns (bool, uint256) {
+    require(MOOLAH.idToMarketParams(id).collateralToken == TOKEN, "invalid market");
     uint256 userMarketSupplyCollateral = MOOLAH.position(id, account).collateral;
+    if (MOOLAH.providers(id, TOKEN) != address(this)) {
+      userMarketSupplyCollateral = 0;
+    }
     if (userMarketSupplyCollateral >= userMarketDeposit[account][id]) {
       uint256 depositAmount = userMarketSupplyCollateral - userMarketDeposit[account][id];
       userTotalDeposit[account] += depositAmount;
@@ -302,7 +306,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
 
   /* ----------------------------------- MANAGER functions ----------------------------------- */
   function setUserLpRate(uint128 _userLpRate) external onlyRole(MANAGER) {
-    require(_userLpRate <= 1e18 && _userLpRate <= exchangeRate, "userLpRate invalid");
+    require(_userLpRate <= RATE_DENOMINATOR && _userLpRate != userLpRate, "userLpRate invalid");
 
     userLpRate = _userLpRate;
     emit UserLpRateChanged(userLpRate);
@@ -326,7 +330,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     if (cap < wallet.balance) {
       uint256 toBurn = wallet.balance - cap;
       // burn lpToken from MPC
-      lpToken.burn(wallet.walletAddress, toBurn);
+      LP_TOKEN.burn(wallet.walletAddress, toBurn);
       // deduct balance
       wallet.balance -= toBurn;
       // mint lpToken to the other MPCs
@@ -393,7 +397,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
       if (balance <= wallet.cap) {
         uint256 toMint = balance + leftToMint > wallet.cap ? wallet.cap - balance : leftToMint;
         // mint lpToken to the wallet
-        lpToken.mint(wallet.walletAddress, toMint);
+        LP_TOKEN.mint(wallet.walletAddress, toMint);
         // add up balance
         wallet.balance += toMint;
         // deduct leftToMint
@@ -424,7 +428,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
       if (balance > 0) {
         uint256 toBurn = balance < leftToBurn ? balance : leftToBurn;
         // burn lpToken from MPC
-        lpToken.burn(wallet.walletAddress, toBurn);
+        LP_TOKEN.burn(wallet.walletAddress, toBurn);
         // deduct balance
         wallet.balance -= toBurn;
         // deduct leftToMint
