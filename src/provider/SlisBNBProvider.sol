@@ -238,8 +238,11 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   }
 
   function _syncPosition(Id id, address account) internal returns (bool, uint256) {
-    require(MOOLAH.idToMarketParams(id).collateralToken == TOKEN && MOOLAH.providers(id, TOKEN) == address(this), "invalid market");
+    require(MOOLAH.idToMarketParams(id).collateralToken == TOKEN, "invalid market");
     uint256 userMarketSupplyCollateral = MOOLAH.position(id, account).collateral;
+    if (MOOLAH.providers(id, TOKEN) != address(this)) {
+      userMarketSupplyCollateral = 0;
+    }
     if (userMarketSupplyCollateral >= userMarketDeposit[account][id]) {
       uint256 depositAmount = userMarketSupplyCollateral - userMarketDeposit[account][id];
       userTotalDeposit[account] += depositAmount;

@@ -178,7 +178,7 @@ contract Moolah is
     require(token != address(0), ErrorsLib.ZERO_ADDRESS);
     require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
     require(provider != address(0), ErrorsLib.ZERO_ADDRESS);
-    require(providers[id][token] != provider, ErrorsLib.ALREADY_SET);
+    require(providers[id][token] == address(0), ErrorsLib.ALREADY_SET);
 
     providers[id][token] = provider;
 
@@ -502,16 +502,18 @@ contract Moolah is
 
     IERC20(marketParams.collateralToken).safeTransfer(msg.sender, seizedAssets);
 
+    {
+      address provider = providers[id][marketParams.collateralToken];
+      if (provider != address(0)) {
+        IProvider(provider).liquidate(id, borrower);
+      }
+    }
+
     if (data.length > 0) IMoolahLiquidateCallback(msg.sender).onMoolahLiquidate(repaidAssets, data);
 
     IERC20(marketParams.loanToken).safeTransferFrom(msg.sender, address(this), repaidAssets);
 
     require(_isHealthyAfterLiquidate(marketParams, borrower), ErrorsLib.UNHEALTHY_POSITION);
-
-    address provider = providers[id][marketParams.collateralToken];
-    if (provider != address(0)) {
-      IProvider(provider).liquidate(id, borrower);
-    }
 
     return (seizedAssets, repaidAssets);
   }
