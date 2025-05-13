@@ -4,7 +4,7 @@ import "forge-std/Script.sol";
 
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-import { SlisBNBProvider } from "moolah/SlisBNBProvider.sol";
+import { SlisBNBProvider } from "../src/provider/SlisBNBProvider.sol";
 
 contract SlisBNBProviderDeploy is Script {
   address moolah = 0x61E1a5D17F01A4ed4788e9B1Ca4110C2925f8975;
