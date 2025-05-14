@@ -31,7 +31,7 @@ contract CreateWBNBMarketDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams slisBNBParams = MarketParams({
+    MarketParams memory slisBNBParams = MarketParams({
       loanToken: WBNB,
       collateralToken: slisBNB,
       oracle: multiOracle,
@@ -39,7 +39,7 @@ contract CreateWBNBMarketDeploy is Script {
       lltv: lltv915
     });
 
-    MarketParams asBNBParams = MarketParams({
+    MarketParams memory asBNBParams = MarketParams({
       loanToken: WBNB,
       collateralToken: asBNB,
       oracle: multiOracle,
@@ -47,7 +47,7 @@ contract CreateWBNBMarketDeploy is Script {
       lltv: lltv915
     });
 
-    MarketParams BTCBParams = MarketParams({
+    MarketParams memory BTCBParams = MarketParams({
       loanToken: WBNB,
       collateralToken: BTCB,
       oracle: multiOracle,
@@ -55,7 +55,7 @@ contract CreateWBNBMarketDeploy is Script {
       lltv: lltv85
     });
 
-    MarketParams solvBTCParams = MarketParams({
+    MarketParams memory solvBTCParams = MarketParams({
       loanToken: WBNB,
       collateralToken: solvBTC,
       oracle: multiOracle,
@@ -63,7 +63,7 @@ contract CreateWBNBMarketDeploy is Script {
       lltv: lltv85
     });
 
-    MarketParams ptClisBNBParams = MarketParams({
+    MarketParams memory ptClisBNBParams = MarketParams({
       loanToken: WBNB,
       collateralToken: ptClisBNB,
       oracle: ptOracle,
@@ -71,9 +71,9 @@ contract CreateWBNBMarketDeploy is Script {
       lltv: lltv915
     });
 
-    MarketParams USDTParams = MarketParams({
+    MarketParams memory USDCParams = MarketParams({
       loanToken: WBNB,
-      collateralToken: USDTParams,
+      collateralToken: USDC,
       oracle: multiOracle,
       irm: irm,
       lltv: lltv85
@@ -85,7 +85,7 @@ contract CreateWBNBMarketDeploy is Script {
     moolah.createMarket(BTCBParams);
     moolah.createMarket(solvBTCParams);
     moolah.createMarket(ptClisBNBParams);
-    moolah.createMarket(USDTParams);
+    moolah.createMarket(USDCParams);
     vm.stopBroadcast();
   }
 }

@@ -40,7 +40,7 @@ contract MoolahVaultConfigDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams BTCBParams = MarketParams({
+    MarketParams memory BTCBParams = MarketParams({
       loanToken: USDT,
       collateralToken: BTCB,
       oracle: multiOracle,
@@ -48,7 +48,7 @@ contract MoolahVaultConfigDeploy is Script {
       lltv: lltv85
     });
 
-    MarketParams solvBTCParams = MarketParams({
+    MarketParams memory solvBTCParams = MarketParams({
       loanToken: USDT,
       collateralToken: solvBTC,
       oracle: multiOracle,
@@ -56,7 +56,7 @@ contract MoolahVaultConfigDeploy is Script {
       lltv: lltv85
     });
 
-    MarketParams USDFParams = MarketParams({
+    MarketParams memory USDFParams = MarketParams({
       loanToken: USDT,
       collateralToken: USDF,
       oracle: multiOracle,
@@ -64,7 +64,7 @@ contract MoolahVaultConfigDeploy is Script {
       lltv: lltv915
     });
 
-    MarketParams asUSDFParams = MarketParams({
+    MarketParams memory asUSDFParams = MarketParams({
       loanToken: USDT,
       collateralToken: asUSDF,
       oracle: multiOracle,
@@ -72,7 +72,7 @@ contract MoolahVaultConfigDeploy is Script {
       lltv: lltv915
     });
 
-    MarketParams USDeParams = MarketParams({
+    MarketParams memory USDeParams = MarketParams({
       loanToken: USDT,
       collateralToken: USDe,
       oracle: multiOracle,
@@ -80,7 +80,7 @@ contract MoolahVaultConfigDeploy is Script {
       lltv: lltv915
     });
 
-    MarketParams ptSUSDeParams = MarketParams({
+    MarketParams memory ptSUSDeParams = MarketParams({
       loanToken: USDT,
       collateralToken: ptSUSDe,
       oracle: ptOracle,
