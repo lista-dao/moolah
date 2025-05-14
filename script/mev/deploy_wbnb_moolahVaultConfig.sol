@@ -98,11 +98,11 @@ contract MoolahVaultConfigDeploy is Script {
     // config vault
     vault.setFee(fee);
 
-    vault.setCap(slisBNBParams, 10_000_000 ether);
-    vault.setCap(asBNBParams, 10_000_000 ether);
+    vault.setCap(slisBNBParams, 20_000_000 ether);
+    vault.setCap(asBNBParams, 20_000_000 ether);
     vault.setCap(BTCBParams, 10_000_000 ether);
     vault.setCap(solvBTCParams, 10_000_000 ether);
-    vault.setCap(ptClisBNBParams, 10_000_000 ether);
+    vault.setCap(ptClisBNBParams, 20_000_000 ether);
     vault.setCap(USDCParams, 10_000_000 ether);
 
     Id slisBNBId = slisBNBParams.id();
