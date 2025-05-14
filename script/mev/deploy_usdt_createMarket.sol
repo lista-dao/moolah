@@ -13,6 +13,8 @@ contract CreateUSDTMarketDeploy is Script {
   address USDT = 0x55d398326f99059fF775485246999027B3197955;
   address BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
   address solvBTC = 0x4aae823a6a0b376De6A78e74eCC5b079d38cBCf7;
+  address USDF = 0x5A110fC00474038f6c02E89C707D638602EA44B5;
+  address asUSDF = 0x917AF46B3C3c6e1Bb7286B9F59637Fb7C65851Fb;
   address USDe = 0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34;
   address ptSUSDe = 0xb84cEC1Ab2af11b530ae0d8594B1493556be49Cd;
 
@@ -45,6 +47,22 @@ contract CreateUSDTMarketDeploy is Script {
       lltv: lltv85
     });
 
+    MarketParams USDFParams = MarketParams({
+      loanToken: USDT,
+      collateralToken: USDF,
+      oracle: multiOracle,
+      irm: irm,
+      lltv: lltv915
+    });
+
+    MarketParams asUSDFParams = MarketParams({
+      loanToken: USDT,
+      collateralToken: asUSDF,
+      oracle: multiOracle,
+      irm: irm,
+      lltv: lltv915
+    });
+
     MarketParams USDeParams = MarketParams({
       loanToken: USDT,
       collateralToken: USDe,
@@ -64,6 +82,8 @@ contract CreateUSDTMarketDeploy is Script {
     vm.startBroadcast(deployerPrivateKey);
     moolah.createMarket(BTCBParams);
     moolah.createMarket(solvBTCParams);
+    moolah.createMarket(USDFParams);
+    moolah.createMarket(asUSDFParams);
     moolah.createMarket(USDeParams);
     moolah.createMarket(ptSUSDeParams);
     vm.stopBroadcast();

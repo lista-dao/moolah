@@ -17,6 +17,8 @@ contract MoolahVaultConfigDeploy is Script {
   address USDT = 0x55d398326f99059fF775485246999027B3197955;
   address BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
   address solvBTC = 0x4aae823a6a0b376De6A78e74eCC5b079d38cBCf7;
+  address USDF = 0x5A110fC00474038f6c02E89C707D638602EA44B5;
+  address asUSDF = 0x917AF46B3C3c6e1Bb7286B9F59637Fb7C65851Fb;
   address USDe = 0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34;
   address ptSUSDe = 0xb84cEC1Ab2af11b530ae0d8594B1493556be49Cd;
 
@@ -54,6 +56,22 @@ contract MoolahVaultConfigDeploy is Script {
       lltv: lltv85
     });
 
+    MarketParams USDFParams = MarketParams({
+      loanToken: USDT,
+      collateralToken: USDF,
+      oracle: multiOracle,
+      irm: irm,
+      lltv: lltv915
+    });
+
+    MarketParams asUSDFParams = MarketParams({
+      loanToken: USDT,
+      collateralToken: asUSDF,
+      oracle: multiOracle,
+      irm: irm,
+      lltv: lltv915
+    });
+
     MarketParams USDeParams = MarketParams({
       loanToken: USDT,
       collateralToken: USDe,
@@ -82,26 +100,34 @@ contract MoolahVaultConfigDeploy is Script {
 
     vault.setCap(BTCBParams, 10_000_000 ether);
     vault.setCap(solvBTCParams, 10_000_000 ether);
+    vault.setCap(USDFParams, 10_000_000 ether);
+    vault.setCap(asUSDFParams, 10_000_000 ether);
     vault.setCap(USDeParams, 10_000_000 ether);
     vault.setCap(ptSUSDeParams, 10_000_000 ether);
 
     Id BTCBId = BTCBParams.id();
     Id solvBTCId = solvBTCParams.id();
+    Id USDFId = USDFParams.id();
+    Id asUSDFId = asUSDFParams.id();
     Id USDeId = USDeParams.id();
     Id ptSUSDeId = ptSUSDeParams.id();
-    Id[] memory supplyQueue = new Id[](4);
+    Id[] memory supplyQueue = new Id[](6);
     supplyQueue[0] = BTCBId;
     supplyQueue[1] = solvBTCId;
-    supplyQueue[2] = USDeId;
-    supplyQueue[3] = ptSUSDeId;
+    supplyQueue[2] = USDFId;
+    supplyQueue[3] = asUSDFId;
+    supplyQueue[4] = USDeId;
+    supplyQueue[5] = ptSUSDeId;
 
     vault.setSupplyQueue(supplyQueue);
 
-    uint256[] memory withdrawQueue = new uint256[](4);
-    withdrawQueue[0] = 3;
-    withdrawQueue[1] = 2;
+    uint256[] memory withdrawQueue = new uint256[](6);
+    withdrawQueue[0] = 5;
+    withdrawQueue[1] = 4;
     withdrawQueue[2] = 3;
-    withdrawQueue[3] = 0;
+    withdrawQueue[3] = 2;
+    withdrawQueue[4] = 1;
+    withdrawQueue[5] = 0;
     vault.updateWithdrawQueue(withdrawQueue);
 
     vm.stopBroadcast();
