@@ -9,15 +9,18 @@ import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 contract MoolahVaultConfigDeploy is Script {
   using MarketParamsLib for MarketParams;
   // todo update vault feeRecipient oracleAdapter irm
-  MoolahVault vault = MoolahVault(0xE46b8E65006e6450bdd8cb7D3274AB4F76f4C705);
+  MoolahVault vault = MoolahVault(0x6d6783C146F2B0B2774C1725297f1845dc502525);
   uint256 fee = 10 * 1e16;
   address feeRecipient = 0x2E2Eed557FAb1d2E11fEA1E1a23FF8f1b23551f3;
   address skimRecipient = 0x1d60bBBEF79Fb9540D271Dbb01925380323A8f66;
 
+  address ETH = 0x2170Ed0880ac9A755fd29B2688956BD959F933F8;
   address WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
   address BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
   address solvBTC = 0x4aae823a6a0b376De6A78e74eCC5b079d38cBCf7;
   address USD1 = 0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d;
+  address USDT = 0x55d398326f99059fF775485246999027B3197955;
+  address slisBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B;
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
   address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
@@ -38,29 +41,37 @@ contract MoolahVaultConfigDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    // collateral-WBNB loan-BTCB lltv-80%
+    // collateral-BTCB loan-USDT lltv-80%
+    MarketParams memory BTCBParams = MarketParams({
+      loanToken: USDT,
+      collateralToken: BTCB,
+      oracle: multiOracle,
+      irm: irm,
+      lltv: lltv80
+    });
+    // collateral-ETH loan-USDT lltv-80%
+    MarketParams memory ETHParams = MarketParams({
+      loanToken: USDT,
+      collateralToken: ETH,
+      oracle: multiOracle,
+      irm: irm,
+      lltv: lltv80
+    });
+    // collateral-WBNB loan-USDT lltv-80%
     MarketParams memory WBNBParams = MarketParams({
-      loanToken: BTCB,
+      loanToken: USDT,
       collateralToken: WBNB,
       oracle: multiOracle,
       irm: irm,
       lltv: lltv80
     });
-    // collateral-USD1 loan-BTCB lltv-80%
-    MarketParams memory USD1Params = MarketParams({
-      loanToken: BTCB,
-      collateralToken: USD1,
-      oracle: multiOracle,
+    // collateral-slisBNB loan-USDT lltv-80%
+    MarketParams memory slisBNBParams = MarketParams({
+      loanToken: USDT,
+      collateralToken: slisBNB,
+      oracle: oracleAdapter,
       irm: irm,
       lltv: lltv80
-    });
-    // collateral-solvBTC loan-BTCB lltv-70%
-    MarketParams memory solvBTCParams = MarketParams({
-      loanToken: BTCB,
-      collateralToken: solvBTC,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv70
     });
 
     vm.startBroadcast(deployerPrivateKey);
@@ -74,27 +85,32 @@ contract MoolahVaultConfigDeploy is Script {
     // config vault
     vault.setFee(fee);
 
-    // WBNB cap 500 BTCB
-    vault.setCap(WBNBParams, 500 ether);
-    // USD1 cap 300 BTCB
-    vault.setCap(USD1Params, 300 ether);
-    // solvBTC cap 200 BTCB
-    vault.setCap(solvBTCParams, 200 ether);
+    // BTCB cap 20000000
+    vault.setCap(BTCBParams, 20000000 ether);
+    // ETH cap 20000000
+    vault.setCap(ETHParams, 20000000 ether);
+    // WBNB cap 20000000
+    vault.setCap(WBNBParams, 20000000 ether);
+    // slisBNB cap 20000000
+    vault.setCap(slisBNBParams, 20000000 ether);
 
+    Id BTCBId = BTCBParams.id();
+    Id ETHId = ETHParams.id();
     Id WBNBId = WBNBParams.id();
-    Id USD1Id = USD1Params.id();
-    Id solvBTCId = solvBTCParams.id();
-    Id[] memory supplyQueue = new Id[](3);
-    supplyQueue[0] = WBNBId;
-    supplyQueue[1] = USD1Id;
-    supplyQueue[2] = solvBTCId;
+    Id slisBNBId = slisBNBParams.id();
+    Id[] memory supplyQueue = new Id[](4);
+    supplyQueue[0] = BTCBId;
+    supplyQueue[1] = ETHId;
+    supplyQueue[2] = WBNBId;
+    supplyQueue[3] = slisBNBId;
 
     vault.setSupplyQueue(supplyQueue);
 
-    uint256[] memory withdrawQueue = new uint256[](3);
-    withdrawQueue[0] = 2;
-    withdrawQueue[1] = 1;
-    withdrawQueue[2] = 0;
+    uint256[] memory withdrawQueue = new uint256[](4);
+    withdrawQueue[0] = 3;
+    withdrawQueue[1] = 2;
+    withdrawQueue[2] = 1;
+    withdrawQueue[3] = 0;
     vault.updateWithdrawQueue(withdrawQueue);
 
     vm.stopBroadcast();

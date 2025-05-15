@@ -5,11 +5,12 @@ import "forge-std/Script.sol";
 import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 
 contract MoolahVaultTransferRoleDeploy is Script {
+  // todo update vault manager curator to timelock
   MoolahVault vault = MoolahVault(0x6d6783C146F2B0B2774C1725297f1845dc502525);
   address admin = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253; // timelock
-  address manager = 0x2e2807F88C381Cb0CC55c808a751fC1E3fcCbb85; // timelock
-  address allocator = 0x85CE862C5BB61938FFcc97DA4A80C8aaE43C6A27;
-  address curator = 0x2e2807F88C381Cb0CC55c808a751fC1E3fcCbb85;
+  address manager = 0xB672Ea44A1EC692A9Baf851dC90a1Ee3DB25F1C4; // timelock
+  address allocator = 0x6293e97900aA987Cf3Cbd419e0D5Ba43ebfA91c1;
+  address curator = 0xB672Ea44A1EC692A9Baf851dC90a1Ee3DB25F1C4;
 
   bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
   bytes32 public constant MANAGER = keccak256("MANAGER");
