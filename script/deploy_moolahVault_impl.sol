@@ -28,8 +28,8 @@ contract MoolahVaultDeploy is Script {
     MoolahVault implUsdt = new MoolahVault(moolah, USDT);
     console.log("MoolahVault(USDT) implementation: ", address(implUsdt));
 
-    MoolahVault implUsdt = new MoolahVault(moolah, BTCB);
-    console.log("MoolahVault(BTCB) implementation: ", address(implUsdt));
+    MoolahVault implBtcb = new MoolahVault(moolah, BTCB);
+    console.log("MoolahVault(BTCB) implementation: ", address(implBtcb));
 
     vm.stopBroadcast();
   }
