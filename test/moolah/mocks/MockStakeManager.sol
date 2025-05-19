@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import { IStakeManager } from "moolah/interfaces/IStakeManager.sol";
+import { IStakeManager } from "../../../src/provider/interfaces/IStakeManager.sol";
 
 contract MockStakeManager is IStakeManager {
     uint256 public exchangeRate;
