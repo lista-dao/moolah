@@ -6,12 +6,12 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 
 import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 
-contract MoolahVaultDeploy is Script {
+contract MoolahWBNBVaultDeploy is Script {
   address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
 
-  address asset = 0x55d398326f99059fF775485246999027B3197955; //USDT
-  string name = "Lista USDT Vault";
-  string symbol = "ListaUSDT";
+  address asset = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c; //USDT
+  string name = "MEV BNB Vault";
+  string symbol = "MEVBNB";
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
