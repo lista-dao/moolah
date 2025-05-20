@@ -9,23 +9,27 @@ import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 contract MoolahVaultConfigDeploy is Script {
   using MarketParamsLib for MarketParams;
   // todo update vault feeRecipient oracleAdapter irm
-  MoolahVault vault = MoolahVault(0x57134a64B7cD9F9eb72F8255A671F5Bf2fe3E2d0);
+  MoolahVault vault = MoolahVault(0x6d6783C146F2B0B2774C1725297f1845dc502525);
   uint256 fee = 10 * 1e16;
-  address feeRecipient = 0xea55952a51ddd771d6eBc45Bd0B512276dd0b866;
+  address feeRecipient = 0x2E2Eed557FAb1d2E11fEA1E1a23FF8f1b23551f3;
   address skimRecipient = 0x1d60bBBEF79Fb9540D271Dbb01925380323A8f66;
 
+  address ETH = 0x2170Ed0880ac9A755fd29B2688956BD959F933F8;
   address WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
   address BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
-  address slisBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B;
-  address ptClisBNB25apr = 0xE8F1C9804770e11Ab73395bE54686Ad656601E9e;
   address solvBTC = 0x4aae823a6a0b376De6A78e74eCC5b079d38cBCf7;
+  address USD1 = 0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d;
+  address USDT = 0x55d398326f99059fF775485246999027B3197955;
+  address slisBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B;
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
   address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
+  address bot = 0x91fC4BA20685339781888eCA3E9E1c12d40F0e13;
 
   uint256 lltv70 = 70 * 1e16;
   uint256 lltv80 = 80 * 1e16;
   uint256 lltv90 = 90 * 1e16;
+  uint256 lltv965 = 965 * 1e15;
 
   bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
   bytes32 public constant MANAGER = keccak256("MANAGER");
@@ -37,37 +41,37 @@ contract MoolahVaultConfigDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    // collateral-BTCB loan-WBNB lltv-80%
+    // collateral-BTCB loan-USDT lltv-80%
     MarketParams memory BTCBParams = MarketParams({
-      loanToken: WBNB,
+      loanToken: USDT,
       collateralToken: BTCB,
       oracle: multiOracle,
       irm: irm,
       lltv: lltv80
     });
-    // collateral-slisBNB loan-WBNB lltv-80%
+    // collateral-ETH loan-USDT lltv-80%
+    MarketParams memory ETHParams = MarketParams({
+      loanToken: USDT,
+      collateralToken: ETH,
+      oracle: multiOracle,
+      irm: irm,
+      lltv: lltv80
+    });
+    // collateral-WBNB loan-USDT lltv-80%
+    MarketParams memory WBNBParams = MarketParams({
+      loanToken: USDT,
+      collateralToken: WBNB,
+      oracle: multiOracle,
+      irm: irm,
+      lltv: lltv80
+    });
+    // collateral-slisBNB loan-USDT lltv-80%
     MarketParams memory slisBNBParams = MarketParams({
-      loanToken: WBNB,
+      loanToken: USDT,
       collateralToken: slisBNB,
       oracle: oracleAdapter,
       irm: irm,
       lltv: lltv80
-    });
-    // collateral-ptClisBNB25apr loan-WBNB lltv-90%
-    MarketParams memory ptClisBNB25aprParams = MarketParams({
-      loanToken: WBNB,
-      collateralToken: ptClisBNB25apr,
-      oracle: oracleAdapter,
-      irm: irm,
-      lltv: lltv90
-    });
-    // collateral-solvBTC loan-WBNB lltv-70%
-    MarketParams memory solvBTCParams = MarketParams({
-      loanToken: WBNB,
-      collateralToken: solvBTC,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv70
     });
 
     vm.startBroadcast(deployerPrivateKey);
@@ -76,28 +80,29 @@ contract MoolahVaultConfigDeploy is Script {
 
     vault.grantRole(CURATOR, deployer);
     vault.grantRole(ALLOCATOR, deployer);
+    vault.setBotRole(bot);
 
     // config vault
     vault.setFee(fee);
 
-    // BTCB cap 89286 WBNB
-    vault.setCap(BTCBParams, 89286 ether);
-    // slisBNB cap 16234 WBNB
-    vault.setCap(slisBNBParams, 16234 ether);
-    // ptClisBNB25apr cap 40584 WBNB
-    vault.setCap(ptClisBNB25aprParams, 40584 ether);
-    // solvBTC cap 16234 WBNB
-    vault.setCap(solvBTCParams, 16234 ether);
+    // BTCB cap 20000000
+    vault.setCap(BTCBParams, 20000000 ether);
+    // ETH cap 20000000
+    vault.setCap(ETHParams, 20000000 ether);
+    // WBNB cap 20000000
+    vault.setCap(WBNBParams, 20000000 ether);
+    // slisBNB cap 20000000
+    vault.setCap(slisBNBParams, 20000000 ether);
 
     Id BTCBId = BTCBParams.id();
+    Id ETHId = ETHParams.id();
+    Id WBNBId = WBNBParams.id();
     Id slisBNBId = slisBNBParams.id();
-    Id ptClisBNB25aprId = ptClisBNB25aprParams.id();
-    Id solvBTCId = solvBTCParams.id();
     Id[] memory supplyQueue = new Id[](4);
     supplyQueue[0] = BTCBId;
-    supplyQueue[1] = slisBNBId;
-    supplyQueue[2] = ptClisBNB25aprId;
-    supplyQueue[3] = solvBTCId;
+    supplyQueue[1] = ETHId;
+    supplyQueue[2] = WBNBId;
+    supplyQueue[3] = slisBNBId;
 
     vault.setSupplyQueue(supplyQueue);
 
