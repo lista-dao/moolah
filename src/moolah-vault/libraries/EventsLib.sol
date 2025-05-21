@@ -94,19 +94,21 @@ library EventsLib {
   event InitProvider(address indexed provider);
 
   /// @notice Emitted when a new MoolahVault vault is created.
-  /// @param moolahVault The address of the MoolahVault vault.
+  /// @param moolahVault The address of the MoolahVault.
+  /// @param implementation The implementation of the MoolahVault.
+  /// @param timeLock The timeLock of the MoolahVault.
   /// @param caller The caller of the function.
   /// @param initialOwner The initial owner of the MoolahVault vault.
-  /// @param initialTimelock The initial timelock of the MoolahVault vault.
   /// @param asset The address of the underlying asset.
   /// @param name The name of the MoolahVault vault.
   /// @param symbol The symbol of the MoolahVault vault.
   /// @param salt The salt used for the MoolahVault vault's CREATE2 address.
   event CreateMoolahVault(
     address indexed moolahVault,
+    address  implementation,
+    address  timeLock,
     address indexed caller,
     address initialOwner,
-    uint256 initialTimelock,
     address indexed asset,
     string name,
     string symbol,
