@@ -13,15 +13,16 @@ import { TimeLock } from "timelock/TimeLock.sol";
 
 
 contract MoolahVaultFactoryTest is Test {
-  address moolah;
+  address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
   address admin;
   address vaultAdmin;
-  ERC20Mock internal asset = new ERC20Mock("loan", "B");
+  address asset = 0x55d398326f99059fF775485246999027B3197955;
 
   IMoolahVaultFactory factory;
 
   function setUp() public {
-    moolah = makeAddr("mooah");
+    vm.createSelectFork("bsc");
+
     admin = makeAddr("admin");
     vaultAdmin = makeAddr("vaultAdmin");
 
@@ -29,12 +30,12 @@ contract MoolahVaultFactoryTest is Test {
   }
 
   function test_createMoolahVault() public {
-    (address vaultAddr, address timeLockAddr) = factory.createMoolahVault(admin, address(asset), "test name", "test symbol", 0x0);
+    (address vaultAddr, address timeLockAddr) = factory.createMoolahVault(admin, asset, "test name", "test symbol", 0x0);
 
     MoolahVault vault = MoolahVault(vaultAddr);
     TimeLock timeLock = TimeLock(payable(timeLockAddr));
 
-    assertEq(vault.asset(), address(asset), "asset error");
+    assertEq(vault.asset(), asset, "asset error");
 
     assertEq(vault.getRoleMemberCount(vault.DEFAULT_ADMIN_ROLE()), 1, "admin role error");
     assertEq(vault.hasRole(vault.DEFAULT_ADMIN_ROLE(), vaultAdmin), true, "admin role error");
