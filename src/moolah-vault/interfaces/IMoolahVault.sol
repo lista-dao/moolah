@@ -62,6 +62,9 @@ interface IMoolahVaultBase {
   /// triggered (deposit/mint/withdraw/redeem/setFee/setFeeRecipient).
   function lastTotalAssets() external view returns (uint256);
 
+  /// @notice The address of the provider.
+  function provider() external view returns (address);
+
   /// @notice set market removal
   function setMarketRemoval(MarketParams memory) external;
 
@@ -111,6 +114,8 @@ interface IMoolahVaultBase {
   function reallocate(MarketAllocation[] calldata allocations) external;
   function setBotRole(address _address) external;
   function revokeBotRole(address _address) external;
+  /// @notice Sets the address of the provider.
+  function initProvider(address _provider) external;
 }
 
 /// @dev This interface is inherited by MoolahVault so that function signatures are checked by the compiler.
@@ -138,4 +143,14 @@ interface IMoolahVault is IMoolahVaultBase, IERC4626, IERC20Permit, IOwnable, IM
 
   /// @notice revokes `role` from `account`.
   function revokeRole(bytes32 role, address account) external;
+
+  /// @notice called by provider to withdraw assets from the vault.
+  function withdrawFor(
+    uint256 assets,
+    address owner,
+    address sender
+  ) external returns (uint256 shares);
+
+  /// @notice called by provider to redeem shares from the vault.
+  function redeemFor(uint256 shares, address owner, address sender) external returns (uint256 assets);
 }
