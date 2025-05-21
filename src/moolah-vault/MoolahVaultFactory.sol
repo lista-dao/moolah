@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 import { IMoolahVault } from "./interfaces/IMoolahVault.sol";
 import { IMoolahVaultFactory } from "./interfaces/IMoolahVaultFactory.sol";
@@ -65,6 +66,7 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
     string memory symbol,
     bytes32 salt
   ) external returns (address, address) {
+    require(IERC20Metadata(asset).decimals() == 18, "Asset must have 18 decimals");
 
     address[] memory proposers = new address[](1);
     proposers[0] = initialManager;
