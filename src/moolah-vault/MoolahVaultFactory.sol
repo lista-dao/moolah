@@ -12,8 +12,6 @@ import { TimeLock } from "timelock/TimeLock.sol";
 import { EventsLib } from "./libraries/EventsLib.sol";
 import { ErrorsLib } from "./libraries/ErrorsLib.sol";
 
-import { MoolahVault } from "./MoolahVault.sol";
-
 /// @title MoolahVaultFactory
 /// @notice This contract allows to create MoolahVault, and to index them easily.
 contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IMoolahVaultFactory {
@@ -21,6 +19,8 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
 
   /// @inheritdoc IMoolahVaultFactory
   address public immutable MOOLAH;
+
+  address public constant MOOLAH_VAULT_IMPL_18 = 0xFAeccDB40688d3674925B48d1B913D0397785f4C;
 
   address public vaultAdmin;
 
@@ -85,18 +85,15 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
       timeLock.revokeRole(timeLock.DEFAULT_ADMIN_ROLE(), address(this));
     }
 
-    // create the vault
-    MoolahVault impl = new MoolahVault{salt: salt}(MOOLAH, asset);
-
     ERC1967Proxy proxy = new ERC1967Proxy(
-      address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, vaultAdmin, initialManager, asset, name, symbol)
+      address(MOOLAH_VAULT_IMPL_18),
+      abi.encodeWithSignature("initialize(address,address,address,string,string)", vaultAdmin, initialManager, asset, name, symbol)
     );
 
     isMoolahVault[address(proxy)] = true;
 
     emit EventsLib.CreateMoolahVault(
-      address(proxy), address(impl), address(timeLock), msg.sender, initialManager,  asset, name, symbol, salt
+      address(proxy), address(MOOLAH_VAULT_IMPL_18), address(timeLock), msg.sender, initialManager,  asset, name, symbol, salt
     );
 
     return (address(proxy), address(timeLock));
