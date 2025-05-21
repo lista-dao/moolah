@@ -89,7 +89,7 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
 
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(MOOLAH_VAULT_IMPL_18),
-      abi.encodeWithSignature("initialize(address,address,address,string,string)", vaultAdmin, initialManager, asset, name, symbol)
+      abi.encodeWithSignature("initialize(address,address,address,string,string)", vaultAdmin, address(timeLock), asset, name, symbol)
     );
 
     isMoolahVault[address(proxy)] = true;
