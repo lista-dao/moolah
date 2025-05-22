@@ -60,6 +60,8 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
 
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
     vaultAdmin = _vaultAdmin;
+
+    emit EventsLib.SetVaultAdmin(_vaultAdmin);
   }
 
   /* EXTERNAL */
@@ -72,8 +74,7 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
     uint256 timeLockDelay,
     address asset,
     string memory name,
-    string memory symbol,
-    bytes32 salt
+    string memory symbol
   ) external returns (address, address, address) {
     require(IERC20Metadata(asset).decimals() == 18, "Asset must have 18 decimals");
 
@@ -148,8 +149,7 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
       guardian,
       asset,
       name,
-      symbol,
-      salt
+      symbol
     );
 
     return (address(proxy), address(managerTimeLock), address(curatorTimeLock));
@@ -159,6 +159,8 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
     if (_vaultAdmin == address(0)) revert ErrorsLib.ZeroAddress();
     if (_vaultAdmin == vaultAdmin) revert ErrorsLib.AlreadySet();
     vaultAdmin = _vaultAdmin;
+
+    emit EventsLib.SetVaultAdmin(_vaultAdmin);
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}

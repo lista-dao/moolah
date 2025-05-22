@@ -20,7 +20,6 @@ interface IMoolahVaultFactory {
   /// @param asset The address of the underlying asset.
   /// @param name The name of the vault.
   /// @param symbol The symbol of the vault.
-  /// @param salt The salt to use for the MetaMorpho vault's CREATE2 address.
   function createMoolahVault(
     address manager,
     address curator,
@@ -28,7 +27,6 @@ interface IMoolahVaultFactory {
     uint256 timeLockDelay,
     address asset,
     string memory name,
-    string memory symbol,
-    bytes32 salt
+    string memory symbol
   ) external returns (address vault, address managerTimeLock, address curatorTimeLock);
 }

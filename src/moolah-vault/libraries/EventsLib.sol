@@ -106,7 +106,6 @@ library EventsLib {
   /// @param asset The address of the underlying asset.
   /// @param name The name of the MoolahVault vault.
   /// @param symbol The symbol of the MoolahVault vault.
-  /// @param salt The salt used for the MoolahVault vault's CREATE2 address.
   event CreateMoolahVault(
     address indexed moolahVault,
     address implementation,
@@ -119,7 +118,9 @@ library EventsLib {
     address guardian,
     address indexed asset,
     string name,
-    string symbol,
-    bytes32 salt
+    string symbol
   );
+
+  /// @notice Emitted when the vault admin is set to `vaultAdmin`.
+  event SetVaultAdmin(address vaultAdmin);
 }
