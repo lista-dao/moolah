@@ -18,7 +18,7 @@ contract BNBProviderTest is Test {
 
   bytes32 private constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
 
-  BNBProvider bnbProvider;
+  BNBProvider bnbProvider = BNBProvider(payable(0x367384C54756a25340c63057D87eA22d47Fd5701)); // Lista WBNB BNBProvider
   MoolahVault moolahVault; // WBNB Vault
   Moolah moolah;
 
@@ -43,20 +43,11 @@ contract BNBProviderTest is Test {
   function setUp() public {
     vm.createSelectFork("https://bsc-dataseed.bnbchain.org");
 
-    // Deploy BNBProvider
-    BNBProvider impl = new BNBProvider(moolahProxy, moolahVaultProxy, WBNB);
-    ERC1967Proxy proxy = new ERC1967Proxy(
-      address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, admin, manager)
-    );
-    bnbProvider = BNBProvider(payable(address(proxy)));
-
     // Upgrade MoolahVault
     address newImlp = address(new MoolahVault(moolahProxy, WBNB));
     address oldImpl = 0x0E52472cc585F8E28322CA4536eBd7094431C610;
     vm.startPrank(admin);
     UUPSUpgradeable proxy2 = UUPSUpgradeable(moolahVaultProxy);
-    assertEq(getImplementation(moolahVaultProxy), oldImpl);
     proxy2.upgradeToAndCall(newImlp, bytes(""));
     assertEq(getImplementation(moolahVaultProxy), newImlp);
     vm.stopPrank();
@@ -67,7 +58,6 @@ contract BNBProviderTest is Test {
     oldImpl = 0x0Cc33Db59a51aaC837790dfb8f8Cd07F7f16d779;
     vm.startPrank(admin);
     UUPSUpgradeable proxy3 = UUPSUpgradeable(moolahProxy);
-    assertEq(getImplementation(moolahProxy), oldImpl);
     proxy3.upgradeToAndCall(newImlp, bytes(""));
     assertEq(getImplementation(moolahProxy), newImlp);
     vm.stopPrank();
@@ -91,15 +81,11 @@ contract BNBProviderTest is Test {
 
     // Set up Moolah
     vm.startPrank(manager);
-    moolah.addProvider(param1.id(), address(bnbProvider));
-    moolah.addProvider(param2.id(), address(bnbProvider));
     assertEq(moolah.providers(param1.id(), WBNB), address(bnbProvider));
     assertEq(moolah.providers(param2.id(), WBNB), address(bnbProvider));
     vm.stopPrank();
 
     // Set up MoolahVault
-    vm.prank(admin);
-    moolahVault.initProvider(address(bnbProvider));
     assertEq(moolahVault.provider(), address(bnbProvider));
   }
 
