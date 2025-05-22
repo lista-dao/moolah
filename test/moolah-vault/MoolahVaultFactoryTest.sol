@@ -42,8 +42,7 @@ contract MoolahVaultFactoryTest is Test {
       timeLockDelay,
       asset,
       "test name",
-      "test symbol",
-      0x0
+      "test symbol"
     );
 
     MoolahVault vault = MoolahVault(vaultAddr);
