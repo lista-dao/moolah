@@ -7,6 +7,7 @@ import { ERC20PermitUpgradeable } from "@openzeppelin/contracts-upgradeable/toke
 import { IERC20, IERC4626, ERC20Upgradeable, ERC4626Upgradeable, Math, SafeERC20 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 import { MarketConfig, PendingUint192, PendingAddress, MarketAllocation, IMoolahVaultBase, IMoolahVaultStaticTyping } from "./interfaces/IMoolahVault.sol";
 import { Id, MarketParams, Market, IMoolah } from "moolah/interfaces/IMoolah.sol";
@@ -39,6 +40,7 @@ contract MoolahVault is
   using SharesMathLib for uint256;
   using MarketParamsLib for MarketParams;
   using MoolahBalancesLib for IMoolah;
+  using EnumerableSet for EnumerableSet.AddressSet;
 
   /* IMMUTABLES */
 
@@ -75,6 +77,9 @@ contract MoolahVault is
 
   /// @inheritdoc IMoolahVaultBase
   address public provider;
+
+  /// if whitelist is set, only whitelisted addresses can deposit and mint
+  EnumerableSet.AddressSet private whiteList;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant CURATOR = keccak256("CURATOR"); // curator role
@@ -163,6 +168,36 @@ contract MoolahVault is
     feeRecipient = newFeeRecipient;
 
     emit EventsLib.SetFeeRecipient(newFeeRecipient);
+  }
+
+  /// @inheritdoc IMoolahVaultBase
+  function addWhiteList(address account) external onlyRole(MANAGER) {
+    if (account == address(0)) revert ErrorsLib.ZeroAddress();
+    if (whiteList.contains(account)) revert ErrorsLib.AlreadySet();
+
+    whiteList.add(account);
+
+    emit EventsLib.AddWhiteList(account);
+  }
+
+  /// @inheritdoc IMoolahVaultBase
+  function removeWhiteList(address account) external onlyRole(MANAGER) {
+    if (account == address(0)) revert ErrorsLib.ZeroAddress();
+    if (!whiteList.contains(account)) revert ErrorsLib.NotSet();
+
+    whiteList.remove(account);
+
+    emit EventsLib.RemoveWhiteList(account);
+  }
+
+  /// @inheritdoc IMoolahVaultBase
+  function isWhiteList(address account) public view returns (bool) {
+    return whiteList.length() == 0 || whiteList.contains(account);
+  }
+
+  /// @inheritdoc IMoolahVaultBase
+  function getWhiteList() external view returns (address[] memory) {
+    return whiteList.values();
   }
 
   /* ONLY CURATOR FUNCTIONS */
@@ -387,6 +422,7 @@ contract MoolahVault is
 
   /// @inheritdoc IERC4626
   function deposit(uint256 assets, address receiver) public override returns (uint256 shares) {
+    require(isWhiteList(receiver), ErrorsLib.NotWhiteList());
     uint256 newTotalAssets = _accrueFee();
 
     // Update `lastTotalAssets` to avoid an inconsistent state in a re-entrant context.
@@ -400,6 +436,7 @@ contract MoolahVault is
 
   /// @inheritdoc IERC4626
   function mint(uint256 shares, address receiver) public override returns (uint256 assets) {
+    require(isWhiteList(receiver), ErrorsLib.NotWhiteList());
     uint256 newTotalAssets = _accrueFee();
 
     // Update `lastTotalAssets` to avoid an inconsistent state in a re-entrant context.
@@ -595,6 +632,10 @@ contract MoolahVault is
   }
 
   /* INTERNAL */
+
+  function _checkWhiteList(address account) internal view returns (bool) {
+    return whiteList.length() == 0 || whiteList.contains(account);
+  }
 
   /// @dev Returns the market params of the market defined by `id`.
   function _marketParams(Id id) internal view returns (MarketParams memory) {
