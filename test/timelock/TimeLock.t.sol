@@ -20,7 +20,7 @@ contract TimeLockTest is Test {
     proposers[0] = proposer;
     address[] memory executors = new address[](1);
     executors[0] = executor;
-    timeLock = new TimeLock(proposers, executors, address(0)); // don't set admin
+    timeLock = new TimeLock(proposers, executors, address(0), minDelay); // don't set admin
 
     assertEq(timeLock.hasRole(timeLock.PROPOSER_ROLE(), proposer), true);
     assertEq(timeLock.hasRole(timeLock.EXECUTOR_ROLE(), executor), true);
