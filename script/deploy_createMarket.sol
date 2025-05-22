@@ -21,6 +21,8 @@ contract CreateMarketDeploy is Script {
   address ptSUSDe26JUN2025 = 0xDD809435ba6c9d6903730f923038801781cA66ce;
   address USDF = 0x5A110fC00474038f6c02E89C707D638602EA44B5;
   address asUSDF = 0x917AF46B3C3c6e1Bb7286B9F59637Fb7C65851Fb;
+  address wstETH = 0x26c5e01524d2E6280A48F2c50fF6De7e52E9611C;
+  address wBETH = 0xa2E3356610840701BDf5611a53974510Ae27E2e1;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
@@ -43,60 +45,60 @@ contract CreateMarketDeploy is Script {
 
     MarketParams[] memory params = new MarketParams[](8);
     params[0] = MarketParams({
-      loanToken: USDT,
-      collateralToken: ptSUSDe26JUN2025,
-      oracle: ptSUSDeUSDTOracle,
-      irm: irm,
-      lltv: lltv915
-    });
-    params[1] = MarketParams({
-      loanToken: USDT,
-      collateralToken: USD1,
+      loanToken: WBNB,
+      collateralToken: wBETH,
       oracle: multiOracle,
       irm: irm,
-      lltv: lltv915
+      lltv: lltv80
+    });
+    params[1] = MarketParams({
+      loanToken: BTCB,
+      collateralToken: wBETH,
+      oracle: multiOracle,
+      irm: irm,
+      lltv: lltv80
     });
     params[2] = MarketParams({
       loanToken: USDT,
-      collateralToken: USDF,
+      collateralToken: wBETH,
       oracle: multiOracle,
       irm: irm,
-      lltv: lltv915
+      lltv: lltv80
     });
     params[3] = MarketParams({
-      loanToken: USDT,
-      collateralToken: asUSDF,
+      loanToken: USD1,
+      collateralToken: wBETH,
       oracle: multiOracle,
       irm: irm,
-      lltv: lltv915
+      lltv: lltv80
     });
     params[4] = MarketParams({
-      loanToken: USD1,
-      collateralToken: USDT,
+      loanToken: WBNB,
+      collateralToken: wstETH,
       oracle: multiOracle,
       irm: irm,
-      lltv: lltv915
+      lltv: lltv80
     });
     params[5] = MarketParams({
-      loanToken: USD1,
-      collateralToken: USDF,
+      loanToken: BTCB,
+      collateralToken: wstETH,
       oracle: multiOracle,
       irm: irm,
-      lltv: lltv915
+      lltv: lltv80
     });
     params[6] = MarketParams({
-      loanToken: USD1,
-      collateralToken: asUSDF,
+      loanToken: USDT,
+      collateralToken: wstETH,
       oracle: multiOracle,
       irm: irm,
-      lltv: lltv915
+      lltv: lltv80
     });
     params[7] = MarketParams({
       loanToken: USD1,
-      collateralToken: ptSUSDe26JUN2025,
-      oracle: ptSUSDeUSD1Oracle,
+      collateralToken: wstETH,
+      oracle: multiOracle,
       irm: irm,
-      lltv: lltv915
+      lltv: lltv80
     });
 
     vm.startBroadcast(deployerPrivateKey);
