@@ -11,8 +11,14 @@ contract TimeLock is TimelockController, AccessControlEnumerable {
   constructor(
     address[] memory proposers,
     address[] memory executors,
-    address admin
-  ) TimelockController(MIN_DELAY, proposers, executors, admin) {}
+    address admin,
+    uint256 minDelay
+  ) TimelockController(minDelay, proposers, executors, admin) {
+    require(
+      minDelay >= MIN_DELAY,
+      "TimeLock: minDelay must be greater than or equal to 1 days"
+    );
+  }
 
   function getMinDelay() public view override returns (uint256) {
     return MIN_DELAY > super.getMinDelay() ? MIN_DELAY : super.getMinDelay();
