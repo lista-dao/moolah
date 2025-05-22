@@ -24,7 +24,7 @@ contract MoolahVaultFactoryTest is Test {
   IMoolahVaultFactory factory;
 
   function setUp() public {
-    vm.createSelectFork("bsc");
+    vm.createSelectFork("https://bsc-dataseed.bnbchain.org");
 
     admin = makeAddr("admin");
     curator = makeAddr("curator");
