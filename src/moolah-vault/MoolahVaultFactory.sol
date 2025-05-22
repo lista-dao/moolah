@@ -25,6 +25,12 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
 
   address public vaultAdmin;
 
+  bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
+  bytes32 public constant CURATOR = keccak256("CURATOR"); // curator role
+  bytes32 public constant PROPOSER_ROLE = keccak256("PROPOSER_ROLE");
+  bytes32 public constant EXECUTOR_ROLE = keccak256("EXECUTOR_ROLE");
+  bytes32 public constant CANCELLER_ROLE = keccak256("CANCELLER_ROLE");
+
   /* STORAGE */
 
   /// @inheritdoc IMoolahVaultFactory
@@ -60,45 +66,93 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
 
   /// @inheritdoc IMoolahVaultFactory
   function createMoolahVault(
-    address initialManager,
+    address manager,
+    address curator,
+    address guardian,
+    uint256 timeLockDelay,
     address asset,
     string memory name,
     string memory symbol,
     bytes32 salt
-  ) external returns (address, address) {
+  ) external returns (address, address, address) {
     require(IERC20Metadata(asset).decimals() == 18, "Asset must have 18 decimals");
 
-    address[] memory proposers = new address[](1);
-    proposers[0] = initialManager;
-    address[] memory executors = new address[](1);
-    executors[0] = initialManager;
+    address[] memory managerProposers = new address[](1);
+    managerProposers[0] = manager;
+    address[] memory managerExecutors = new address[](1);
+    managerExecutors[0] = manager;
+
+    address[] memory curatorProposers = new address[](1);
+    curatorProposers[0] = curator;
+    address[] memory curatorExecutors = new address[](1);
+    curatorExecutors[0] = curator;
 
     /// create timeLock
-    TimeLock timeLock = new TimeLock(
-      proposers,
-      executors,
-     address(this)
+    TimeLock managerTimeLock = new TimeLock(
+      managerProposers,
+      managerExecutors,
+      address(this),
+      timeLockDelay
     );
 
     {
       // transfer roles
-      timeLock.grantRole(timeLock.CANCELLER_ROLE(), initialManager);
-      timeLock.grantRole(timeLock.DEFAULT_ADMIN_ROLE(), address(timeLock));
-      timeLock.revokeRole(timeLock.DEFAULT_ADMIN_ROLE(), address(this));
+      managerTimeLock.grantRole(CANCELLER_ROLE, guardian);
+      managerTimeLock.grantRole(DEFAULT_ADMIN_ROLE, address(managerTimeLock));
+      managerTimeLock.revokeRole(DEFAULT_ADMIN_ROLE, address(this));
+    }
+
+    TimeLock curatorTimeLock = new TimeLock(
+      curatorProposers,
+      curatorExecutors,
+      address(this),
+      timeLockDelay
+    );
+
+    {
+      // transfer roles
+      curatorTimeLock.grantRole(CANCELLER_ROLE, guardian);
+      curatorTimeLock.grantRole(DEFAULT_ADMIN_ROLE, address(curatorTimeLock));
+      curatorTimeLock.revokeRole(DEFAULT_ADMIN_ROLE, address(this));
     }
 
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(MOOLAH_VAULT_IMPL_18),
-      abi.encodeWithSignature("initialize(address,address,address,string,string)", vaultAdmin, address(timeLock), asset, name, symbol)
+      abi.encodeWithSignature("initialize(address,address,address,string,string)", address(this), address(this), asset, name, symbol)
     );
+
+    {
+      // transfer roles
+      IMoolahVault vault = IMoolahVault(address(proxy));
+
+      vault.grantRole(DEFAULT_ADMIN_ROLE, vaultAdmin);
+      vault.grantRole(MANAGER, address(managerTimeLock));
+      vault.grantRole(CURATOR, address(curatorTimeLock));
+
+      vault.revokeRole(CURATOR, address(this));
+      vault.revokeRole(MANAGER, address(this));
+      vault.revokeRole(DEFAULT_ADMIN_ROLE, address(this));
+    }
 
     isMoolahVault[address(proxy)] = true;
 
     emit EventsLib.CreateMoolahVault(
-      address(proxy), address(MOOLAH_VAULT_IMPL_18), address(timeLock), msg.sender, initialManager,  asset, name, symbol, salt
+      address(proxy),
+      address(MOOLAH_VAULT_IMPL_18),
+      address(managerTimeLock),
+      address(curatorTimeLock),
+      timeLockDelay,
+      msg.sender,
+      manager,
+      curator,
+      guardian,
+      asset,
+      name,
+      symbol,
+      salt
     );
 
-    return (address(proxy), address(timeLock));
+    return (address(proxy), address(managerTimeLock), address(curatorTimeLock));
   }
 
   function setVaultAdmin(address _vaultAdmin) external onlyRole(DEFAULT_ADMIN_ROLE) {
