@@ -29,6 +29,8 @@ library ErrorsLib {
   /// @notice Thrown when the value is already set.
   error AlreadySet();
 
+  error NotSet();
+
   /// @notice Thrown when a value is already pending.
   error AlreadyPending();
 
@@ -91,4 +93,6 @@ library ErrorsLib {
 
   /// @notice Thrown the token is not the same when setting the provider.
   error TokenMismatch();
+
+  error NotWhiteList();
 }

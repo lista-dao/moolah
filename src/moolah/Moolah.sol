@@ -73,6 +73,9 @@ contract Moolah is
   /// @inheritdoc IMoolahBase
   mapping(Id => mapping(address => address)) public providers;
 
+  /// if whitelist is set, only whitelisted addresses can supply, supply collateral, borrow
+  mapping(Id => EnumerableSet.AddressSet) private whiteList;
+
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant PAUSER = keccak256("PAUSER"); // pauser role
 
@@ -173,6 +176,22 @@ contract Moolah is
     emit EventsLib.RemoveLiquidationWhitelist(id, account);
   }
 
+  /// @inheritdoc IMoolahBase
+  function addWhiteList(Id id, address account) external onlyRole(MANAGER) {
+    require(!whiteList[id].contains(account), ErrorsLib.ALREADY_SET);
+    whiteList[id].add(account);
+
+    emit EventsLib.AddWhiteList(id, account);
+  }
+
+  /// @inheritdoc IMoolahBase
+  function removeWhiteList(Id id, address account) external onlyRole(MANAGER) {
+    require(whiteList[id].contains(account), ErrorsLib.NOT_SET);
+    whiteList[id].remove(account);
+
+    emit EventsLib.RemoveWhiteList(id, account);
+  }
+
   function addProvider(Id id, address provider) external onlyRole(MANAGER) {
     address token = IProvider(provider).TOKEN();
     require(token != address(0), ErrorsLib.ZERO_ADDRESS);
@@ -230,6 +249,7 @@ contract Moolah is
     bytes calldata data
   ) external whenNotPaused nonReentrant returns (uint256, uint256) {
     Id id = marketParams.id();
+    require(isWhiteList(id, onBehalf), ErrorsLib.NOT_WHITELIST);
     require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
     require(UtilsLib.exactlyOneZero(assets, shares), ErrorsLib.INCONSISTENT_INPUT);
     require(onBehalf != address(0), ErrorsLib.ZERO_ADDRESS);
@@ -299,6 +319,7 @@ contract Moolah is
     address receiver
   ) external whenNotPaused nonReentrant returns (uint256, uint256) {
     Id id = marketParams.id();
+    require(isWhiteList(id, onBehalf), ErrorsLib.NOT_WHITELIST);
     require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
     require(UtilsLib.exactlyOneZero(assets, shares), ErrorsLib.INCONSISTENT_INPUT);
     require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
@@ -375,6 +396,7 @@ contract Moolah is
     bytes calldata data
   ) external whenNotPaused nonReentrant {
     Id id = marketParams.id();
+    require(isWhiteList(id, onBehalf), ErrorsLib.NOT_WHITELIST);
     require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
     require(assets != 0, ErrorsLib.ZERO_ASSETS);
     require(onBehalf != address(0), ErrorsLib.ZERO_ADDRESS);
@@ -653,6 +675,16 @@ contract Moolah is
 
     uint256 scaleFactor = 10 ** (36 + quotaTokenDecimals - baseTokenDecimals);
     return scaleFactor.mulDivDown(basePrice, quotaPrice);
+  }
+
+  /// @inheritdoc IMoolahBase
+  function getWhiteList(Id id) external view returns (address[] memory) {
+    return whiteList[id].values();
+  }
+
+  /// @inheritdoc IMoolahBase
+  function isWhiteList(Id id, address account) public view returns (bool) {
+    return whiteList[id].length() == 0 || whiteList[id].contains(account);
   }
 
   /// @inheritdoc IMoolahBase

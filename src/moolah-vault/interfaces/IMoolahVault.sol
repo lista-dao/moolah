@@ -116,6 +116,15 @@ interface IMoolahVaultBase {
   function revokeBotRole(address _address) external;
   /// @notice Sets the address of the provider.
   function initProvider(address _provider) external;
+
+  /// @notice Add account to whitelist
+  function addWhiteList(address account) external;
+  /// @notice Remove account from whitelist
+  function removeWhiteList(address account) external;
+  /// @notice Returns the list of whitelisted accounts.
+  function getWhiteList() external view returns (address[] memory);
+  /// @notice Returns `true` if `account` is whitelisted.
+  function isWhiteList(address account) external view returns (bool);
 }
 
 /// @dev This interface is inherited by MoolahVault so that function signatures are checked by the compiler.

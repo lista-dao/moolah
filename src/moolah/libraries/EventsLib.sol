@@ -34,6 +34,10 @@ library EventsLib {
   /// @notice Emitted when remove a liquidate whitelist.
   event RemoveLiquidationWhitelist(Id indexed id, address indexed account);
 
+  event AddWhiteList(Id indexed id, address indexed account);
+
+  event RemoveWhiteList(Id indexed id, address indexed account);
+
   /// @notice Emitted when creating a market.
   /// @param id The market id.
   /// @param marketParams The market that was created.

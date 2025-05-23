@@ -27,6 +27,10 @@ library EventsLib {
   /// @notice Emitted when a pending `newGuardian` is submitted.
   event SubmitGuardian(address indexed newGuardian);
 
+  event AddWhiteList(address indexed account);
+
+  event RemoveWhiteList(address indexed account);
+
   /// @notice Emitted when `guardian` is set to `newGuardian`.
   event SetGuardian(address indexed caller, address indexed guardian);
 
