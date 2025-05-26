@@ -46,34 +46,10 @@ contract CreateMarketDeploy is Script {
     console.log("Deployer: ", deployer);
 
     MarketParams[] memory params = new MarketParams[](4);
-    params[0] = MarketParams({
-      loanToken: USD1,
-      collateralToken: USDe,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv915
-    });
-    params[1] = MarketParams({
-      loanToken: USD1,
-      collateralToken: sUSDe,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv915
-    });
-    params[2] = MarketParams({
-      loanToken: USDT,
-      collateralToken: USDe,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv915
-    });
-    params[3] = MarketParams({
-      loanToken: USDT,
-      collateralToken: sUSDe,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv915
-    });
+    params[0] = MarketParams({ loanToken: USD1, collateralToken: USDe, oracle: multiOracle, irm: irm, lltv: lltv915 });
+    params[1] = MarketParams({ loanToken: USD1, collateralToken: sUSDe, oracle: multiOracle, irm: irm, lltv: lltv915 });
+    params[2] = MarketParams({ loanToken: USDT, collateralToken: USDe, oracle: multiOracle, irm: irm, lltv: lltv915 });
+    params[3] = MarketParams({ loanToken: USDT, collateralToken: sUSDe, oracle: multiOracle, irm: irm, lltv: lltv915 });
 
     vm.startBroadcast(deployerPrivateKey);
     for (uint256 i = 0; i < 4; i++) {
@@ -81,12 +57,14 @@ contract CreateMarketDeploy is Script {
       console.log("market id:");
       console.logBytes32(Id.unwrap(id));
       // check if market already exists
-      (,,,,uint128 lastUpdate,) = moolah.market(id);
+      (, , , , uint128 lastUpdate, ) = moolah.market(id);
       if (lastUpdate != 0) {
+        console.log("market already exists");
         continue;
       }
       // create market
       moolah.createMarket(params[i]);
+      console.log("market created");
     }
 
     vm.stopBroadcast();
