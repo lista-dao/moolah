@@ -819,5 +819,9 @@ contract MoolahVault is
     }
   }
 
+   function setRoleAdmin(bytes32 role) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    _setRoleAdmin(role, DEFAULT_ADMIN_ROLE);
+  }
+
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 }
