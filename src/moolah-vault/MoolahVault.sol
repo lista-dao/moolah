@@ -633,10 +633,6 @@ contract MoolahVault is
 
   /* INTERNAL */
 
-  function _checkWhiteList(address account) internal view returns (bool) {
-    return whiteList.length() == 0 || whiteList.contains(account);
-  }
-
   /// @dev Returns the market params of the market defined by `id`.
   function _marketParams(Id id) internal view returns (MarketParams memory) {
     return MOOLAH.idToMarketParams(id);
