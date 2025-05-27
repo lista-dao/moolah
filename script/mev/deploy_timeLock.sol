@@ -10,6 +10,7 @@ contract TimeLockDeploy is Script {
   address proposer = 0xB672Ea44A1EC692A9Baf851dC90a1Ee3DB25F1C4;
   address executor = 0xB672Ea44A1EC692A9Baf851dC90a1Ee3DB25F1C4;
   address canceller = 0xB672Ea44A1EC692A9Baf851dC90a1Ee3DB25F1C4;
+  uint256 minDelay = 1 days;
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -22,7 +23,7 @@ contract TimeLockDeploy is Script {
     proposers[0] = proposer;
     address[] memory executors = new address[](1);
     executors[0] = executor;
-    TimeLock timeLock = new TimeLock(proposers, executors, deployer);
+    TimeLock timeLock = new TimeLock(proposers, executors, deployer, minDelay);
     console.log("TimeLock deploy to: ", address(timeLock));
 
     // setup roles
