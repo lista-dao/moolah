@@ -125,7 +125,6 @@ contract MoolahVault is
 
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
     _grantRole(MANAGER, manager);
-    _setRoleAdmin(CURATOR, MANAGER);
     _setRoleAdmin(ALLOCATOR, MANAGER);
 
     IERC20(_asset).forceApprove(address(MOOLAH), type(uint256).max);
