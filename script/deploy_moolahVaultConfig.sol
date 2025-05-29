@@ -13,6 +13,7 @@ contract MoolahVaultConfigDeploy is Script {
   uint256 fee = 10 * 1e16;
   address feeRecipient = 0x2E2Eed557FAb1d2E11fEA1E1a23FF8f1b23551f3;
   address skimRecipient = 0x1d60bBBEF79Fb9540D271Dbb01925380323A8f66;
+  address whiteList = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
 
   address ETH = 0x2170Ed0880ac9A755fd29B2688956BD959F933F8;
   address WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
@@ -85,6 +86,8 @@ contract MoolahVaultConfigDeploy is Script {
 
     // config vault
     vault.setFee(fee);
+
+    vault.addWhiteList(whiteList);
 
     vault.setCap(BTCBParams, 50000000 ether);
     vault.setCap(WBNBParams, 50000000 ether);
