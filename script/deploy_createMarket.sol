@@ -35,7 +35,7 @@ contract CreateMarketDeploy is Script {
   address ptSUSDeUSD1Oracle = 0xFd31ADF830Fd68d3E646792917e4dDB1d9AB5665;
 
   address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
-  address alphaIrm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
+  address alphaIrm = 0x5F9f9173B405C6CEAfa7f98d09e4B8447e9797E6;
 
   uint256 lltv50 = 50 * 1e16;
   uint256 lltv70 = 70 * 1e16;

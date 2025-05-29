@@ -27,7 +27,7 @@ contract MoolahVaultConfigDeploy is Script {
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
   address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
-  address alphaIrm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
+  address alphaIrm = 0x5F9f9173B405C6CEAfa7f98d09e4B8447e9797E6;
   address bot = 0x91fC4BA20685339781888eCA3E9E1c12d40F0e13;
 
   uint256 lltv50 = 50 * 1e16;
