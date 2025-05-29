@@ -33,6 +33,7 @@ contract MoolahVaultConfigDeploy is Script {
 
   uint256 lltv50 = 50 * 1e16;
   uint256 lltv70 = 70 * 1e16;
+  uint256 lltv75 = 75 * 1e16;
   uint256 lltv80 = 80 * 1e16;
   uint256 lltv90 = 90 * 1e16;
   uint256 lltv965 = 965 * 1e15;
@@ -52,28 +53,28 @@ contract MoolahVaultConfigDeploy is Script {
       collateralToken: BTCB,
       oracle: multiOracle,
       irm: alphaIrm,
-      lltv: lltv50
+      lltv: lltv75
     });
     MarketParams memory WBNBParams = MarketParams({
       loanToken: Puffer,
       collateralToken: WBNB,
       oracle: multiOracle,
       irm: alphaIrm,
-      lltv: lltv50
+      lltv: lltv75
     });
     MarketParams memory USDTParams = MarketParams({
       loanToken: Puffer,
       collateralToken: USDT,
       oracle: multiOracle,
       irm: alphaIrm,
-      lltv: lltv50
+      lltv: lltv75
     });
     MarketParams memory USD1Params = MarketParams({
       loanToken: Puffer,
       collateralToken: USD1,
       oracle: multiOracle,
       irm: alphaIrm,
-      lltv: lltv50
+      lltv: lltv75
     });
 
     vm.startBroadcast(deployerPrivateKey);

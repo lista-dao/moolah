@@ -39,6 +39,7 @@ contract CreateMarketDeploy is Script {
 
   uint256 lltv50 = 50 * 1e16;
   uint256 lltv70 = 70 * 1e16;
+  uint256 lltv75 = 75 * 1e16;
   uint256 lltv80 = 80 * 1e16;
   uint256 lltv85 = 85 * 1e16;
   uint256 lltv90 = 90 * 1e16;
@@ -51,10 +52,10 @@ contract CreateMarketDeploy is Script {
     console.log("Deployer: ", deployer);
 
     MarketParams[] memory params = new MarketParams[](4);
-    params[0] = MarketParams({ loanToken: Puffer, collateralToken: BTCB, oracle: multiOracle, irm: alphaIrm, lltv: lltv50 });
-    params[1] = MarketParams({ loanToken: Puffer, collateralToken: WBNB, oracle: multiOracle, irm: alphaIrm, lltv: lltv50 });
-    params[2] = MarketParams({ loanToken: Puffer, collateralToken: USDT, oracle: multiOracle, irm: alphaIrm, lltv: lltv50 });
-    params[3] = MarketParams({ loanToken: Puffer, collateralToken: USD1, oracle: multiOracle, irm: alphaIrm, lltv: lltv50 });
+    params[0] = MarketParams({ loanToken: Puffer, collateralToken: BTCB, oracle: multiOracle, irm: alphaIrm, lltv: lltv75 });
+    params[1] = MarketParams({ loanToken: Puffer, collateralToken: WBNB, oracle: multiOracle, irm: alphaIrm, lltv: lltv75 });
+    params[2] = MarketParams({ loanToken: Puffer, collateralToken: USDT, oracle: multiOracle, irm: alphaIrm, lltv: lltv75 });
+    params[3] = MarketParams({ loanToken: Puffer, collateralToken: USD1, oracle: multiOracle, irm: alphaIrm, lltv: lltv75 });
 
     vm.startBroadcast(deployerPrivateKey);
     for (uint256 i = 0; i < 4; i++) {
