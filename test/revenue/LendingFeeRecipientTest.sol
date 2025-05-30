@@ -215,6 +215,45 @@ contract LendingFeeRecipientTest is Test {
 
   }
 
+  function test_claimVaultFeeForGivenVaults() public {
+
+    loanToken.setBalance(SUPPLIER, 100 ether);
+    collateralToken.setBalance(BORROW, 100 ether);
+    loanToken.setBalance(BORROW, 100 ether);
+
+    vm.startPrank(SUPPLIER);
+    vault.deposit(10 ether, SUPPLIER);
+    vm.stopPrank();
+
+    vm.startPrank(BORROW);
+    moolah.supplyCollateral(marketParams, 100 ether, BORROW, "");
+    moolah.borrow(marketParams, 9.1 ether, 0, BORROW, BORROW);
+    vm.stopPrank();
+
+    skip(365 days);
+
+    Position memory position = moolah.position(marketParams.id(), BORROW);
+    vm.startPrank(BORROW);
+    moolah.repay(marketParams, 0, position.borrowShares, BORROW, "");
+    vm.stopPrank();
+
+    vm.startPrank(SUPPLIER);
+    vault.redeem(vault.balanceOf(SUPPLIER), SUPPLIER, SUPPLIER);
+    vm.stopPrank();
+
+    uint256 feeShares = vault.balanceOf(address(lendingFeeRecipient));
+    assertTrue(feeShares > 0, "fee shares not minted to fee recipient");
+
+    address[] memory vaults = new address[](1);
+    vaults[0] = address(vault);
+
+    vm.startPrank(BOT);
+    lendingFeeRecipient.claimVaultFee(vaults);
+    vm.stopPrank();
+
+    assertTrue(loanToken.balanceOf(VAULT_FEE_RECEIVER) > 0, "vault fee not claimed");
+  }
+
   function newMoolah(address admin, address manager, address pauser) internal returns (IMoolah) {
     Moolah moolahImpl = new Moolah();
 
