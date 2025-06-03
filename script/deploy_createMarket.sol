@@ -26,6 +26,9 @@ contract CreateMarketDeploy is Script {
   address USDe = 0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34;
   address sUSDe = 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2;
   address STONE = 0x80137510979822322193FC997d400D5A6C747bf7;
+  address Puffer = 0x87d00066cf131ff54B72B134a217D5401E5392b6;
+  address USDX = 0xf3527ef8dE265eAa3716FB312c12847bFBA66Cef;
+  address sUSDX = 0x7788A3538C5fc7F9c7C8A74EAC4c898fC8d87d92;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
@@ -34,10 +37,14 @@ contract CreateMarketDeploy is Script {
   address ptSUSDeUSD1Oracle = 0xFd31ADF830Fd68d3E646792917e4dDB1d9AB5665;
 
   address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
+  address alphaIrm = 0x5F9f9173B405C6CEAfa7f98d09e4B8447e9797E6;
 
+  uint256 lltv50 = 50 * 1e16;
   uint256 lltv70 = 70 * 1e16;
+  uint256 lltv75 = 75 * 1e16;
   uint256 lltv80 = 80 * 1e16;
   uint256 lltv85 = 85 * 1e16;
+  uint256 lltv865 = 865 * 1e15;
   uint256 lltv90 = 90 * 1e16;
   uint256 lltv915 = 915 * 1e15;
   uint256 lltv965 = 965 * 1e15;
@@ -47,11 +54,14 @@ contract CreateMarketDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams[] memory params = new MarketParams[](1);
-    params[0] = MarketParams({ loanToken: WBNB, collateralToken: STONE, oracle: multiOracle, irm: irm, lltv: lltv85 });
+    MarketParams[] memory params = new MarketParams[](4);
+    params[0] = MarketParams({ loanToken: USD1, collateralToken: USDX, oracle: multiOracle, irm: alphaIrm, lltv: lltv865 });
+    params[1] = MarketParams({ loanToken: USDT, collateralToken: sUSDX, oracle: multiOracle, irm: alphaIrm, lltv: lltv865 });
+    params[2] = MarketParams({ loanToken: USD1, collateralToken: sUSDe, oracle: multiOracle, irm: alphaIrm, lltv: lltv865 });
+    params[3] = MarketParams({ loanToken: USDT, collateralToken: sUSDe, oracle: multiOracle, irm: alphaIrm, lltv: lltv865 });
 
     vm.startBroadcast(deployerPrivateKey);
-    for (uint256 i = 0; i < 1; i++) {
+    for (uint256 i = 0; i < 4; i++) {
       Id id = params[i].id();
       console.log("market id:");
       console.logBytes32(Id.unwrap(id));
