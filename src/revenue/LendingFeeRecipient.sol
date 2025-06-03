@@ -139,6 +139,18 @@ contract LendingFeeRecipient is
     }
   }
 
+  /// @dev claim vault fees for the given vaults.
+  function claimVaultFee(address[] calldata _vaults) external onlyRole(BOT) {
+    for (uint256 i = 0; i < _vaults.length; i++) {
+      IMoolahVault vault = IMoolahVault(_vaults[i]);
+      uint256 shares = vault.balanceOf(address(this));
+      if (shares > 0) {
+        uint256 assets = vault.redeem(shares, vaultFeeRecipient, address(this));
+        emit VaultFeeClaimed(address(vault), vault.asset(), assets, shares);
+      }
+    }
+  }
+
   /// @dev get all vaults
   function getVaults() external view returns (address[] memory) {
     address[] memory vaultsList = new address[](vaults.length);
