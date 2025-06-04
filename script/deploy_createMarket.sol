@@ -55,10 +55,10 @@ contract CreateMarketDeploy is Script {
     console.log("Deployer: ", deployer);
 
     MarketParams[] memory params = new MarketParams[](4);
-    params[0] = MarketParams({ loanToken: USD1, collateralToken: USDX, oracle: multiOracle, irm: alphaIrm, lltv: lltv865 });
-    params[1] = MarketParams({ loanToken: USDT, collateralToken: sUSDX, oracle: multiOracle, irm: alphaIrm, lltv: lltv865 });
-    params[2] = MarketParams({ loanToken: USD1, collateralToken: sUSDe, oracle: multiOracle, irm: alphaIrm, lltv: lltv865 });
-    params[3] = MarketParams({ loanToken: USDT, collateralToken: sUSDe, oracle: multiOracle, irm: alphaIrm, lltv: lltv865 });
+    params[0] = MarketParams({ loanToken: USD1, collateralToken: USDX, oracle: multiOracle, irm: irm, lltv: lltv865 });
+    params[1] = MarketParams({ loanToken: USDT, collateralToken: sUSDX, oracle: multiOracle, irm: irm, lltv: lltv865 });
+    params[2] = MarketParams({ loanToken: USD1, collateralToken: sUSDe, oracle: multiOracle, irm: irm, lltv: lltv865 });
+    params[3] = MarketParams({ loanToken: USDT, collateralToken: sUSDe, oracle: multiOracle, irm: irm, lltv: lltv865 });
 
     vm.startBroadcast(deployerPrivateKey);
     for (uint256 i = 0; i < 4; i++) {
