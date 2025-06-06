@@ -37,7 +37,7 @@ contract RoleTest is IntegrationTest {
     vm.startPrank(caller);
 
     vm.expectRevert(
-      abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, caller, MANAGER_ROLE)
+      abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, caller, DEFAULT_ADMIN_ROLE)
     );
     vault.grantRole(CURATOR_ROLE, caller);
 
@@ -95,9 +95,7 @@ contract RoleTest is IntegrationTest {
     );
     vault.updateWithdrawQueue(withdrawQueueFromRanks);
 
-    vm.expectRevert(
-      "not allocator or bot"
-    );
+    vm.expectRevert("not allocator or bot");
     vault.reallocate(allocation);
 
     vm.stopPrank();

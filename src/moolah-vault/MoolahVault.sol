@@ -125,7 +125,6 @@ contract MoolahVault is
 
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
     _grantRole(MANAGER, manager);
-    _setRoleAdmin(CURATOR, MANAGER);
     _setRoleAdmin(ALLOCATOR, MANAGER);
 
     IERC20(_asset).forceApprove(address(MOOLAH), type(uint256).max);
@@ -818,6 +817,10 @@ contract MoolahVault is
       // that total assets is already increased by the total interest (including the fee assets).
       feeShares = _convertToSharesWithTotals(feeAssets, totalSupply(), newTotalAssets - feeAssets, Math.Rounding.Floor);
     }
+  }
+
+  function setRoleAdmin(bytes32 role) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    _setRoleAdmin(role, DEFAULT_ADMIN_ROLE);
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}

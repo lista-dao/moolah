@@ -13,6 +13,7 @@ ast = true
 force = true # force recompile, must clean first in v5: https://docs.openzeppelin.com/upgrades-plugins/1.x/foundry-upgrades#before_running
 build_info = true
 extra_output = ["storageLayout"]
+viaIr = true
 
 [rpc_endpoints]
 bsc_testnet = "${BSC_TESTNET_RPC_URL}"
