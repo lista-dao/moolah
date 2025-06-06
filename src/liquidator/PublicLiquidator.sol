@@ -26,7 +26,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IPublicL
   error WhitelistSameStatus();
   error NotWhitelisted();
   error SwapFailed();
-  error eitherOneZero();
+  error EitherOneZero();
 
   address public immutable MOOLAH;
   mapping(bytes32 => bool) public marketWhitelist;
@@ -129,7 +129,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IPublicL
   /// @param seizedAssets The amount of assets to seize.
   function liquidate(bytes32 id, address borrower, uint256 seizedAssets, uint256 repaidShares) external payable {
     require(isLiquidatable(id, borrower), NotWhitelisted());
-    require(seizedAssets == 0 || repaidShares == 0, eitherOneZero());
+    require(seizedAssets == 0 || repaidShares == 0, EitherOneZero());
 
     // calculate how much loan token to transfer
     /// @todo gas consumption increase, frontend calculate?
