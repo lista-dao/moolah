@@ -22,15 +22,6 @@ contract MoolahVaultDeploy is Script {
     MoolahVault implWBnb = new MoolahVault(moolah, WBNB);
     console.log("MoolahVault(WBNB) implementation: ", address(implWBnb));
 
-    MoolahVault implUsd1 = new MoolahVault(moolah, USD1);
-    console.log("MoolahVault(USD1) implementation: ", address(implUsd1));
-
-    MoolahVault implUsdt = new MoolahVault(moolah, USDT);
-    console.log("MoolahVault(USDT) implementation: ", address(implUsdt));
-
-    MoolahVault implBtcb = new MoolahVault(moolah, BTCB);
-    console.log("MoolahVault(BTCB) implementation: ", address(implBtcb));
-
     vm.stopBroadcast();
   }
 }
