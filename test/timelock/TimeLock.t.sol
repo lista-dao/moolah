@@ -2,11 +2,11 @@
 
 pragma solidity ^0.8.10;
 
-import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 import "forge-std/Test.sol";
 
-import {TimeLock} from "timelock/TimeLock.sol";
+import { TimeLock } from "timelock/TimeLock.sol";
 
 contract TimeLockTest is Test {
   TimeLock timeLock;
@@ -24,10 +24,7 @@ contract TimeLockTest is Test {
 
     assertEq(timeLock.hasRole(timeLock.PROPOSER_ROLE(), proposer), true);
     assertEq(timeLock.hasRole(timeLock.EXECUTOR_ROLE(), executor), true);
-    assertEq(
-      timeLock.hasRole(timeLock.DEFAULT_ADMIN_ROLE(), address(timeLock)),
-      true
-    );
+    assertEq(timeLock.hasRole(timeLock.DEFAULT_ADMIN_ROLE(), address(timeLock)), true);
 
     // Only TIMELOCK_ADMIN_ROLE can grant roles
     assertEq(timeLock.getRoleAdmin(timeLock.PROPOSER_ROLE()), timeLock.DEFAULT_ADMIN_ROLE());
@@ -37,10 +34,7 @@ contract TimeLockTest is Test {
   function test_updateDelay() public {
     uint256 newDelay = 200;
 
-    bytes memory data = abi.encodeWithSignature(
-      "updateDelay(uint256)",
-      newDelay
-    );
+    bytes memory data = abi.encodeWithSignature("updateDelay(uint256)", newDelay);
 
     address target = address(timeLock);
     uint256 value = 0;
@@ -49,23 +43,15 @@ contract TimeLockTest is Test {
     uint256 _delay = 100;
 
     vm.startPrank(proposer);
-    vm.expectRevert(abi.encodeWithSelector(
-      TimelockController.TimelockInsufficientDelay.selector,
-        _delay,
-        timeLock.getMinDelay()
-    ));
+    vm.expectRevert(
+      abi.encodeWithSelector(TimelockController.TimelockInsufficientDelay.selector, _delay, timeLock.getMinDelay())
+    );
     timeLock.schedule(target, value, data, predecessor, salt, _delay);
     _delay = 1 days;
     timeLock.schedule(target, value, data, predecessor, salt, _delay);
     vm.stopPrank();
 
-    bytes32 id = timeLock.hashOperation(
-      target,
-      value,
-      data,
-      predecessor,
-      salt
-    );
+    bytes32 id = timeLock.hashOperation(target, value, data, predecessor, salt);
 
     assertEq(timeLock.isOperationPending(id), true); // operation is pending
 
@@ -81,11 +67,7 @@ contract TimeLockTest is Test {
   function test_grantRole() public {
     address newProposer = makeAddr("newProposer");
 
-    bytes memory data = abi.encodeWithSignature(
-      "grantRole(bytes32,address)",
-      timeLock.PROPOSER_ROLE(),
-      newProposer
-    );
+    bytes memory data = abi.encodeWithSignature("grantRole(bytes32,address)", timeLock.PROPOSER_ROLE(), newProposer);
 
     address target = address(timeLock);
     uint256 value = 0;
@@ -97,13 +79,7 @@ contract TimeLockTest is Test {
     timeLock.schedule(target, value, data, predecessor, salt, _delay);
     vm.stopPrank();
 
-    bytes32 id = timeLock.hashOperation(
-      target,
-      value,
-      data,
-      predecessor,
-      salt
-    );
+    bytes32 id = timeLock.hashOperation(target, value, data, predecessor, salt);
 
     assertEq(timeLock.isOperationPending(id), true); // operation is pending
 

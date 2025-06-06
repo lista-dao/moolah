@@ -95,9 +95,7 @@ contract RoleTest is IntegrationTest {
     );
     vault.updateWithdrawQueue(withdrawQueueFromRanks);
 
-    vm.expectRevert(
-      "not allocator or bot"
-    );
+    vm.expectRevert("not allocator or bot");
     vault.reallocate(allocation);
 
     vm.stopPrank();

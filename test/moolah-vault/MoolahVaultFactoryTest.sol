@@ -11,7 +11,6 @@ import { MoolahVaultFactory } from "moolah-vault/MoolahVaultFactory.sol";
 import { ERC20Mock } from "moolah-vault/mocks/ERC20Mock.sol";
 import { TimeLock } from "timelock/TimeLock.sol";
 
-
 contract MoolahVaultFactoryTest is Test {
   address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
   address admin;
@@ -58,9 +57,12 @@ contract MoolahVaultFactoryTest is Test {
     assertEq(vault.getRoleMemberCount(vault.CURATOR()), 1, "curator role error");
     assertEq(vault.hasRole(vault.CURATOR(), curatorTimeLockAddr), true, "curator role error");
 
-
     assertEq(managerTimeLock.getRoleMemberCount(managerTimeLock.DEFAULT_ADMIN_ROLE()), 1, "admin role error");
-    assertEq(managerTimeLock.hasRole(managerTimeLock.DEFAULT_ADMIN_ROLE(), address(managerTimeLock)), true, "admin role error");
+    assertEq(
+      managerTimeLock.hasRole(managerTimeLock.DEFAULT_ADMIN_ROLE(), address(managerTimeLock)),
+      true,
+      "admin role error"
+    );
     assertEq(managerTimeLock.getRoleMemberCount(managerTimeLock.PROPOSER_ROLE()), 1, "proposer role error");
     assertEq(managerTimeLock.hasRole(managerTimeLock.PROPOSER_ROLE(), admin), true, "proposer role error");
     assertEq(managerTimeLock.getRoleMemberCount(managerTimeLock.EXECUTOR_ROLE()), 1, "executor role error");
@@ -70,7 +72,11 @@ contract MoolahVaultFactoryTest is Test {
     assertEq(managerTimeLock.hasRole(managerTimeLock.CANCELLER_ROLE(), guardian), true, "canceller role error");
 
     assertEq(curatorTimeLock.getRoleMemberCount(curatorTimeLock.DEFAULT_ADMIN_ROLE()), 1, "admin role error");
-    assertEq(curatorTimeLock.hasRole(curatorTimeLock.DEFAULT_ADMIN_ROLE(), address(curatorTimeLock)), true, "admin role error");
+    assertEq(
+      curatorTimeLock.hasRole(curatorTimeLock.DEFAULT_ADMIN_ROLE(), address(curatorTimeLock)),
+      true,
+      "admin role error"
+    );
     assertEq(curatorTimeLock.getRoleMemberCount(curatorTimeLock.PROPOSER_ROLE()), 1, "proposer role error");
     assertEq(curatorTimeLock.hasRole(curatorTimeLock.PROPOSER_ROLE(), curator), true, "proposer role error");
     assertEq(curatorTimeLock.getRoleMemberCount(curatorTimeLock.EXECUTOR_ROLE()), 1, "executor role error");
@@ -78,19 +84,13 @@ contract MoolahVaultFactoryTest is Test {
     assertEq(curatorTimeLock.getRoleMemberCount(curatorTimeLock.CANCELLER_ROLE()), 2, "canceller role error");
     assertEq(curatorTimeLock.hasRole(curatorTimeLock.CANCELLER_ROLE(), curator), true, "canceller role error");
     assertEq(curatorTimeLock.hasRole(curatorTimeLock.CANCELLER_ROLE(), guardian), true, "canceller role error");
-
-
   }
 
   function newMoolahVaultFactory() internal returns (IMoolahVaultFactory) {
     MoolahVaultFactory impl = new MoolahVaultFactory(moolah);
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(
-        impl.initialize.selector,
-        admin,
-        vaultAdmin
-      )
+      abi.encodeWithSelector(impl.initialize.selector, admin, vaultAdmin)
     );
 
     return IMoolahVaultFactory(address(proxy));

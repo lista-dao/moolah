@@ -49,10 +49,7 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
   /// @dev Initializes the contract.
   /// @param admin The new admin of the contract.
   /// @param _vaultAdmin The admin of vaults created by this contract.
-  function initialize(
-    address admin,
-    address _vaultAdmin
-  ) public initializer {
+  function initialize(address admin, address _vaultAdmin) public initializer {
     if (admin == address(0)) revert ErrorsLib.ZeroAddress();
     if (_vaultAdmin == address(0)) revert ErrorsLib.ZeroAddress();
 
@@ -89,12 +86,7 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
     curatorExecutors[0] = curator;
 
     /// create timeLock
-    TimeLock managerTimeLock = new TimeLock(
-      managerProposers,
-      managerExecutors,
-      address(this),
-      timeLockDelay
-    );
+    TimeLock managerTimeLock = new TimeLock(managerProposers, managerExecutors, address(this), timeLockDelay);
 
     {
       // transfer roles
@@ -103,12 +95,7 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
       managerTimeLock.revokeRole(DEFAULT_ADMIN_ROLE, address(this));
     }
 
-    TimeLock curatorTimeLock = new TimeLock(
-      curatorProposers,
-      curatorExecutors,
-      address(this),
-      timeLockDelay
-    );
+    TimeLock curatorTimeLock = new TimeLock(curatorProposers, curatorExecutors, address(this), timeLockDelay);
 
     {
       // transfer roles
@@ -119,7 +106,14 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
 
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(MOOLAH_VAULT_IMPL_18),
-      abi.encodeWithSignature("initialize(address,address,address,string,string)", address(this), address(this), asset, name, symbol)
+      abi.encodeWithSignature(
+        "initialize(address,address,address,string,string)",
+        address(this),
+        address(this),
+        asset,
+        name,
+        symbol
+      )
     );
 
     {
