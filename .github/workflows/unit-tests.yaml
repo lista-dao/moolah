@@ -15,6 +15,9 @@ jobs:
         with:
           cmd: install # will run `yarn install` command
 
+      - name: Lint code
+        run: npm run check
+
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
