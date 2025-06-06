@@ -40,13 +40,7 @@ contract CreateMarketDeploy is Script {
       lltv: lltv965
     });
     // collateral-ETH loan-WBNB lltv-80%
-    params[1] = MarketParams({
-      loanToken: WBNB,
-      collateralToken: ETH,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv80
-    });
+    params[1] = MarketParams({ loanToken: WBNB, collateralToken: ETH, oracle: multiOracle, irm: irm, lltv: lltv80 });
     // collateral-slisBNB loan-USD1 lltv-70%
     params[2] = MarketParams({
       loanToken: USD1,
@@ -56,13 +50,7 @@ contract CreateMarketDeploy is Script {
       lltv: lltv70
     });
     // collateral-ETH loan-USD1 lltv-70%
-    params[3] = MarketParams({
-      loanToken: USD1,
-      collateralToken: ETH,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv70
-    });
+    params[3] = MarketParams({ loanToken: USD1, collateralToken: ETH, oracle: multiOracle, irm: irm, lltv: lltv70 });
 
     vm.startBroadcast(deployerPrivateKey);
 

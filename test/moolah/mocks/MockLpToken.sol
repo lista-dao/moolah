@@ -83,5 +83,4 @@ contract MockLpToken is ILpToken {
   function setSymbol(string memory _symbol) external {
     symbol = _symbol;
   }
-
 }

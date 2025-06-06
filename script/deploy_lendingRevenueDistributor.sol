@@ -34,7 +34,15 @@ contract LendingRevenueDistributorDeploy is Script {
     // Deploy OracleAdaptor proxy
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, bot, pauser, revenueReceiver, riskFundReceiver)
+      abi.encodeWithSelector(
+        impl.initialize.selector,
+        deployer,
+        deployer,
+        bot,
+        pauser,
+        revenueReceiver,
+        riskFundReceiver
+      )
     );
     console.log("LendingRevenueDistributor proxy: ", address(proxy));
 

@@ -7,10 +7,7 @@ import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import "moolah-vault/interfaces/IMoolahVault.sol";
 import "moolah/interfaces/IMoolah.sol";
 
-contract LendingFeeRecipient is
-  UUPSUpgradeable,
-  AccessControlEnumerableUpgradeable
-{
+contract LendingFeeRecipient is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   IMoolah public moolah;
   address[] public vaults;
   address public marketFeeRecipient;
@@ -25,7 +22,6 @@ contract LendingFeeRecipient is
   event VaultRemoved(address vault);
   event SetMarketFeeRecipient(address feeRecipient);
   event SetVaultFeeRecipient(address feeRecipient);
-
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor() {
@@ -121,7 +117,7 @@ contract LendingFeeRecipient is
       Position memory position = moolah.position(marketId, address(this));
       if (position.supplyShares > 0) {
         MarketParams memory marketParams = moolah.idToMarketParams(marketId);
-        (uint256 assets,) = moolah.withdraw(marketParams, 0, position.supplyShares, address(this), marketFeeRecipient);
+        (uint256 assets, ) = moolah.withdraw(marketParams, 0, position.supplyShares, address(this), marketFeeRecipient);
         emit MarketFeeClaimed(marketId, marketParams.loanToken, assets, position.supplyShares);
       }
     }
@@ -162,4 +158,3 @@ contract LendingFeeRecipient is
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 }
-

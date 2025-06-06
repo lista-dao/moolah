@@ -42,7 +42,6 @@ contract MoolahAuditTest is Test {
   uint256 internal constant DEFAULT_TEST_LLTV = 0.8 ether;
 
   function setUp() public {
-
     SUPPLIER = makeAddr("Supplier");
     BORROWER = makeAddr("Borrower");
     REPAYER = makeAddr("Repayer");

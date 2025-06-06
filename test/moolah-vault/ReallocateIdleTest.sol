@@ -62,7 +62,6 @@ contract ReallocateIdleTest is IntegrationTest {
 
     uint256 expectedIdle = idleBefore - suppliedAssets[0] - suppliedAssets[1] - suppliedAssets[2];
     assertApproxEqAbs(_idle(), expectedIdle, 3, "idle");
-
   }
   function testBotReallocateSupplyIdle(uint256[3] memory suppliedAssets) public {
     suppliedAssets[0] = bound(suppliedAssets[0], 1, CAP2);
@@ -96,6 +95,5 @@ contract ReallocateIdleTest is IntegrationTest {
     vm.expectRevert(bytes("not allocator or bot"));
     vault.reallocate(allocations);
     vm.stopPrank();
-
   }
 }

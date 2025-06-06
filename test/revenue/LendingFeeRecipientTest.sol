@@ -172,7 +172,6 @@ contract LendingFeeRecipientTest is Test {
     assertTrue(lendingFeeRecipient.getVaults().length == 0, "vault count not 0");
 
     vm.stopPrank();
-
   }
 
   function test_claimVaultFee() public {
@@ -212,11 +211,9 @@ contract LendingFeeRecipientTest is Test {
     vm.stopPrank();
 
     assertTrue(loanToken.balanceOf(VAULT_FEE_RECEIVER) > 0, "vault fee not claimed");
-
   }
 
   function test_claimVaultFeeForGivenVaults() public {
-
     loanToken.setBalance(SUPPLIER, 100 ether);
     collateralToken.setBalance(BORROW, 100 ether);
     loanToken.setBalance(BORROW, 100 ether);
@@ -306,6 +303,4 @@ contract LendingFeeRecipientTest is Test {
 
     return LendingFeeRecipient(address(lendingFeeRecipientProxy));
   }
-
 }
-

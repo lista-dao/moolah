@@ -15,7 +15,6 @@ contract LendingFeeRecipientDeploy is Script {
   address manager = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
   address bot = 0x6F28FeC449dbd2056b76ac666350Af8773E03873;
 
-
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);

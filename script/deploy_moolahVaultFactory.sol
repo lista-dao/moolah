@@ -7,7 +7,6 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { MoolahVaultFactory } from "moolah-vault/MoolahVaultFactory.sol";
 
 contract MoolahVaultFactoryDeploy is Script {
-
   address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
   address vaultAdmin = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253;
 

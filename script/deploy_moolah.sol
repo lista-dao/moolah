@@ -7,7 +7,6 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { Moolah } from "moolah/Moolah.sol";
 
 contract MoolahDeploy is Script {
-
   uint256 private constant MIN_LOAN_VALUE = 15 * 1e8;
 
   function run() public {

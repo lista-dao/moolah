@@ -35,7 +35,6 @@ contract LiquidatorTest is BaseTest {
     liquidator.setMarketWhitelist(Id.unwrap(marketParams.id()), true);
     liquidator.setPairWhitelist(address(oneInch), true);
     vm.stopPrank();
-
   }
 
   function testLiquidate() public {

@@ -25,7 +25,10 @@ contract InterestRateModelDeploy is Script {
     console.log("SlisBNBProvider implementation: ", address(impl));
 
     // Deploy InterestRateModel proxy
-    ERC1967Proxy proxy = new ERC1967Proxy(address(impl), abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, 0.97 ether));
+    ERC1967Proxy proxy = new ERC1967Proxy(
+      address(impl),
+      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, 0.97 ether)
+    );
     console.log("SlisBNBProvider proxy: ", address(proxy));
 
     SlisBNBProvider(address(proxy)).addMPCWallet(mpc, type(uint256).max);

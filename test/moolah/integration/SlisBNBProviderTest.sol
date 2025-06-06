@@ -7,7 +7,7 @@ import "../BaseTest.sol";
 import { MockStakeManager } from "../mocks/MockStakeManager.sol";
 import { MockLpToken } from "../mocks/MockLpToken.sol";
 import { SlisBNBProvider } from "../../../src/provider/SlisBNBProvider.sol";
-import {MarketParamsLibTest} from "../MarketParamsLibTest.sol";
+import { MarketParamsLibTest } from "../MarketParamsLibTest.sol";
 
 contract SlisBNBProviderTest is BaseTest {
   using MarketParamsLib for MarketParams;
@@ -27,7 +27,6 @@ contract SlisBNBProviderTest is BaseTest {
 
     stakeManager = new MockStakeManager();
     stakeManager.setExchangeRate(1 ether);
-
 
     provider = newSlisBNBProvider(
       OWNER,
@@ -64,7 +63,7 @@ contract SlisBNBProviderTest is BaseTest {
     assertEq(collateralToken.balanceOf(SUPPLIER), 0, "SUPPLIER balance error");
     vm.stopPrank();
 
-    uint256 expectUserLp = 100 ether * 0.997 ether / 1e18;
+    uint256 expectUserLp = (100 ether * 0.997 ether) / 1e18;
     uint256 expectReserve = 100 ether - expectUserLp;
 
     assertEq(provider.userLp(SUPPLIER), expectUserLp, "userLp error");
@@ -94,7 +93,9 @@ contract SlisBNBProviderTest is BaseTest {
 
   function test_addProvider() public {
     address testToken = makeAddr("TOKEN");
-    address testProvider = address(newSlisBNBProvider(OWNER, OWNER, address(moolah), testToken, address(stakeManager), address(lpToken), 0.997 ether));
+    address testProvider = address(
+      newSlisBNBProvider(OWNER, OWNER, address(moolah), testToken, address(stakeManager), address(lpToken), 0.997 ether)
+    );
 
     MarketParams memory testMarketParams = MarketParams({
       loanToken: marketParams.loanToken,
@@ -106,9 +107,13 @@ contract SlisBNBProviderTest is BaseTest {
 
     moolah.createMarket(testMarketParams);
 
-    vm.expectRevert(abi.encodeWithSelector(
-      IAccessControl.AccessControlUnauthorizedAccount.selector, address(this), provider.MANAGER()
-    ));
+    vm.expectRevert(
+      abi.encodeWithSelector(
+        IAccessControl.AccessControlUnauthorizedAccount.selector,
+        address(this),
+        provider.MANAGER()
+      )
+    );
     moolah.addProvider(testMarketParams.id(), testProvider);
 
     vm.startPrank(OWNER);
@@ -120,7 +125,9 @@ contract SlisBNBProviderTest is BaseTest {
 
   function test_removeProvider() public {
     address testToken = makeAddr("TOKEN");
-    address testProvider = address(newSlisBNBProvider(OWNER, OWNER, address(moolah), testToken, address(stakeManager), address(lpToken), 0.997 ether));
+    address testProvider = address(
+      newSlisBNBProvider(OWNER, OWNER, address(moolah), testToken, address(stakeManager), address(lpToken), 0.997 ether)
+    );
 
     MarketParams memory testMarketParams = MarketParams({
       loanToken: marketParams.loanToken,
@@ -136,9 +143,13 @@ contract SlisBNBProviderTest is BaseTest {
     moolah.addProvider(testMarketParams.id(), testProvider);
     vm.stopPrank();
 
-    vm.expectRevert(abi.encodeWithSelector(
-      IAccessControl.AccessControlUnauthorizedAccount.selector, address(this), provider.MANAGER()
-    ));
+    vm.expectRevert(
+      abi.encodeWithSelector(
+        IAccessControl.AccessControlUnauthorizedAccount.selector,
+        address(this),
+        provider.MANAGER()
+      )
+    );
     moolah.removeProvider(testMarketParams.id(), testToken);
 
     vm.startPrank(OWNER);
@@ -157,7 +168,7 @@ contract SlisBNBProviderTest is BaseTest {
     oracle.setPrice(address(collateralToken), 1e8);
 
     vm.startPrank(SUPPLIER);
-    moolah.supply(marketParams, 100 ether, 0,SUPPLIER, "");
+    moolah.supply(marketParams, 100 ether, 0, SUPPLIER, "");
     vm.stopPrank();
 
     vm.startPrank(BORROWER);
@@ -174,13 +185,12 @@ contract SlisBNBProviderTest is BaseTest {
     vm.stopPrank();
 
     uint256 remainCollateral = moolah.position(marketParams.id(), BORROWER).collateral;
-    uint256 expectUserLp = remainCollateral * 0.997 ether / 1e18;
+    uint256 expectUserLp = (remainCollateral * 0.997 ether) / 1e18;
     uint256 expectReserve = remainCollateral - expectUserLp;
 
     assertEq(provider.userLp(BORROWER), expectUserLp, "userLp error");
     assertEq(provider.userReservedLp(BORROWER), expectReserve, "userReservedLp error");
     assertEq(provider.totalReservedLp(), expectReserve, "totalReservedLp error");
-
   }
 
   function test_delegateAllTo() public {
@@ -198,7 +208,7 @@ contract SlisBNBProviderTest is BaseTest {
     assertEq(lpToken.balanceOf(DELEGATOR), 99.7 ether, "DELEGATOR lp balance error");
     vm.stopPrank();
 
-    uint256 expectUserLp = 100 ether * 0.997 ether / 1e18;
+    uint256 expectUserLp = (100 ether * 0.997 ether) / 1e18;
     uint256 expectReserve = 100 ether - expectUserLp;
 
     assertEq(provider.userLp(SUPPLIER), expectUserLp, "userLp error");
@@ -232,14 +242,8 @@ contract SlisBNBProviderTest is BaseTest {
 
     ERC1967Proxy moolahProxy = new ERC1967Proxy(
       address(providerImpl),
-      abi.encodeWithSelector(
-        providerImpl.initialize.selector,
-        admin,
-        manager,
-        _userLpRate
-      )
+      abi.encodeWithSelector(providerImpl.initialize.selector, admin, manager, _userLpRate)
     );
     return SlisBNBProvider(address(moolahProxy));
   }
-
 }

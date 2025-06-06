@@ -15,11 +15,12 @@ contract OracleMock is IOracle {
   }
 
   function getTokenConfig(address asset) external view override returns (TokenConfig memory) {
-    return TokenConfig({
-      asset: asset,
-      oracles: [address(this), address(this), address(this)],
-      enableFlagsForOracles: [true, true, true],
-      timeDeltaTolerance: 0
-    });
+    return
+      TokenConfig({
+        asset: asset,
+        oracles: [address(this), address(this), address(this)],
+        enableFlagsForOracles: [true, true, true],
+        timeDeltaTolerance: 0
+      });
   }
 }

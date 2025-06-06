@@ -5,7 +5,6 @@ import "@openzeppelin/contracts/governance/TimelockController.sol";
 import "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
 
 contract TimeLock is TimelockController, AccessControlEnumerable {
-
   uint256 public immutable MIN_DELAY = 1 days;
 
   constructor(
@@ -14,10 +13,7 @@ contract TimeLock is TimelockController, AccessControlEnumerable {
     address admin,
     uint256 minDelay
   ) TimelockController(minDelay, proposers, executors, admin) {
-    require(
-      minDelay >= MIN_DELAY,
-      "TimeLock: minDelay must be greater than or equal to 1 days"
-    );
+    require(minDelay >= MIN_DELAY, "TimeLock: minDelay must be greater than or equal to 1 days");
   }
 
   function getMinDelay() public view override returns (uint256) {

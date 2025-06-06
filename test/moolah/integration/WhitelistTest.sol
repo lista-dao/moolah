@@ -144,7 +144,7 @@ contract WhitelistTest is BaseTest {
 
     vm.startPrank(BORROWER);
     moolah.supplyCollateral(marketParams, 100 ether, BORROWER, "");
-    moolah.borrow(marketParams, 80 ether , 0, BORROWER, BORROWER);
+    moolah.borrow(marketParams, 80 ether, 0, BORROWER, BORROWER);
     moolah.repay(marketParams, 80 ether, 0, BORROWER, "");
     vm.stopPrank();
   }

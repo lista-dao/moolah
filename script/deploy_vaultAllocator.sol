@@ -8,7 +8,7 @@ import { VaultAllocator } from "vault-allocator/VaultAllocator.sol";
 
 contract VaultAllocatorDeploy is Script {
   address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
-//  address admin = ;
+  //  address admin = ;
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -21,10 +21,7 @@ contract VaultAllocatorDeploy is Script {
     console.log("VaultAllocator implementation: ", address(impl));
 
     // Deploy VaultAllocator proxy
-    ERC1967Proxy proxy = new ERC1967Proxy(
-      address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, deployer)
-    );
+    ERC1967Proxy proxy = new ERC1967Proxy(address(impl), abi.encodeWithSelector(impl.initialize.selector, deployer));
     console.log("VaultAllocator proxy: ", address(proxy));
 
     vm.stopBroadcast();
