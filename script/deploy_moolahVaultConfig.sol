@@ -24,7 +24,6 @@ contract MoolahVaultConfigDeploy is Script {
   address slisBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B;
   address Puffer = 0x87d00066cf131ff54B72B134a217D5401E5392b6;
 
-
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
   address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;

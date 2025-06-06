@@ -47,7 +47,6 @@ contract MoolahVaultAuditTest is Test {
   bytes32 public constant ALLOCATOR_ROLE = keccak256("ALLOCATOR"); // manager role
 
   function setUp() public {
-
     SUPPLIER = makeAddr("Supplier");
     BORROWER = makeAddr("Borrower");
     REPAYER = makeAddr("Repayer");
@@ -162,5 +161,4 @@ contract MoolahVaultAuditTest is Test {
 
     return IMoolahVault(address(moolahVaultProxy));
   }
-
 }

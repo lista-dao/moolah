@@ -2,11 +2,9 @@ pragma solidity 0.8.28;
 
 import "forge-std/Script.sol";
 
-
 import { ERC20Mock } from "moolah/mocks/ERC20Mock.sol";
 
 contract InterestRateModelDeploy is Script {
-
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);

@@ -61,18 +61,12 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   event MpcWalletRemoved(address wallet);
   event MpcWalletAdded(address wallet, uint256 cap);
 
-
   /// @custom:oz-upgrades-unsafe-allow constructor
   /// @param moolah The address of the Moolah contract.
   /// @param _token The address of the token contract.
   /// @param _stakeManager The address of the StakeManager contract.
   /// @param _lpToken The address of the LP token contract.
-  constructor(
-    address moolah,
-    address _token,
-    address _stakeManager,
-    address _lpToken
-  ) {
+  constructor(address moolah, address _token, address _stakeManager, address _lpToken) {
     require(moolah != address(0), "moolah is the zero address");
     require(_token != address(0), "token is the zero address");
     require(_stakeManager != address(0), "stakeManager is the zero address");
@@ -86,16 +80,11 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     _disableInitializers();
   }
 
-
   /// @dev Initializes the contract with the given parameters.
   /// @param admin The new admin of the contract.
   /// @param manager The new manager of the contract.
   /// @param _userLpRate The rate of LP token to user when deposit.
-  function initialize(
-      address admin,
-      address manager,
-      uint128 _userLpRate
-  ) public initializer {
+  function initialize(address admin, address manager, uint128 _userLpRate) public initializer {
     require(admin != address(0), "admin is the zero address");
     require(manager != address(0), "manager is the zero address");
     require(_userLpRate <= RATE_DENOMINATOR, "userLpRate invalid");
@@ -126,11 +115,10 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     MOOLAH.supplyCollateral(marketParams, assets, onBehalf, data);
 
     // rebalance user's lpToken
-    (,uint256 latestLpBalance) = _syncPosition(marketParams.id(), onBehalf);
+    (, uint256 latestLpBalance) = _syncPosition(marketParams.id(), onBehalf);
 
     emit Deposit(onBehalf, assets, latestLpBalance);
   }
-
 
   /// @dev Withdraws the specified amount of collateral from the Moolah contract. And rebalance lpToken
   function withdrawCollateral(
@@ -168,11 +156,11 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
 
   /**
    * @notice User's available lpToken might lower than the burn amount
-     *         due to the change of exchangeRate, ReservedLpRate or the value of the LP token fluctuates from time to time
-     *         i.e. userLp[account] might < lpToken.balanceOf(holder)
-     * @param holder lp token holder
-     * @param amount amount to burn
-     */
+   *         due to the change of exchangeRate, ReservedLpRate or the value of the LP token fluctuates from time to time
+   *         i.e. userLp[account] might < lpToken.balanceOf(holder)
+   * @param holder lp token holder
+   * @param amount amount to burn
+   */
   function _safeBurnLp(address holder, uint256 amount) internal {
     uint256 availableBalance = LP_TOKEN.balanceOf(holder);
     if (amount <= availableBalance) {
@@ -185,8 +173,8 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
 
   /**
    * @dev mint/burn lpToken to sync user's lpToken with token balance
-     * @param account user address to sync
-     */
+   * @param account user address to sync
+   */
   function _rebalanceUserLp(address account) internal returns (bool, uint256) {
     uint256 userTotalDepositAmount = userTotalDeposit[account];
 
@@ -194,7 +182,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     // Total LP(User + Reserve)
     uint256 newTotalLp = STAKE_MANAGER.convertSnBnbToBnb(userTotalDepositAmount);
     // User's LP
-    uint256 newUserLp = newTotalLp * userLpRate / RATE_DENOMINATOR;
+    uint256 newUserLp = (newTotalLp * userLpRate) / RATE_DENOMINATOR;
     // Reserve's LP
     uint256 newReservedLp = newTotalLp - newUserLp;
 
@@ -220,7 +208,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     // ---- [4] handle user LP and delegation
     address holder = delegation[account];
     // account as the default delegatee if holder is not set
-    if(holder == address(0)) {
+    if (holder == address(0)) {
       holder = account;
       delegation[account] = holder;
     }
@@ -256,15 +244,12 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   }
 
   /**
-  * delegate all collateral tokens to given address
-  * @param newDelegatee new target address of collateral tokens
-    */
-  function delegateAllTo(address newDelegatee)
-  external
-  {
+   * delegate all collateral tokens to given address
+   * @param newDelegatee new target address of collateral tokens
+   */
+  function delegateAllTo(address newDelegatee) external {
     require(
-      newDelegatee != address(0) &&
-      newDelegatee != delegation[msg.sender],
+      newDelegatee != address(0) && newDelegatee != delegation[msg.sender],
       "newDelegatee cannot be zero address or same as current delegatee"
     );
     // current delegatee
@@ -283,18 +268,18 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
 
   /* ----------------------- Lp Token Re-balancing ----------------------- */
   /**
-  * @dev sync user's lpToken balance to retain a consistent ratio with token balance
-    * @param _account user address to sync
-    */
+   * @dev sync user's lpToken balance to retain a consistent ratio with token balance
+   * @param _account user address to sync
+   */
   function syncUserLp(Id id, address _account) external {
-    (bool rebalanced,) = _syncPosition(id, _account);
+    (bool rebalanced, ) = _syncPosition(id, _account);
     require(rebalanced, "already synced");
   }
 
   /**
-  * @dev sync multiple user's lpToken balance to retain a consistent ratio with token balance
-    * @param _accounts user address to sync
-    */
+   * @dev sync multiple user's lpToken balance to retain a consistent ratio with token balance
+   * @param _accounts user address to sync
+   */
   function bulkSyncUserLp(Id[] calldata ids, address[] calldata _accounts) external {
     for (uint256 i = 0; i < _accounts.length; i++) {
       for (uint256 j = 0; j < ids.length; j++) {
@@ -312,7 +297,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     emit UserLpRateChanged(userLpRate);
   }
   /**
- * @dev Set the cap of the MPC wallet
+   * @dev Set the cap of the MPC wallet
    * @param idx - index of the MPC wallet
    * @param cap - new cap of the MPC wallet
    */
@@ -376,7 +361,6 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     emit MpcWalletAdded(walletAddress, cap);
   }
 
-
   /**
    * @dev Mint lpToken to MPC wallets
    *      mint the lpToken as the amount of totalToken increment
@@ -439,8 +423,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
 
   /**
    * @dev only admin can upgrade the contract
-     * @param _newImplementation new implementation address
-     */
+   * @param _newImplementation new implementation address
+   */
   function _authorizeUpgrade(address _newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
-
 }

@@ -269,7 +269,6 @@ contract Moolah is
 
     IERC20(marketParams.loanToken).safeTransferFrom(msg.sender, address(this), assets);
 
-
     require(_checkSupplyAssets(marketParams, onBehalf), ErrorsLib.REMAIN_SUPPLY_TOO_LOW);
 
     return (assets, shares);
@@ -711,13 +710,11 @@ contract Moolah is
       return true;
     }
 
-
-    return uint256(position[id][account].supplyShares).
-      toAssetsDown(
+    return
+      uint256(position[id][account].supplyShares).toAssetsDown(
         market[id].totalSupplyAssets,
         market[id].totalSupplyShares
       ) >= minLoan(marketParams);
-
   }
 
   function _checkBorrowAssets(MarketParams memory marketParams, address account) internal view returns (bool) {
@@ -726,8 +723,8 @@ contract Moolah is
       return true;
     }
 
-    return uint256(position[id][account].borrowShares).
-      toAssetsDown(
+    return
+      uint256(position[id][account].borrowShares).toAssetsDown(
         market[id].totalBorrowAssets,
         market[id].totalBorrowShares
       ) >= minLoan(marketParams);
@@ -739,11 +736,10 @@ contract Moolah is
       return true;
     }
 
-    uint256 borrowAssets = uint256(position[id][account].borrowShares).
-      toAssetsDown(
-        market[id].totalBorrowAssets,
-        market[id].totalBorrowShares
-      );
+    uint256 borrowAssets = uint256(position[id][account].borrowShares).toAssetsDown(
+      market[id].totalBorrowAssets,
+      market[id].totalBorrowShares
+    );
     if (borrowAssets >= minLoan(marketParams)) {
       return true;
     }

@@ -5,7 +5,8 @@ import "forge-std/Script.sol";
 import { LendingRevenueDistributor } from "src/revenue/LendingRevenueDistributor.sol";
 
 contract MoolahVaultTransferRoleDeploy is Script {
-  LendingRevenueDistributor lendingRevenueDistributor = LendingRevenueDistributor(payable(0xea55952a51ddd771d6eBc45Bd0B512276dd0b866));
+  LendingRevenueDistributor lendingRevenueDistributor =
+    LendingRevenueDistributor(payable(0xea55952a51ddd771d6eBc45Bd0B512276dd0b866));
   address admin = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253; // timelock
   address manager = 0x8d388136d578dCD791D081c6042284CED6d9B0c6; // b0c6
 

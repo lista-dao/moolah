@@ -16,7 +16,6 @@ contract MinLoanTest is BaseTest {
 
     oracle.setPrice(address(loanToken), 1e8);
     oracle.setPrice(address(collateralToken), 1e8);
-
   }
 
   function test_supplyMinLoan() public {
@@ -25,12 +24,15 @@ contract MinLoanTest is BaseTest {
 
     vm.startPrank(SUPPLIER);
     vm.expectRevert(bytes(ErrorsLib.REMAIN_SUPPLY_TOO_LOW));
-    moolah.supply(marketParams, 15 * (10**decimals) - 1, 0, SUPPLIER, "");
+    moolah.supply(marketParams, 15 * (10 ** decimals) - 1, 0, SUPPLIER, "");
 
-    moolah.supply(marketParams, 15 * (10**decimals), 0, SUPPLIER, "");
-    assertEq(moolah.market(marketParams.id()).totalSupplyAssets, 15 * (10**decimals), "totalSupplyAssets != 15 * 10**decimals");
+    moolah.supply(marketParams, 15 * (10 ** decimals), 0, SUPPLIER, "");
+    assertEq(
+      moolah.market(marketParams.id()).totalSupplyAssets,
+      15 * (10 ** decimals),
+      "totalSupplyAssets != 15 * 10**decimals"
+    );
     vm.stopPrank();
-
   }
 
   function test_withdrawMinLoan() public {
@@ -38,11 +40,19 @@ contract MinLoanTest is BaseTest {
     loanToken.setBalance(SUPPLIER, 10 ** decimals * 100);
 
     vm.startPrank(SUPPLIER);
-    moolah.supply(marketParams, 100 * (10**decimals), 0, SUPPLIER, "");
-    assertEq(moolah.market(marketParams.id()).totalSupplyAssets, 100 * (10**decimals), "totalSupplyAssets != 15 * 10**decimals");
+    moolah.supply(marketParams, 100 * (10 ** decimals), 0, SUPPLIER, "");
+    assertEq(
+      moolah.market(marketParams.id()).totalSupplyAssets,
+      100 * (10 ** decimals),
+      "totalSupplyAssets != 15 * 10**decimals"
+    );
 
     moolah.withdraw(marketParams, 85 * (10 ** decimals), 0, SUPPLIER, SUPPLIER);
-    assertEq(moolah.market(marketParams.id()).totalSupplyAssets, 15 * (10**decimals), "totalSupplyAssets != 15 * 10**decimals");
+    assertEq(
+      moolah.market(marketParams.id()).totalSupplyAssets,
+      15 * (10 ** decimals),
+      "totalSupplyAssets != 15 * 10**decimals"
+    );
 
     moolah.withdraw(marketParams, 15 * (10 ** decimals), 0, SUPPLIER, SUPPLIER);
     assertEq(moolah.market(marketParams.id()).totalSupplyAssets, 0, "totalSupplyAssets != 0");
@@ -55,20 +65,23 @@ contract MinLoanTest is BaseTest {
     collateralToken.setBalance(BORROWER, 10 ** decimals * 100);
 
     vm.startPrank(SUPPLIER);
-    moolah.supply(marketParams, 100 * (10**decimals), 0, SUPPLIER, "");
+    moolah.supply(marketParams, 100 * (10 ** decimals), 0, SUPPLIER, "");
     vm.stopPrank();
 
     vm.startPrank(BORROWER);
-    moolah.supplyCollateral(marketParams, 100 * (10**decimals), BORROWER, "");
+    moolah.supplyCollateral(marketParams, 100 * (10 ** decimals), BORROWER, "");
 
     vm.expectRevert(bytes(ErrorsLib.REMAIN_BORROW_TOO_LOW));
-    moolah.borrow(marketParams, 15 * (10**decimals) - 1, 0, BORROWER, BORROWER);
+    moolah.borrow(marketParams, 15 * (10 ** decimals) - 1, 0, BORROWER, BORROWER);
 
-    moolah.borrow(marketParams, 15 * (10**decimals), 0, BORROWER, BORROWER);
-    assertEq(moolah.market(marketParams.id()).totalBorrowAssets, 15 * (10**decimals), "totalBorrowAssets != 15 * 10**decimals");
+    moolah.borrow(marketParams, 15 * (10 ** decimals), 0, BORROWER, BORROWER);
+    assertEq(
+      moolah.market(marketParams.id()).totalBorrowAssets,
+      15 * (10 ** decimals),
+      "totalBorrowAssets != 15 * 10**decimals"
+    );
 
     vm.stopPrank();
-
   }
 
   function test_repayMinLoan() public {
@@ -77,19 +90,23 @@ contract MinLoanTest is BaseTest {
     collateralToken.setBalance(BORROWER, 10 ** decimals * 100);
 
     vm.startPrank(SUPPLIER);
-    moolah.supply(marketParams, 100 * (10**decimals), 0, SUPPLIER, "");
+    moolah.supply(marketParams, 100 * (10 ** decimals), 0, SUPPLIER, "");
     vm.stopPrank();
 
     vm.startPrank(BORROWER);
-    moolah.supplyCollateral(marketParams, 100 * (10**decimals), BORROWER, "");
+    moolah.supplyCollateral(marketParams, 100 * (10 ** decimals), BORROWER, "");
 
-    moolah.borrow(marketParams, 80 * (10**decimals), 0, BORROWER, BORROWER);
+    moolah.borrow(marketParams, 80 * (10 ** decimals), 0, BORROWER, BORROWER);
 
     vm.expectRevert(bytes(ErrorsLib.REMAIN_BORROW_TOO_LOW));
     moolah.repay(marketParams, 65 * (10 ** decimals) + 1, 0, BORROWER, "");
 
     moolah.repay(marketParams, 65 * (10 ** decimals), 0, BORROWER, "");
-    assertEq(moolah.market(marketParams.id()).totalBorrowAssets, 15 * (10**decimals), "totalBorrowAssets != 15 * 10**decimals");
+    assertEq(
+      moolah.market(marketParams.id()).totalBorrowAssets,
+      15 * (10 ** decimals),
+      "totalBorrowAssets != 15 * 10**decimals"
+    );
 
     moolah.repay(marketParams, 15 * (10 ** decimals), 0, BORROWER, "");
     assertEq(moolah.market(marketParams.id()).totalBorrowAssets, 0, "totalBorrowAssets != 0");
@@ -103,13 +120,13 @@ contract MinLoanTest is BaseTest {
     loanToken.setBalance(LIQUIDATOR, 10 ** decimals * 100);
 
     vm.startPrank(SUPPLIER);
-    moolah.supply(marketParams, 100 * (10**decimals), 0, SUPPLIER, "");
+    moolah.supply(marketParams, 100 * (10 ** decimals), 0, SUPPLIER, "");
     vm.stopPrank();
 
     vm.startPrank(BORROWER);
-    moolah.supplyCollateral(marketParams, 1875 * (10**(decimals - 2)), BORROWER, "");
+    moolah.supplyCollateral(marketParams, 1875 * (10 ** (decimals - 2)), BORROWER, "");
 
-    moolah.borrow(marketParams, 15 * (10**decimals), 0, BORROWER, BORROWER);
+    moolah.borrow(marketParams, 15 * (10 ** decimals), 0, BORROWER, BORROWER);
     vm.stopPrank();
 
     oracle.setPrice(address(collateralToken), 1e8 - 1);

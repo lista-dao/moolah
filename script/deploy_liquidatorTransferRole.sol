@@ -21,7 +21,6 @@ contract LiquidatorConfigDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-
     vm.startBroadcast(deployerPrivateKey);
 
     liquidator.grantRole(DEFAULT_ADMIN_ROLE, admin);

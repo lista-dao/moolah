@@ -28,21 +28,9 @@ contract CreateMarketDeploy is Script {
 
     MarketParams[] memory params = new MarketParams[](2);
     // collateral-BTCB loan-USD1 lltv-70%
-    params[0] = MarketParams({
-      loanToken: USD1,
-      collateralToken: BTCB,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv70
-    });
+    params[0] = MarketParams({ loanToken: USD1, collateralToken: BTCB, oracle: multiOracle, irm: irm, lltv: lltv70 });
     // collateral-WBNB loan-USD1 lltv-70%
-    params[1] = MarketParams({
-      loanToken: USD1,
-      collateralToken: WBNB,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv70
-    });
+    params[1] = MarketParams({ loanToken: USD1, collateralToken: WBNB, oracle: multiOracle, irm: irm, lltv: lltv70 });
 
     vm.startBroadcast(deployerPrivateKey);
 

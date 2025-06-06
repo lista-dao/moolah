@@ -49,7 +49,6 @@ contract LiquidatorAuditTest is Test {
   uint256 internal constant DEFAULT_TEST_LLTV = 0.8 ether;
 
   function setUp() public {
-
     SUPPLIER = makeAddr("Supplier");
     BORROWER = makeAddr("Borrower");
     REPAYER = makeAddr("Repayer");
@@ -178,14 +177,17 @@ contract LiquidatorAuditTest is Test {
       address(loanToken),
       100 ether,
       0,
-      abi.encodeWithSelector(ERC20Mock.approve.selector, LIQUIDATOR, type(uint256).max));
+      abi.encodeWithSelector(ERC20Mock.approve.selector, LIQUIDATOR, type(uint256).max)
+    );
 
     vm.expectRevert(abi.encodeWithSelector(NotWhitelisted.selector));
     liquidator.flashLiquidate(
       Id.unwrap(id),
-      BORROWER, 100 ether,
+      BORROWER,
+      100 ether,
       address(fakePair),
-      abi.encodeWithSelector(ERC20Mock.approve.selector, LIQUIDATOR, type(uint256).max));
+      abi.encodeWithSelector(ERC20Mock.approve.selector, LIQUIDATOR, type(uint256).max)
+    );
     vm.stopPrank();
   }
 
@@ -232,7 +234,11 @@ contract LiquidatorAuditTest is Test {
     );
     vm.stopPrank();
 
-    assertEq(collateralToken.allowance(address(liquidator), address(oneInch)), 0, "collateralToken allowance should be 0");
+    assertEq(
+      collateralToken.allowance(address(liquidator), address(oneInch)),
+      0,
+      "collateralToken allowance should be 0"
+    );
   }
 
   function newMoolah(address admin, address manager, address pauser, uint256 minLoanValue) internal returns (IMoolah) {
