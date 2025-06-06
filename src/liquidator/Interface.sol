@@ -34,4 +34,6 @@ interface IMoolah {
   function isLiquidationWhitelist(bytes32 id, address account) external view returns (bool);
 
   function getPrice(MarketParams calldata marketParams) external view returns (uint256);
+
+  function isHealthy(MarketParams memory marketParams, bytes32 id, address borrower) external view returns (bool);
 }

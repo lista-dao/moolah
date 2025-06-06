@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
 
@@ -14,7 +14,7 @@ import { MathLib, WAD } from "moolah/libraries/MathLib.sol";
 import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
 import "moolah/libraries/ConstantsLib.sol";
 
-contract PublicLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IPublicLiquidator {
+contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPublicLiquidator {
   using MarketParamsLib for IMoolah.MarketParams;
   using MathLib for uint256;
   using SharesMathLib for uint256;
@@ -120,7 +120,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IPublicL
     // transfer profit to the liquidator
     SafeTransferLib.safeTransfer(params.loanToken, msg.sender, loanTokenBalanceAfter - loanTokenBalanceBefore);
     // remove user from whitelist
-    postLiquidate(id, borrower);
+    postLiquidate(params, id, borrower);
   }
 
   /// @dev liquidates a position.
@@ -132,7 +132,6 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IPublicL
     require(seizedAssets == 0 || repaidShares == 0, EitherOneZero());
 
     // calculate how much loan token to transfer
-    /// @todo gas consumption increase, frontend calculate?
     uint256 loanTokenAmount = loanTokenAmountNeed(id, seizedAssets, repaidShares);
 
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
@@ -168,7 +167,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IPublicL
       SafeTransferLib.safeTransfer(params.loanToken, msg.sender, loanTokenBalanceAfter - loanTokenBalanceBefore);
     }
     // remove user from whitelist
-    postLiquidate(id, borrower);
+    postLiquidate(params, id, borrower);
   }
 
   /// @dev calculates the amount of loan token needed to repay the shares.
@@ -200,9 +199,9 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IPublicL
   /// @dev remove borrow from the whitelist after liquidation.
   /// @param id The id of the market.
   /// @param borrower The address of the borrower.
-  function postLiquidate(bytes32 id, address borrower) internal {
-    // remove user from whitelist
-    if (marketUserWhitelist[id][borrower]) {
+  function postLiquidate(IMoolah.MarketParams memory params, bytes32 id, address borrower) internal {
+    // remove user from whitelist if position is healthy and inside whitelist
+    if (IMoolah(MOOLAH).isHealthy(params, id, borrower) && marketUserWhitelist[id][borrower]) {
       marketUserWhitelist[id][borrower] = false;
       emit MarketUserWhitelistChanged(id, borrower, false);
     }
