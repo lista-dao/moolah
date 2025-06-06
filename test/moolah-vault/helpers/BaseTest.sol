@@ -62,6 +62,7 @@ contract BaseTest is Test {
   MarketParams[] internal allMarkets;
   MarketParams internal idleParams;
 
+  bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00; // default admin role
   bytes32 public constant MANAGER_ROLE = keccak256("MANAGER"); // manager role
   bytes32 public constant CURATOR_ROLE = keccak256("CURATOR"); // manager role
   bytes32 public constant ALLOCATOR_ROLE = keccak256("ALLOCATOR"); // manager role

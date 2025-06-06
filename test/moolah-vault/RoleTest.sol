@@ -37,7 +37,7 @@ contract RoleTest is IntegrationTest {
     vm.startPrank(caller);
 
     vm.expectRevert(
-      abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, caller, MANAGER_ROLE)
+      abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, caller, DEFAULT_ADMIN_ROLE)
     );
     vault.grantRole(CURATOR_ROLE, caller);
 
