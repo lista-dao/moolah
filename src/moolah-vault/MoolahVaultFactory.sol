@@ -21,7 +21,7 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
   /// @inheritdoc IMoolahVaultFactory
   address public immutable MOOLAH;
 
-  address public constant MOOLAH_VAULT_IMPL_18 = 0xFAeccDB40688d3674925B48d1B913D0397785f4C;
+  address public constant MOOLAH_VAULT_IMPL_18 = 0xA1f832c7C7ECf91A53b4ff36E0ABdb5133C15982;
 
   address public vaultAdmin;
 
