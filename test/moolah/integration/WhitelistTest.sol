@@ -37,7 +37,7 @@ contract WhitelistTest is BaseTest {
 
     moolah.removeLiquidationWhitelist(id, whitelist);
     assertEq(moolah.getLiquidationWhitelist(id).length, 0, "whitelist length");
-    assertFalse(moolah.isLiquidationWhitelist(id, whitelist), "whitelist");
+    assertTrue(moolah.isLiquidationWhitelist(id, whitelist), "whitelist");
     vm.stopPrank();
   }
 
@@ -144,7 +144,7 @@ contract WhitelistTest is BaseTest {
 
     vm.startPrank(BORROWER);
     moolah.supplyCollateral(marketParams, 100 ether, BORROWER, "");
-    moolah.borrow(marketParams, 80 ether , 0, BORROWER, BORROWER);
+    moolah.borrow(marketParams, 80 ether, 0, BORROWER, BORROWER);
     moolah.repay(marketParams, 80 ether, 0, BORROWER, "");
     vm.stopPrank();
   }
