@@ -37,10 +37,17 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
 
   event MarketWhitelistChanged(bytes32 id, bool added);
   event MarketUserWhitelistChanged(bytes32 id, address user, bool added);
+  event Liquidated(
+    bytes32 indexed id,
+    address indexed borrower,
+    uint256 seizedAssets,
+    uint256 repaidShares,
+    address liquidator
+  );
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   /// @param moolah The address of the Moolah contract.
-  constructor(address moolah) payable {
+  constructor(address moolah) {
     require(moolah != address(0), ZERO_ADDRESS);
     _disableInitializers();
     MOOLAH = moolah;
@@ -100,7 +107,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     uint256 seizedAssets,
     address pair,
     bytes calldata swapData
-  ) external payable {
+  ) external {
     require(isLiquidatable(id, borrower), NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
     // pre-balance of loan token
@@ -121,6 +128,8 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     SafeTransferLib.safeTransfer(params.loanToken, msg.sender, loanTokenBalanceAfter - loanTokenBalanceBefore);
     // remove user from whitelist
     postLiquidate(params, id, borrower);
+    // broadcast event
+    emit Liquidated(id, borrower, seizedAssets, 0, msg.sender);
   }
 
   /// @dev liquidates a position.
@@ -168,6 +177,8 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     }
     // remove user from whitelist
     postLiquidate(params, id, borrower);
+    // broadcast event
+    emit Liquidated(id, borrower, seizedAssets, repaidShares, msg.sender);
   }
 
   /// @dev calculates the amount of loan token needed to repay the shares.
@@ -196,7 +207,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     return repaidShares.toAssetsUp(market.totalBorrowAssets, market.totalBorrowShares);
   }
 
-  /// @dev remove borrow from the whitelist after liquidation.
+  /// @dev remove borrower from the whitelist after liquidation.
   /// @param id The id of the market.
   /// @param borrower The address of the borrower.
   function postLiquidate(IMoolah.MarketParams memory params, bytes32 id, address borrower) internal {
