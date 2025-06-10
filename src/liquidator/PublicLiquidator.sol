@@ -41,6 +41,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     bytes32 indexed id,
     address indexed borrower,
     uint256 seizedAssets,
+    uint256 repaidAssets,
     uint256 repaidShares,
     address liquidator
   );
@@ -110,6 +111,8 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   ) external {
     require(isLiquidatable(id, borrower), NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
+    // calculate how much loan token to repay
+    uint256 repayAmount = loanTokenAmountNeed(id, seizedAssets, 0);
     // pre-balance of loan token
     uint256 loanTokenBalanceBefore = SafeTransferLib.balanceOf(params.loanToken, address(this));
     // liquidate borrower's position
@@ -129,7 +132,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     // remove user from whitelist
     postLiquidate(params, id, borrower);
     // broadcast event
-    emit Liquidated(id, borrower, seizedAssets, 0, msg.sender);
+    emit Liquidated(id, borrower, seizedAssets, repayAmount, 0, msg.sender);
   }
 
   /// @dev liquidates a position.
@@ -178,7 +181,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     // remove user from whitelist
     postLiquidate(params, id, borrower);
     // broadcast event
-    emit Liquidated(id, borrower, seizedAssets, repaidShares, msg.sender);
+    emit Liquidated(id, borrower, seizedAssets, loanTokenAmount, repaidShares, msg.sender);
   }
 
   /// @dev calculates the amount of loan token needed to repay the shares.
@@ -198,13 +201,13 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
       );
       uint256 collateralPrice = IMoolah(MOOLAH).getPrice(params);
       uint256 seizedAssetsQuoted = seizedAssets.mulDivUp(collateralPrice, ORACLE_PRICE_SCALE);
-      repaidShares = seizedAssetsQuoted.wDivUp(liquidationIncentiveFactor).toSharesUp(
+      _repaidShares = seizedAssetsQuoted.wDivUp(liquidationIncentiveFactor).toSharesUp(
         market.totalBorrowAssets,
         market.totalBorrowShares
       );
     }
     // calculate by loan token amt need to repay the shares
-    return repaidShares.toAssetsUp(market.totalBorrowAssets, market.totalBorrowShares);
+    return _repaidShares.toAssetsUp(market.totalBorrowAssets, market.totalBorrowShares);
   }
 
   /// @dev remove borrower from the whitelist after liquidation.
