@@ -59,7 +59,13 @@ contract CreateMarketDeploy is Script {
     MarketParams[] memory params = new MarketParams[](3);
     params[0] = MarketParams({ loanToken: USD1, collateralToken: USR, oracle: multiOracle, irm: irm, lltv: lltv86 });
     params[1] = MarketParams({ loanToken: USDT, collateralToken: USR, oracle: multiOracle, irm: irm, lltv: lltv86 });
-    params[2] = MarketParams({ loanToken: USD1, collateralToken: solvBTC, oracle: multiOracle, irm: irm, lltv: lltv70 });
+    params[2] = MarketParams({
+      loanToken: USD1,
+      collateralToken: solvBTC,
+      oracle: multiOracle,
+      irm: irm,
+      lltv: lltv70
+    });
 
     vm.startBroadcast(deployerPrivateKey);
     for (uint256 i = 0; i < 3; i++) {
