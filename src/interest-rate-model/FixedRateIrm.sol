@@ -72,7 +72,7 @@ contract FixedRateIrm is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IF
   /* BORROW RATES */
 
   /// @inheritdoc IIrm
-  function borrowRateView(MarketParams memory marketParams, Market memory) external view returns (uint256) {
+  function borrowRateView(MarketParams memory marketParams, Market memory) public view returns (uint256) {
     int256 borrowRateCached = borrowRateStored[marketParams.id()];
     require(borrowRateCached > 0, RATE_INVALID);
     int256 _borrowRate = borrowRateCached > MAX_BORROW_RATE ? MAX_BORROW_RATE : borrowRateCached;
@@ -81,11 +81,8 @@ contract FixedRateIrm is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IF
 
   /// @inheritdoc IIrm
   /// @dev Reverts on not set rate, so the rate has to be set before the market creation.
-  function borrowRate(MarketParams memory marketParams, Market memory) external view returns (uint256) {
-    int256 borrowRateCached = borrowRateStored[marketParams.id()];
-    require(borrowRateCached > 0, RATE_INVALID);
-    int256 _borrowRate = borrowRateCached > MAX_BORROW_RATE ? MAX_BORROW_RATE : borrowRateCached;
-    return uint256(_borrowRate);
+  function borrowRate(MarketParams memory marketParams, Market memory market) external view returns (uint256) {
+    return borrowRateView(marketParams, market);
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
