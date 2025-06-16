@@ -8,7 +8,7 @@ import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 
 contract MoolahVaultConfigDeploy is Script {
   using MarketParamsLib for MarketParams;
-  // todo update vault feeRecipient oracleAdapter irm
+  // todo update vault
   MoolahVault vault = MoolahVault(0x6d6783C146F2B0B2774C1725297f1845dc502525);
   uint256 fee = 10 * 1e16;
   address feeRecipient = 0x2E2Eed557FAb1d2E11fEA1E1a23FF8f1b23551f3;
@@ -47,33 +47,12 @@ contract MoolahVaultConfigDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams memory BTCBParams = MarketParams({
-      loanToken: Puffer,
-      collateralToken: BTCB,
-      oracle: multiOracle,
-      irm: alphaIrm,
-      lltv: lltv75
-    });
-    MarketParams memory WBNBParams = MarketParams({
-      loanToken: Puffer,
-      collateralToken: WBNB,
-      oracle: multiOracle,
-      irm: alphaIrm,
-      lltv: lltv75
-    });
-    MarketParams memory USDTParams = MarketParams({
-      loanToken: Puffer,
-      collateralToken: USDT,
-      oracle: multiOracle,
-      irm: alphaIrm,
-      lltv: lltv75
-    });
-    MarketParams memory USD1Params = MarketParams({
-      loanToken: Puffer,
-      collateralToken: USD1,
-      oracle: multiOracle,
-      irm: alphaIrm,
-      lltv: lltv75
+    MarketParams memory slisBNBParams = MarketParams({
+      loanToken: WBNB,
+      collateralToken: slisBNB,
+      oracle: oracleAdapter,
+      irm: irm,
+      lltv: lltv965
     });
 
     vm.startBroadcast(deployerPrivateKey);
@@ -85,33 +64,16 @@ contract MoolahVaultConfigDeploy is Script {
     vault.setBotRole(bot);
 
     // config vault
+
     vault.setFee(fee);
 
-    vault.addWhiteList(whiteList);
+    vault.setCap(slisBNBParams, 100000 ether);
 
-    vault.setCap(BTCBParams, 50000000 ether);
-    vault.setCap(WBNBParams, 50000000 ether);
-    vault.setCap(USDTParams, 50000000 ether);
-    vault.setCap(USD1Params, 50000000 ether);
-
-    Id BTCBId = BTCBParams.id();
-    Id WBNBId = WBNBParams.id();
-    Id USDTId = USDTParams.id();
-    Id USD1Id = USD1Params.id();
-    Id[] memory supplyQueue = new Id[](4);
-    supplyQueue[0] = BTCBId;
-    supplyQueue[1] = WBNBId;
-    supplyQueue[2] = USDTId;
-    supplyQueue[3] = USD1Id;
+    Id slisBNBId = slisBNBParams.id();
+    Id[] memory supplyQueue = new Id[](1);
+    supplyQueue[0] = slisBNBId;
 
     vault.setSupplyQueue(supplyQueue);
-
-    uint256[] memory withdrawQueue = new uint256[](4);
-    withdrawQueue[0] = 3;
-    withdrawQueue[1] = 2;
-    withdrawQueue[2] = 1;
-    withdrawQueue[3] = 0;
-    vault.updateWithdrawQueue(withdrawQueue);
 
     vm.stopBroadcast();
 
