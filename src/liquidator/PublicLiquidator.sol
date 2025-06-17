@@ -68,8 +68,6 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     _grantRole(BOT, bot);
   }
 
-  receive() external payable {}
-
   /// @dev sets the market whitelist.
   /// @param id The id of the market.
   /// @param status The status of the market.
@@ -139,14 +137,15 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   /// @param id The id of the market.
   /// @param borrower The address of the borrower.
   /// @param seizedAssets The amount of assets to seize.
-  function liquidate(bytes32 id, address borrower, uint256 seizedAssets, uint256 repaidShares) external payable {
+  function liquidate(bytes32 id, address borrower, uint256 seizedAssets, uint256 repaidShares) external {
     require(isLiquidatable(id, borrower), NotWhitelisted());
     require(seizedAssets == 0 || repaidShares == 0, EitherOneZero());
+    IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
 
+    // accrue interest for the market before calculate how much loan token is needed
+    IMoolah(MOOLAH).accrueInterest(params);
     // calculate how much loan token to transfer
     uint256 loanTokenAmount = loanTokenAmountNeed(id, seizedAssets, repaidShares);
-
-    IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
     // transfer loan token to this contract
     SafeTransferLib.safeTransferFrom(params.loanToken, msg.sender, address(this), loanTokenAmount);
 

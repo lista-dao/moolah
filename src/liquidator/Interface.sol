@@ -23,6 +23,8 @@ interface IMoolah {
 
   function market(bytes32 id) external view returns (Market memory m);
 
+  function accrueInterest(MarketParams memory) external;
+
   function liquidate(
     MarketParams memory marketParams,
     address borrower,
