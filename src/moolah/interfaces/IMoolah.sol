@@ -385,4 +385,7 @@ interface IMoolah is IMoolahBase {
   function idToMarketParams(Id id) external view returns (MarketParams memory);
 
   function getPrice(MarketParams calldata marketParams) external view returns (uint256);
+
+  /// @notice grants `role` to `account`.
+  function grantRole(bytes32 role, address account) external;
 }

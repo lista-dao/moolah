@@ -113,4 +113,60 @@ contract CreateMarketIntegrationTest is BaseTest {
     assertEq(marketParamsFuzz.irm, params.irm, "irm != irm");
     assertEq(marketParamsFuzz.lltv, params.lltv, "lltv != lltv");
   }
+
+  function testCreateMarketWithOperator(MarketParams memory marketParamsFuzz) public {
+    if (marketParamsFuzz.loanToken == address(0) || marketParamsFuzz.collateralToken == address(0)) {
+      return;
+    }
+
+    marketParamsFuzz.irm = address(irm);
+    marketParamsFuzz.lltv = _boundValidLltv(marketParamsFuzz.lltv);
+    marketParamsFuzz.oracle = address(oracle);
+    Id marketParamsFuzzId = marketParamsFuzz.id();
+
+    vm.startPrank(OWNER);
+    if (!moolah.isLltvEnabled(marketParamsFuzz.lltv)) moolah.enableLltv(marketParamsFuzz.lltv);
+    vm.stopPrank();
+
+    vm.startPrank(OWNER);
+    moolah.grantRole(OPERATOR_ROLE, OPERATOR);
+    vm.expectRevert(bytes(ErrorsLib.UNAUTHORIZED));
+    moolah.createMarket(marketParamsFuzz);
+    vm.stopPrank();
+
+    vm.startPrank(OPERATOR);
+    moolah.createMarket(marketParamsFuzz);
+    vm.stopPrank();
+
+    MarketParams memory params = moolah.idToMarketParams(marketParamsFuzzId);
+
+    assertEq(marketParamsFuzz.loanToken, params.loanToken, "loanToken != loanToken");
+    assertEq(marketParamsFuzz.collateralToken, params.collateralToken, "collateralToken != collateralToken");
+    assertEq(marketParamsFuzz.irm, params.irm, "irm != irm");
+    assertEq(marketParamsFuzz.lltv, params.lltv, "lltv != lltv");
+  }
+
+  function testCreateMarketNotOperator(MarketParams memory marketParamsFuzz) public {
+    if (marketParamsFuzz.loanToken == address(0) || marketParamsFuzz.collateralToken == address(0)) {
+      return;
+    }
+
+    marketParamsFuzz.irm = address(irm);
+    marketParamsFuzz.lltv = _boundValidLltv(marketParamsFuzz.lltv);
+    marketParamsFuzz.oracle = address(oracle);
+    Id marketParamsFuzzId = marketParamsFuzz.id();
+
+    vm.startPrank(OWNER);
+    if (!moolah.isLltvEnabled(marketParamsFuzz.lltv)) moolah.enableLltv(marketParamsFuzz.lltv);
+    vm.stopPrank();
+
+    moolah.createMarket(marketParamsFuzz);
+
+    MarketParams memory params = moolah.idToMarketParams(marketParamsFuzzId);
+
+    assertEq(marketParamsFuzz.loanToken, params.loanToken, "loanToken != loanToken");
+    assertEq(marketParamsFuzz.collateralToken, params.collateralToken, "collateralToken != collateralToken");
+    assertEq(marketParamsFuzz.irm, params.irm, "irm != irm");
+    assertEq(marketParamsFuzz.lltv, params.lltv, "lltv != lltv");
+  }
 }

@@ -43,6 +43,7 @@ contract BaseTest is Test {
 
   bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
+  bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR"); // operator role
 
   address internal SUPPLIER;
   address internal BORROWER;
@@ -53,6 +54,7 @@ contract BaseTest is Test {
   address internal OWNER;
   address internal FEE_RECIPIENT;
   address internal DEFAULT_ADMIN;
+  address internal OPERATOR;
 
   IMoolah internal moolah;
   ERC20Mock internal loanToken;
@@ -72,6 +74,7 @@ contract BaseTest is Test {
     LIQUIDATOR = makeAddr("Liquidator");
     OWNER = makeAddr("Owner");
     FEE_RECIPIENT = makeAddr("FeeRecipient");
+    OPERATOR = makeAddr("Operator");
     oracle = new OracleMock();
 
     moolah = newMoolah(OWNER, OWNER, OWNER);
