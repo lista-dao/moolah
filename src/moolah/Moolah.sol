@@ -78,6 +78,7 @@ contract Moolah is
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant PAUSER = keccak256("PAUSER"); // pauser role
+  bytes32 public constant OPERATOR = keccak256("OPERATOR"); // operator role
 
   /* CONSTRUCTOR */
 
@@ -217,6 +218,7 @@ contract Moolah is
 
   /// @inheritdoc IMoolahBase
   function createMarket(MarketParams memory marketParams) external {
+    require(getRoleMemberCount(OPERATOR) == 0 || hasRole(OPERATOR, msg.sender), ErrorsLib.UNAUTHORIZED);
     Id id = marketParams.id();
     require(isIrmEnabled[marketParams.irm], ErrorsLib.IRM_NOT_ENABLED);
     require(isLltvEnabled[marketParams.lltv], ErrorsLib.LLTV_NOT_ENABLED);
