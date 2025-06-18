@@ -18,7 +18,7 @@ interface ILiquidator {
     uint256 seizedAssets,
     address pair,
     bytes calldata swapData
-  ) external payable;
+  ) external;
 
   function liquidate(bytes32 id, address borrower, uint256 seizedAssets, uint256 repaidShares) external payable;
 
