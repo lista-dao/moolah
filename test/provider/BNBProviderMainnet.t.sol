@@ -69,6 +69,7 @@ contract BNBProviderTest is Test {
     UUPSUpgradeable proxy1 = UUPSUpgradeable(address(bnbProvider));
     proxy1.upgradeToAndCall(newImlp, bytes(""));
     assertEq(getImplementation(address(bnbProvider)), newImlp);
+    bnbProvider.addVault(moolahVaultProxy);
     vm.stopPrank();
 
     MarketParams memory param1 = MarketParams({
@@ -399,9 +400,6 @@ contract BNBProviderTest is Test {
 
   function test_removeVault() public {
     vm.startPrank(manager);
-    bnbProvider.addVault(moolahVaultProxy);
-    assertEq(bnbProvider.vaults(moolahVaultProxy), true, "add vault failed");
-
     bnbProvider.removeVault(moolahVaultProxy);
     vm.stopPrank();
 
@@ -410,6 +408,10 @@ contract BNBProviderTest is Test {
 
   function test_depositNotInVaults() public {
     deal(user, 100 ether);
+
+    vm.startPrank(manager);
+    bnbProvider.removeVault(moolahVaultProxy);
+    vm.stopPrank();
 
     vm.startPrank(user);
     vm.expectRevert(bytes("vault not added"));
@@ -422,9 +424,6 @@ contract BNBProviderTest is Test {
 
   function test_withdrawNotInVaults() public {
     test_deposit();
-    vm.startPrank(manager);
-    bnbProvider.addVault(moolahVaultProxy);
-    vm.stopPrank();
 
     bnbProvider.deposit{ value: 1 ether }(moolahVaultProxy, user);
 
@@ -445,10 +444,6 @@ contract BNBProviderTest is Test {
   function test_depositInVaults() public {
     deal(user, 100 ether);
 
-    vm.startPrank(manager);
-    bnbProvider.addVault(moolahVaultProxy);
-    vm.stopPrank();
-
     uint256 bnbBalanceBefore = user.balance;
     uint256 wbnbBalanceBefore = IERC20(WBNB).balanceOf(moolahProxy);
     vm.startPrank(user);
@@ -465,10 +460,6 @@ contract BNBProviderTest is Test {
 
   function test_mintInVaults() public {
     deal(user, 100 ether);
-
-    vm.startPrank(manager);
-    bnbProvider.addVault(moolahVaultProxy);
-    vm.stopPrank();
 
     uint256 bnbBalanceBefore = user.balance;
     uint256 wbnbBalanceBefore = IERC20(WBNB).balanceOf(moolahProxy);
