@@ -102,6 +102,7 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPr
   }
 
   /// @dev Deposit BNB and receive shares.
+  /// @param vault The address of the Moolah vault to deposit into.
   /// @param receiver The address to receive the shares.
   /// @return shares The number of shares received.
   function deposit(address vault, address receiver) public payable returns (uint256 shares) {
