@@ -3,7 +3,6 @@ pragma solidity 0.8.28;
 
 import "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
-import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 import { IWBNB } from "./interfaces/IWBNB.sol";
 import { IProvider } from "./interfaces/IProvider.sol";
@@ -24,14 +23,14 @@ import { UtilsLib } from "../moolah/libraries/UtilsLib.sol";
 contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IProvider {
   using MarketParamsLib for MarketParams;
   using SharesMathLib for uint256;
-  using EnumerableSet for EnumerableSet.AddressSet;
 
   /* IMMUTABLES */
 
   IMoolah public immutable MOOLAH;
+  IMoolahVault public immutable MOOLAH_VAULT;
   address public immutable TOKEN;
 
-  EnumerableSet.AddressSet private vaults;
+  mapping(address => bool) public vaults;
 
   bytes32 public constant MANAGER = keccak256("MANAGER");
 
@@ -44,12 +43,17 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPr
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   /// @param moolah The address of the Moolah contract.
+  /// @param moolahVault The address of the WBNB Moolah Vault contract.
   /// @param wbnb The address of the WBNB contract.
-  constructor(address moolah, address wbnb) {
+  constructor(address moolah, address moolahVault, address wbnb) {
     require(moolah != address(0), ErrorsLib.ZERO_ADDRESS);
+    require(moolahVault != address(0), ErrorsLib.ZERO_ADDRESS);
+    require(moolah == address(IMoolahVault(moolahVault).MOOLAH()), ErrorsLib.NOT_SET);
     require(wbnb != address(0), ErrorsLib.ZERO_ADDRESS);
+    require(wbnb == IMoolahVault(moolahVault).asset(), "asset mismatch");
 
     MOOLAH = IMoolah(moolah);
+    MOOLAH_VAULT = IMoolahVault(moolahVault);
     TOKEN = wbnb;
 
     _disableInitializers();
@@ -68,11 +72,79 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPr
   }
 
   /// @dev Deposit BNB and receive shares.
-  /// @param vault The address of the Moolah vault to deposit into.
+  /// @param receiver The address to receive the shares.
+  /// @return shares The number of shares received.
+  function deposit(address receiver) external payable returns (uint256 shares) {
+    uint256 assets = msg.value;
+    require(assets > 0, ErrorsLib.ZERO_ASSETS);
+
+    IWBNB(TOKEN).deposit{ value: assets }();
+    require(IWBNB(TOKEN).approve(address(MOOLAH_VAULT), assets));
+
+    shares = MOOLAH_VAULT.deposit(assets, receiver);
+  }
+
+  /// @dev Deposit BNB and receive shares by specifying the amount of shares.
+  /// @param shares The amount of shares to mint.
+  /// @param receiver The address to receive the shares.
+  function mint(uint256 shares, address receiver) external payable returns (uint256 assets) {
+    require(shares > 0, ErrorsLib.ZERO_ASSETS);
+    uint256 previewAssets = MOOLAH_VAULT.previewMint(shares); // ceiling rounding
+    require(msg.value >= previewAssets, "invalid BNB amount");
+
+    IWBNB(TOKEN).deposit{ value: previewAssets }();
+    require(IWBNB(TOKEN).approve(address(MOOLAH_VAULT), previewAssets));
+    assets = MOOLAH_VAULT.mint(shares, receiver);
+
+    if (msg.value > assets) {
+      (bool success, ) = msg.sender.call{ value: msg.value - assets }("");
+      require(success, "transfer failed");
+    }
+  }
+
+  /// @dev Withdraw shares from owner and send BNB to receiver by specifying the amount of assets.
+  /// @param assets The amount of assets to withdraw.
+  /// @param receiver The address to receive the assets.
+  /// @param owner The address of the owner of the shares.
+  function withdraw(uint256 assets, address payable receiver, address owner) external returns (uint256 shares) {
+    require(assets > 0, ErrorsLib.ZERO_ASSETS);
+    require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
+
+    // 1. withdraw WBNB from moolah vault
+    shares = MOOLAH_VAULT.withdrawFor(assets, owner, msg.sender);
+
+    // 2. unwrap WBNB
+    IWBNB(TOKEN).withdraw(assets);
+
+    // 3. transfer WBNB to receiver
+    (bool success, ) = receiver.call{ value: assets }("");
+    require(success, "transfer failed");
+  }
+
+  /// @dev Withdraw shares from owner and send BNB to receiver by specifying the amount of shares.
+  /// @param shares The amount of shares to withdraw.
+  /// @param receiver The address to receive the assets.
+  /// @param owner The address of the owner of the shares.
+  function redeem(uint256 shares, address payable receiver, address owner) external returns (uint256 assets) {
+    require(shares > 0, ErrorsLib.ZERO_ASSETS);
+    require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
+
+    // 1. redeem WBNB from moolah vault
+    assets = MOOLAH_VAULT.redeemFor(shares, owner, msg.sender);
+
+    // 2. unwrap WBNB
+    IWBNB(TOKEN).withdraw(assets);
+
+    // 3. transfer BNB to receiver
+    (bool success, ) = receiver.call{ value: assets }("");
+    require(success, "transfer failed");
+  }
+
+  /// @dev Deposit BNB and receive shares.
   /// @param receiver The address to receive the shares.
   /// @return shares The number of shares received.
   function deposit(address vault, address receiver) external payable returns (uint256 shares) {
-    require(vaults.contains(vault), "vault not added");
+    require(vaults[vault], "vault not added");
     uint256 assets = msg.value;
     require(assets > 0, ErrorsLib.ZERO_ASSETS);
 
@@ -87,7 +159,7 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPr
   /// @param shares The amount of shares to mint.
   /// @param receiver The address to receive the shares.
   function mint(address vault, uint256 shares, address receiver) external payable returns (uint256 assets) {
-    require(vaults.contains(vault), "vault not added");
+    require(vaults[vault], "vault not added");
     require(shares > 0, ErrorsLib.ZERO_ASSETS);
     uint256 previewAssets = IMoolahVault(vault).previewMint(shares); // ceiling rounding
     require(msg.value >= previewAssets, "invalid BNB amount");
@@ -113,7 +185,7 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPr
     address payable receiver,
     address owner
   ) external returns (uint256 shares) {
-    require(vaults.contains(vault), "vault not added");
+    require(vaults[vault], "vault not added");
     require(assets > 0, ErrorsLib.ZERO_ASSETS);
     require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
 
@@ -139,7 +211,7 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPr
     address payable receiver,
     address owner
   ) external returns (uint256 assets) {
-    require(vaults.contains(vault), "vault not added");
+    require(vaults[vault], "vault not added");
     require(shares > 0, ErrorsLib.ZERO_ASSETS);
     require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
 
@@ -280,21 +352,16 @@ contract BNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPr
   /// @dev Add a Moolah vault to the provider.
   function addVault(address vault) external onlyRole(MANAGER) {
     require(vault != address(0), ErrorsLib.ZERO_ADDRESS);
-    require(!vaults.contains(vault), "vault already added");
+    require(!vaults[vault], "vault already added");
     require(address(IMoolahVault(vault).MOOLAH()) == address(MOOLAH), "invalid moolah vault");
     require(IMoolahVault(vault).asset() == TOKEN, "invalid asset");
-    vaults.add(vault);
+    vaults[vault] = true;
   }
 
   /// @dev Remove a Moolah vault from the provider.
   function removeVault(address vault) external onlyRole(MANAGER) {
-    require(vaults.contains(vault), "vault not added");
-    vaults.remove(vault);
-  }
-
-  /// @dev Returns the list of Moolah vaults added to the provider.
-  function getVaults() external view returns (address[] memory) {
-    return vaults.values();
+    require(vaults[vault], "vault not added");
+    delete vaults[vault];
   }
 
   /// @dev Returns whether the sender is authorized to manage `onBehalf`'s positions.

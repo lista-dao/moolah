@@ -21,7 +21,7 @@ contract BNBProviderDeploy is Script {
     vm.startBroadcast(deployerPrivateKey);
 
     // Deploy BNBProvider implementation
-    BNBProvider impl = new BNBProvider(moolah, asset);
+    BNBProvider impl = new BNBProvider(moolah, loopVault, asset);
     console.log("Loop WBNB Vault BNBProvider implementation: ", address(impl));
 
     // Deploy Loop WBNB Vault BNBProvider proxy
