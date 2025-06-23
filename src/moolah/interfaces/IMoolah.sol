@@ -361,6 +361,9 @@ interface IMoolahStaticTyping is IMoolahBase {
   function idToMarketParams(
     Id id
   ) external view returns (address loanToken, address collateralToken, address oracle, address irm, uint256 lltv);
+
+  /// @notice Returns whether the position of `borrower` in the given market `marketParams` is healthy.
+  function isHealthy(MarketParams memory marketParams, Id id, address borrower) external view returns (bool);
 }
 
 /// @title IMoolah

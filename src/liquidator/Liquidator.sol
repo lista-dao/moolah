@@ -37,7 +37,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   /// @param moolah The address of the Moolah contract.
-  constructor(address moolah) payable {
+  constructor(address moolah) {
     require(moolah != address(0), ZERO_ADDRESS);
     _disableInitializers();
     MOOLAH = moolah;
@@ -149,7 +149,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     uint256 seizedAssets,
     address pair,
     bytes calldata swapData
-  ) external payable onlyRole(BOT) {
+  ) external onlyRole(BOT) {
     require(marketWhitelist[id], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
