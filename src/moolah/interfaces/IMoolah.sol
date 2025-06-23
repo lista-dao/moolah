@@ -292,11 +292,8 @@ interface IMoolahBase {
   /// @notice Removes `account` from the liquidation whitelist of the market `id`.
   function removeLiquidationWhitelist(Id id, address account) external;
 
-  /// @notice Batch add `accounts` to the liquidation whitelist of the markets `ids`.
-  function batchAddLiquidationWhitelist(Id[] memory ids, address[][] memory accounts) external;
-
   /// @notice Removes `account` from the liquidation whitelist of the market `id`.
-  function batchRemoveLiquidationWhitelist(Id[] memory ids, address[][] memory accounts) external;
+  function batchToggleLiquidationWhitelist(Id[] memory ids, address[][] memory accounts, bool isAddition) external;
 
   /// @notice Returns the liquidation whitelist of the market `id`.
   function getLiquidationWhitelist(Id id) external view returns (address[] memory);

@@ -162,7 +162,7 @@ contract Moolah is
   }
 
   /// @inheritdoc IMoolahBase
-  function addLiquidationWhitelist(Id id, address account) external onlyRole(MANAGER) {
+  function addLiquidationWhitelist(Id id, address account) public onlyRole(MANAGER) {
     require(!liquidationWhitelist[id].contains(account), ErrorsLib.ALREADY_SET);
     liquidationWhitelist[id].add(account);
 
@@ -170,23 +170,7 @@ contract Moolah is
   }
 
   /// @inheritdoc IMoolahBase
-  function batchAddLiquidationWhitelist(Id[] memory ids, address[][] memory accounts) external onlyRole(MANAGER) {
-    require(ids.length == accounts.length, ErrorsLib.INCONSISTENT_INPUT);
-    // add accounts to liquidation whitelist for each id
-    for (uint256 i = 0; i < ids.length; ++i) {
-      Id id = ids[i];
-      address[] memory accountList = accounts[i];
-      for (uint256 j = 0; j < accountList.length; ++j) {
-        address account = accountList[j];
-        require(!liquidationWhitelist[id].contains(account), ErrorsLib.ALREADY_SET);
-        liquidationWhitelist[id].add(account);
-        emit EventsLib.AddLiquidationWhitelist(id, account);
-      }
-    }
-  }
-
-  /// @inheritdoc IMoolahBase
-  function removeLiquidationWhitelist(Id id, address account) external onlyRole(MANAGER) {
+  function removeLiquidationWhitelist(Id id, address account) public onlyRole(MANAGER) {
     require(liquidationWhitelist[id].contains(account), ErrorsLib.NOT_SET);
     liquidationWhitelist[id].remove(account);
 
@@ -194,7 +178,11 @@ contract Moolah is
   }
 
   /// @inheritdoc IMoolahBase
-  function batchRemoveLiquidationWhitelist(Id[] memory ids, address[][] memory accounts) external onlyRole(MANAGER) {
+  function batchToggleLiquidationWhitelist(
+    Id[] memory ids,
+    address[][] memory accounts,
+    bool isAddition
+  ) external onlyRole(MANAGER) {
     require(ids.length == accounts.length, ErrorsLib.INCONSISTENT_INPUT);
     // remove accounts from liquidation whitelist for each id
     for (uint256 i = 0; i < ids.length; ++i) {
@@ -202,9 +190,13 @@ contract Moolah is
       address[] memory accountList = accounts[i];
       for (uint256 j = 0; j < accountList.length; ++j) {
         address account = accountList[j];
-        require(liquidationWhitelist[id].contains(account), ErrorsLib.NOT_SET);
-        liquidationWhitelist[id].remove(account);
-        emit EventsLib.RemoveLiquidationWhitelist(id, account);
+        // add to whitelist
+        if (isAddition) {
+          addLiquidationWhitelist(id, account);
+        } else {
+          // remove from whitelist
+          removeLiquidationWhitelist(id, account);
+        }
       }
     }
   }

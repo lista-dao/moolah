@@ -169,7 +169,7 @@ contract PublicLiquidatorTest is BaseTest {
 
     // make this market only whitelisted address can liquidate
     vm.prank(OWNER);
-    moolah.batchAddLiquidationWhitelist(ids, accounts);
+    moolah.batchToggleLiquidationWhitelist(ids, accounts, true);
 
     vm.startPrank(USER);
     // give user some loan token to buy collateral token
