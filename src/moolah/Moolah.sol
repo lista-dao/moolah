@@ -184,7 +184,7 @@ contract Moolah is
     bool isAddition
   ) external onlyRole(MANAGER) {
     require(ids.length == accounts.length, ErrorsLib.INCONSISTENT_INPUT);
-    // remove accounts from liquidation whitelist for each id
+    // add/remove accounts from liquidation whitelist for each market
     for (uint256 i = 0; i < ids.length; ++i) {
       Id id = ids[i];
       address[] memory accountList = accounts[i];
