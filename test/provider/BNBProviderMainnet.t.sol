@@ -63,6 +63,15 @@ contract BNBProviderTest is Test {
     vm.stopPrank();
     moolah = Moolah(moolahProxy);
 
+    // Upgrade BNBProvider
+    newImlp = address(new BNBProvider(moolahProxy, moolahVaultProxy, WBNB));
+    vm.startPrank(admin);
+    UUPSUpgradeable proxy1 = UUPSUpgradeable(address(bnbProvider));
+    proxy1.upgradeToAndCall(newImlp, bytes(""));
+    assertEq(getImplementation(address(bnbProvider)), newImlp);
+    bnbProvider.addVault(moolahVaultProxy);
+    vm.stopPrank();
+
     MarketParams memory param1 = MarketParams({
       loanToken: WBNB,
       collateralToken: BTCB,
@@ -372,6 +381,135 @@ contract BNBProviderTest is Test {
     assertEq(borrowShares, 0);
     assertEq(collateral, 1 ether);
     assertEq(user.balance, balanceBefore - assets);
+  }
+
+  function test_addVault() public {
+    MoolahVault newVaultImpl = new MoolahVault(moolahProxy, WBNB);
+    address newVaultProxy = address(
+      new ERC1967Proxy(
+        address(newVaultImpl),
+        abi.encodeWithSelector(newVaultImpl.initialize.selector, admin, manager, WBNB, "new vault", "new vault")
+      )
+    );
+    vm.startPrank(manager);
+    bnbProvider.addVault(newVaultProxy);
+    vm.stopPrank();
+
+    assertEq(bnbProvider.vaults(newVaultProxy), true, "add vault failed");
+  }
+
+  function test_removeVault() public {
+    vm.startPrank(manager);
+    bnbProvider.removeVault(moolahVaultProxy);
+    vm.stopPrank();
+
+    assertEq(bnbProvider.vaults(moolahVaultProxy), false, "remove vault failed");
+  }
+
+  function test_depositNotInVaults() public {
+    deal(user, 100 ether);
+
+    vm.startPrank(manager);
+    bnbProvider.removeVault(moolahVaultProxy);
+    vm.stopPrank();
+
+    vm.startPrank(user);
+    vm.expectRevert(bytes("vault not added"));
+    bnbProvider.deposit{ value: 1 ether }(moolahVaultProxy, user);
+
+    vm.expectRevert(bytes("vault not added"));
+    bnbProvider.mint{ value: 1 ether }(moolahVaultProxy, 1 ether, user);
+    vm.stopPrank();
+  }
+
+  function test_withdrawNotInVaults() public {
+    test_deposit();
+
+    bnbProvider.deposit{ value: 1 ether }(moolahVaultProxy, user);
+
+    vm.startPrank(manager);
+    bnbProvider.removeVault(moolahVaultProxy);
+    vm.stopPrank();
+
+    vm.startPrank(user);
+    vm.expectRevert(bytes("vault not added"));
+    bnbProvider.withdraw(moolahVaultProxy, 1 ether, payable(user), user);
+
+    uint256 shares = moolahVault.balanceOf(user);
+    vm.expectRevert(bytes("vault not added"));
+    bnbProvider.redeem(moolahVaultProxy, shares, payable(user), user);
+    vm.stopPrank();
+  }
+
+  function test_depositInVaults() public {
+    deal(user, 100 ether);
+
+    uint256 bnbBalanceBefore = user.balance;
+    uint256 wbnbBalanceBefore = IERC20(WBNB).balanceOf(moolahProxy);
+    vm.startPrank(user);
+    uint256 expectShares = moolahVault.convertToShares(1 ether);
+    uint256 shares = bnbProvider.deposit{ value: 1 ether }(moolahVaultProxy, user);
+    assertEq(shares, expectShares);
+
+    assertEq(user.balance, bnbBalanceBefore - 1 ether);
+    assertEq(moolahVault.balanceOf(user), expectShares);
+    assertEq(moolahVault.balanceOf(address(bnbProvider)), 0);
+    assertEq(IERC20(WBNB).balanceOf(moolahVaultProxy), 0);
+    assertEq(IERC20(WBNB).balanceOf(moolahProxy), wbnbBalanceBefore + 1 ether);
+  }
+
+  function test_mintInVaults() public {
+    deal(user, 100 ether);
+
+    uint256 bnbBalanceBefore = user.balance;
+    uint256 wbnbBalanceBefore = IERC20(WBNB).balanceOf(moolahProxy);
+    vm.startPrank(user);
+    uint256 expectAsset = moolahVault.previewMint(1 ether);
+    uint256 assets = bnbProvider.mint{ value: expectAsset }(moolahVaultProxy, 1 ether, user);
+
+    assertEq(assets, expectAsset);
+    assertEq(user.balance, bnbBalanceBefore - expectAsset);
+    assertEq(moolahVault.balanceOf(user), 1 ether);
+    assertEq(moolahVault.balanceOf(address(bnbProvider)), 0);
+    assertEq(IERC20(WBNB).balanceOf(moolahProxy), wbnbBalanceBefore + expectAsset);
+  }
+
+  function test_withdrawInVaults() public {
+    test_depositInVaults();
+
+    skip(1 days);
+
+    vm.startPrank(user);
+    uint256 balanceBefore = user.balance;
+    uint256 sharesBefore = moolahVault.balanceOf(user);
+    uint256 totalAssets = moolahVault.totalAssets();
+    uint256 expectShares = moolahVault.convertToShares(1 ether);
+    uint256 shares = bnbProvider.withdraw(moolahVaultProxy, 1 ether, payable(user), user);
+
+    assertApproxEqAbs(shares, expectShares, 1);
+    assertEq(moolahVault.balanceOf(user), sharesBefore - shares);
+    assertEq(moolahVault.balanceOf(address(bnbProvider)), 0);
+    assertEq(user.balance, balanceBefore + 1 ether);
+    assertEq(moolahVault.totalAssets(), totalAssets - 1 ether);
+  }
+
+  function test_redeemInVaults() public {
+    test_depositInVaults();
+
+    skip(1 days);
+
+    vm.startPrank(user);
+    uint256 balanceBefore = user.balance;
+    uint256 sharesBefore = moolahVault.balanceOf(user);
+    uint256 totalAssets = moolahVault.totalAssets();
+    uint256 shares = moolahVault.convertToShares(1 ether);
+    uint256 assets = bnbProvider.redeem(moolahVaultProxy, shares, payable(user), user);
+
+    assertApproxEqAbs(assets, 1 ether, 1);
+    assertEq(moolahVault.balanceOf(user), sharesBefore - shares);
+    assertEq(moolahVault.balanceOf(address(bnbProvider)), 0);
+    assertApproxEqAbs(user.balance, balanceBefore + 1 ether, 1);
+    assertApproxEqAbs(moolahVault.totalAssets(), totalAssets - 1 ether, 1);
   }
 
   function getImplementation(address _proxyAddress) public view returns (address) {
