@@ -115,7 +115,7 @@ interface IMoolahVaultBase {
   function setBotRole(address _address) external;
   function revokeBotRole(address _address) external;
   /// @notice Sets the address of the provider.
-  function initProvider(address _provider) external;
+  function setProvider(address _provider) external;
 
   /// @notice Add account to whitelist
   function addWhiteList(address account) external;

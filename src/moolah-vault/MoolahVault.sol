@@ -351,9 +351,9 @@ contract MoolahVault is
   }
 
   /// @inheritdoc IMoolahVaultBase
-  function initProvider(address _provider) external onlyRole(DEFAULT_ADMIN_ROLE) {
+  function setProvider(address _provider) external onlyRole(DEFAULT_ADMIN_ROLE) {
     require(_provider != address(0), ErrorsLib.ZeroAddress());
-    require(provider == address(0), ErrorsLib.AlreadySet());
+    require(provider != _provider, ErrorsLib.AlreadySet());
     require(IProvider(_provider).TOKEN() == asset(), ErrorsLib.TokenMismatch());
     provider = _provider;
 
