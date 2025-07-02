@@ -69,7 +69,6 @@ contract BNBProviderTest is Test {
     UUPSUpgradeable proxy1 = UUPSUpgradeable(address(bnbProvider));
     proxy1.upgradeToAndCall(newImlp, bytes(""));
     assertEq(getImplementation(address(bnbProvider)), newImlp);
-    bnbProvider.addVault(moolahVaultProxy);
     vm.stopPrank();
 
     MarketParams memory param1 = MarketParams({
