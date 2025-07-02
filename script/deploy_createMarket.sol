@@ -36,6 +36,7 @@ contract CreateMarketDeploy is Script {
   address AB = 0x95034f653D5D161890836Ad2B6b8cc49D14e029a;
   address B = 0x6bdcCe4A559076e37755a78Ce0c06214E59e4444;
   address B2 = 0x783c3f003f172c6Ac5AC700218a357d2D66Ee2a2;
+  address xsolvBTC = 0x1346b618dC92810EC74163e4c27004c921D446a5;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
@@ -64,40 +65,38 @@ contract CreateMarketDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams[] memory params = new MarketParams[](6);
+    MarketParams[] memory params = new MarketParams[](4);
     params[0] = MarketParams({
-      loanToken: AB,
-      collateralToken: BTCB,
+      loanToken: WBNB,
+      collateralToken: solvBTC,
       oracle: multiOracle,
-      irm: alphaIrm,
-      lltv: lltv50
+      irm: irm,
+      lltv: lltv80
     });
     params[1] = MarketParams({
-      loanToken: AB,
-      collateralToken: USDT,
+      loanToken: WBNB,
+      collateralToken: xsolvBTC,
       oracle: multiOracle,
-      irm: alphaIrm,
-      lltv: lltv50
+      irm: irm,
+      lltv: lltv75
     });
-    params[2] = MarketParams({ loanToken: B, collateralToken: BTCB, oracle: multiOracle, irm: alphaIrm, lltv: lltv50 });
-    params[3] = MarketParams({ loanToken: B, collateralToken: USDT, oracle: multiOracle, irm: alphaIrm, lltv: lltv50 });
-    params[4] = MarketParams({
-      loanToken: B2,
-      collateralToken: BTCB,
+    params[2] = MarketParams({
+      loanToken: USD1,
+      collateralToken: solvBTC,
       oracle: multiOracle,
-      irm: alphaIrm,
-      lltv: lltv50
+      irm: irm,
+      lltv: lltv80
     });
-    params[5] = MarketParams({
-      loanToken: B2,
-      collateralToken: USDT,
+    params[3] = MarketParams({
+      loanToken: USD1,
+      collateralToken: xsolvBTC,
       oracle: multiOracle,
-      irm: alphaIrm,
-      lltv: lltv50
+      irm: irm,
+      lltv: lltv75
     });
 
     vm.startBroadcast(deployerPrivateKey);
-    for (uint256 i = 0; i < 6; i++) {
+    for (uint256 i = 0; i < 4; i++) {
       Id id = params[i].id();
       console.log("market id:");
       console.logBytes32(Id.unwrap(id));
@@ -111,7 +110,6 @@ contract CreateMarketDeploy is Script {
       moolah.createMarket(params[i]);
       console.log("market created");
     }
-
     vm.stopBroadcast();
   }
 }
