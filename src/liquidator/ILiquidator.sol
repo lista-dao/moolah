@@ -35,5 +35,9 @@ interface ILiquidator {
 
   function setMarketWhitelist(bytes32 id, bool status) external;
 
+  function batchSetMarketWhitelist(bytes32[] calldata ids, bool status) external;
+
   function setPairWhitelist(address pair, bool status) external;
+
+  function marketWhitelist(bytes32 id) external view returns (bool);
 }

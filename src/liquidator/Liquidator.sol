@@ -84,6 +84,20 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   /// @param id The id of the market.
   /// @param status The status of the market.
   function setMarketWhitelist(bytes32 id, bool status) external onlyRole(MANAGER) {
+    _setMarketWhitelist(id, status);
+  }
+
+  /// @dev batch sets the market whitelist.
+  /// @param ids The array of market ids.
+  /// @param status The status to set for all markets.
+  function batchSetMarketWhitelist(bytes32[] calldata ids, bool status) external onlyRole(MANAGER) {
+    for (uint256 i = 0; i < ids.length; i++) {
+      bytes32 id = ids[i];
+      _setMarketWhitelist(id, status);
+    }
+  }
+
+  function _setMarketWhitelist(bytes32 id, bool status) internal {
     require(IMoolah(MOOLAH).idToMarketParams(id).loanToken != address(0), "Invalid market");
     require(marketWhitelist[id] != status, WhitelistSameStatus());
     marketWhitelist[id] = status;
