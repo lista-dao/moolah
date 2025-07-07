@@ -124,4 +124,20 @@ contract LiquidatorTest is BaseTest {
     assertEq(loanToken.balanceOf(address(liquidator)), loanAmount, "loanToken balance");
     assertEq(collateralToken.balanceOf(address(liquidator)), 0, "collateralToken balance");
   }
+
+  function testBatchSetMarketWhitelist() public {
+    bytes32[] memory ids = new bytes32[](1);
+    ids[0] = Id.unwrap(marketParams.id());
+    vm.startPrank(OWNER);
+    liquidator.batchSetMarketWhitelist(ids, false);
+    vm.stopPrank();
+
+    assertEq(liquidator.marketWhitelist(Id.unwrap(marketParams.id())), false, "market should be whitelisted");
+
+    vm.startPrank(OWNER);
+    liquidator.batchSetMarketWhitelist(ids, true);
+    vm.stopPrank();
+
+    assertEq(liquidator.marketWhitelist(Id.unwrap(marketParams.id())), true, "market should be whitelisted");
+  }
 }
