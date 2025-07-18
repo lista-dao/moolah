@@ -17,24 +17,17 @@ contract PTLinearDiscountOracleDeploy is Script {
     PTLinearDiscountOracle impl = new PTLinearDiscountOracle();
     console.log("PTLinearDiscountOracle implementation: ", address(impl));
 
-    address ptSusde26Jun2025 = 0xDD809435ba6c9d6903730f923038801781cA66ce;
-    address ptSusde26Jun2025Oracle = 0x2AD358a2972aD56937A18b5D90A4F087C007D08d;
+    address ptToken = 0xB901c7A2D2Bc05D8B7e7eE4F7Fcf72CAaABd2F49;
+    address ptOracle = 0x0f34c129EFA6436c46Ca95a1cA41f995A61d1d2b;
     address admin = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253; // timelock
-    address loanAsset = 0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34; // USDe CA
+    address loanAsset = 0x55d398326f99059fF775485246999027B3197955;
     address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
     address loanTokenOracle = multiOracle;
 
     // Deploy OracleAdaptor proxy
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(
-        impl.initialize.selector,
-        admin,
-        ptSusde26Jun2025,
-        ptSusde26Jun2025Oracle,
-        loanAsset,
-        loanTokenOracle
-      )
+      abi.encodeWithSelector(impl.initialize.selector, admin, ptToken, ptOracle, loanAsset, loanTokenOracle)
     );
     console.log("PTLinearDiscountOracle proxy: ", address(proxy));
 
