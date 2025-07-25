@@ -39,6 +39,7 @@ contract CreateMarketDeploy is Script {
   address xsolvBTC = 0x1346b618dC92810EC74163e4c27004c921D446a5;
   address ptSatUSD11SEP2025 = 0xB901c7A2D2Bc05D8B7e7eE4F7Fcf72CAaABd2F49;
   address ANKR = 0xf307910A4c7bbc79691fD374889b36d8531B08e3;
+  address ptUSDe30OTC2025 = 0x607C834cfb7FCBbb341Cbe23f77A6E83bCf3F55c;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
@@ -48,6 +49,8 @@ contract CreateMarketDeploy is Script {
   address ptUSDe7AUG2025USD1Oracle = 0x2311F923Ca3FdCfF03522700b482644A929dDE70;
   address ptUSDe7AUG2025USDTOracle = 0x1CCEfa30385d5Fd7c6259362eC110e403974d7A2;
   address ptSatUSD11SEP2025OUSDTracle = 0xbEf5DfecC869AAC441F58DB1042479562D170491;
+  address ptUSDe30OTC2025USD1Oracle = 0xbEf5DfecC869AAC441F58DB1042479562D170491;
+  address ptUSDe30OTC2025USDTOracle = 0xbEf5DfecC869AAC441F58DB1042479562D170491;
 
   address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
   address alphaIrm = 0x5F9f9173B405C6CEAfa7f98d09e4B8447e9797E6;
@@ -69,11 +72,25 @@ contract CreateMarketDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams[] memory params = new MarketParams[](1);
+    MarketParams[] memory params = new MarketParams[](3);
     params[0] = MarketParams({ loanToken: USD1, collateralToken: ANKR, oracle: multiOracle, irm: irm, lltv: lltv60 });
+    params[1] = MarketParams({
+      loanToken: USD1,
+      collateralToken: ptUSDe30OTC2025,
+      oracle: ptUSDe30OTC2025USD1Oracle,
+      irm: irm,
+      lltv: lltv965
+    });
+    params[2] = MarketParams({
+      loanToken: USDT,
+      collateralToken: ptUSDe30OTC2025,
+      oracle: ptUSDe30OTC2025USDTOracle,
+      irm: irm,
+      lltv: lltv965
+    });
 
     vm.startBroadcast(deployerPrivateKey);
-    for (uint256 i = 0; i < 1; i++) {
+    for (uint256 i = 0; i < 3; i++) {
       Id id = params[i].id();
       console.log("market id:");
       console.logBytes32(Id.unwrap(id));
