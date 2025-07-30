@@ -9,11 +9,11 @@ import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 contract MoolahVaultDeploy is Script {
   address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
 
-  address asset = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c; // BNB
+  address asset = 0x1A9Fd6eC3144Da3Dd6Ea13Ec1C25C58423a379b1; // SPA
 
   MoolahVault impl = MoolahVault(0xA1f832c7C7ECf91A53b4ff36E0ABdb5133C15982);
-  string name = "Loop BNB Vault";
-  string symbol = "BNB";
+  string name = "SPA Vault";
+  string symbol = "SPA";
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");

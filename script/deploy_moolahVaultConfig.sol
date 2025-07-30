@@ -23,6 +23,7 @@ contract MoolahVaultConfigDeploy is Script {
   address USDT = 0x55d398326f99059fF775485246999027B3197955;
   address slisBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B;
   address Puffer = 0x87d00066cf131ff54B72B134a217D5401E5392b6;
+  address SPA = 0x1A9Fd6eC3144Da3Dd6Ea13Ec1C25C58423a379b1;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
@@ -47,12 +48,20 @@ contract MoolahVaultConfigDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams memory slisBNBParams = MarketParams({
-      loanToken: WBNB,
-      collateralToken: slisBNB,
-      oracle: oracleAdapter,
-      irm: irm,
-      lltv: lltv965
+    MarketParams memory BTCBParams = MarketParams({
+      loanToken: SPA,
+      collateralToken: BTCB,
+      oracle: multiOracle,
+      irm: alphaIrm,
+      lltv: lltv50
+    });
+
+    MarketParams memory USDTParams = MarketParams({
+      loanToken: SPA,
+      collateralToken: USDT,
+      oracle: multiOracle,
+      irm: alphaIrm,
+      lltv: lltv50
     });
 
     vm.startBroadcast(deployerPrivateKey);
@@ -67,11 +76,14 @@ contract MoolahVaultConfigDeploy is Script {
 
     vault.setFee(fee);
 
-    vault.setCap(slisBNBParams, 100000 ether);
+    vault.setCap(BTCBParams, 100_000_000 ether);
+    vault.setCap(USDTParams, 100_000_000 ether);
 
-    Id slisBNBId = slisBNBParams.id();
-    Id[] memory supplyQueue = new Id[](1);
-    supplyQueue[0] = slisBNBId;
+    Id BTCBId = BTCBParams.id();
+    Id USDTId = USDTParams.id();
+    Id[] memory supplyQueue = new Id[](2);
+    supplyQueue[0] = BTCBId;
+    supplyQueue[1] = USDTId;
 
     vault.setSupplyQueue(supplyQueue);
 
