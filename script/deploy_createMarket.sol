@@ -57,6 +57,7 @@ contract CreateMarketDeploy is Script {
   address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
   address alphaIrm = 0x5F9f9173B405C6CEAfa7f98d09e4B8447e9797E6;
 
+  uint256 lltv33 = 33 * 1e16;
   uint256 lltv50 = 50 * 1e16;
   uint256 lltv60 = 60 * 1e16;
   uint256 lltv70 = 70 * 1e16;
@@ -75,13 +76,7 @@ contract CreateMarketDeploy is Script {
     console.log("Deployer: ", deployer);
 
     MarketParams[] memory params = new MarketParams[](1);
-    params[0] = MarketParams({
-      loanToken: WBNB,
-      collateralToken: solvBTC_DLP,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv70
-    });
+    params[0] = MarketParams({ loanToken: USD1, collateralToken: ANKR, oracle: multiOracle, irm: irm, lltv: lltv33 });
 
     vm.startBroadcast(deployerPrivateKey);
     for (uint256 i = 0; i < 1; i++) {
