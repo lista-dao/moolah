@@ -23,7 +23,7 @@ import { SharesMathLib } from "./libraries/SharesMathLib.sol";
 import { MarketParamsLib } from "./libraries/MarketParamsLib.sol";
 import { SafeTransferLib } from "./libraries/SafeTransferLib.sol";
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
-import { IProvider } from "../provider/interfaces/IProvider.sol";
+import { IProvider, ISmartProvider } from "../provider/interfaces/IProvider.sol";
 
 /// @title Moolah
 /// @author Lista DAO
@@ -480,6 +480,37 @@ contract Moolah is
     uint256 repaidShares,
     bytes calldata data
   ) external whenNotPaused nonReentrant returns (uint256, uint256) {
+    return
+      _liquidate(
+        marketParams,
+        borrower,
+        seizedAssets,
+        repaidShares,
+        bytes(""), // payload
+        data
+      );
+  }
+
+  /// @inheritdoc IMoolahBase
+  function liquidate(
+    MarketParams memory marketParams,
+    address borrower,
+    uint256 seizedAssets,
+    uint256 repaidShares,
+    bytes memory payload, //min amounts for SmartProvider liquidation
+    bytes calldata data
+  ) external whenNotPaused nonReentrant returns (uint256, uint256) {
+    return _liquidate(marketParams, borrower, seizedAssets, repaidShares, payload, data);
+  }
+
+  function _liquidate(
+    MarketParams memory marketParams,
+    address borrower,
+    uint256 seizedAssets,
+    uint256 repaidShares,
+    bytes memory payload, //min amounts for SmartProvider liquidation
+    bytes calldata data
+  ) private returns (uint256, uint256) {
     Id id = marketParams.id();
     require(_checkLiquidationWhiteList(id, msg.sender), ErrorsLib.NOT_LIQUIDATION_WHITELIST);
     require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
@@ -538,7 +569,7 @@ contract Moolah is
     // `repaidAssets` may be greater than `totalBorrowAssets` by 1.
     emit EventsLib.Liquidate(
       id,
-      msg.sender,
+      msg.sender, // payable
       borrower,
       repaidAssets,
       repaidShares,
@@ -547,12 +578,20 @@ contract Moolah is
       badDebtShares
     );
 
+    require(payload.length == 0 || providers[id][marketParams.collateralToken] != address(0), ErrorsLib.NOT_SET);
     IERC20(marketParams.collateralToken).safeTransfer(msg.sender, seizedAssets);
 
     {
       address provider = providers[id][marketParams.collateralToken];
       if (provider != address(0)) {
-        IProvider(provider).liquidate(id, borrower);
+        if (payload.length == 0) {
+          // Non-SmartProvider liquidation
+          IProvider(provider).liquidate(id, borrower);
+        } else {
+          // SmartProvider liquidation
+          require(payload.length == 64, ErrorsLib.INCONSISTENT_INPUT); // 2 * 32 bytes
+          ISmartProvider(provider).liquidate(id, payable(msg.sender), seizedAssets, payload);
+        }
       }
     }
 

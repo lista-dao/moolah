@@ -8,3 +8,12 @@ interface IProvider {
 
   function TOKEN() external view returns (address);
 }
+
+interface ISmartProvider is IProvider {
+  function liquidate(
+    Id id,
+    address payable liquidator,
+    uint256 seizedAssets,
+    bytes calldata payload // abi encoded data of minAmounts
+  ) external;
+}
