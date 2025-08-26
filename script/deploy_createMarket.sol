@@ -42,6 +42,8 @@ contract CreateMarketDeploy is Script {
   address ptUSDe30OTC2025 = 0x607C834cfb7FCBbb341Cbe23f77A6E83bCf3F55c;
   address SPA = 0x1A9Fd6eC3144Da3Dd6Ea13Ec1C25C58423a379b1;
   address solvBTC_DLP = 0x647A50540F5a1058B206f5a3eB17f56f29127F53;
+  address OIK = 0xB035723D62e0e2ea7499D76355c9D560f13ba404;
+  address EGL1 = 0xf4B385849f2e817E92bffBfB9AEb48F950Ff4444;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
@@ -75,11 +77,38 @@ contract CreateMarketDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams[] memory params = new MarketParams[](1);
-    params[0] = MarketParams({ loanToken: USD1, collateralToken: ANKR, oracle: multiOracle, irm: irm, lltv: lltv33 });
+    MarketParams[] memory params = new MarketParams[](4);
+    params[0] = MarketParams({
+      loanToken: OIK,
+      collateralToken: BTCB,
+      oracle: multiOracle,
+      irm: alphaIrm,
+      lltv: lltv50
+    });
+    params[1] = MarketParams({
+      loanToken: OIK,
+      collateralToken: USDT,
+      oracle: multiOracle,
+      irm: alphaIrm,
+      lltv: lltv50
+    });
+    params[2] = MarketParams({
+      loanToken: EGL1,
+      collateralToken: BTCB,
+      oracle: multiOracle,
+      irm: alphaIrm,
+      lltv: lltv50
+    });
+    params[3] = MarketParams({
+      loanToken: EGL1,
+      collateralToken: USDT,
+      oracle: multiOracle,
+      irm: alphaIrm,
+      lltv: lltv50
+    });
 
     vm.startBroadcast(deployerPrivateKey);
-    for (uint256 i = 0; i < 1; i++) {
+    for (uint256 i = 0; i < 4; i++) {
       Id id = params[i].id();
       console.log("market id:");
       console.logBytes32(Id.unwrap(id));

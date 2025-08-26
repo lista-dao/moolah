@@ -9,16 +9,14 @@ import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 contract MoolahVaultConfigDeploy is Script {
   using MarketParamsLib for MarketParams;
   // todo update vault
-  MoolahVault abVault = MoolahVault(0x6d6783C146F2B0B2774C1725297f1845dc502525);
-  MoolahVault bVault = MoolahVault(0x6d6783C146F2B0B2774C1725297f1845dc502525);
-  MoolahVault b2Vault = MoolahVault(0x6d6783C146F2B0B2774C1725297f1845dc502525);
+  MoolahVault OIKVault = MoolahVault(0x6d6783C146F2B0B2774C1725297f1845dc502525);
+  MoolahVault EGL1Vault = MoolahVault(0x6d6783C146F2B0B2774C1725297f1845dc502525);
 
   uint256 fee = 50 * 1e16;
   address feeRecipient = 0x2E2Eed557FAb1d2E11fEA1E1a23FF8f1b23551f3;
   address skimRecipient = 0x1d60bBBEF79Fb9540D271Dbb01925380323A8f66;
-  address abWhiteList = 0x0DFbf9a67654969767E4a413c5D67a3a40e063F7;
-  address bWhiteList = 0x51325e07dA53EEebA02402B86Ef62B34a889c80c;
-  address b2WhiteList = 0x8adEf9e14747303745917249Dd7e9631Bb5a79e7;
+  address OIKWhiteList = 0x44a26069A57f61f290B49c8848f1F43786446976;
+  address EGL1WhiteList = 0xf4780c9929E713D0b0C6F6bcA3c2f94461106717;
 
   address ETH = 0x2170Ed0880ac9A755fd29B2688956BD959F933F8;
   address WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
@@ -31,6 +29,8 @@ contract MoolahVaultConfigDeploy is Script {
   address AB = 0x95034f653D5D161890836Ad2B6b8cc49D14e029a;
   address B = 0x6bdcCe4A559076e37755a78Ce0c06214E59e4444;
   address B2 = 0x783c3f003f172c6Ac5AC700218a357d2D66Ee2a2;
+  address OIK = 0xB035723D62e0e2ea7499D76355c9D560f13ba404;
+  address EGL1 = 0xf4B385849f2e817E92bffBfB9AEb48F950Ff4444;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
@@ -57,18 +57,17 @@ contract MoolahVaultConfigDeploy is Script {
 
     vm.startBroadcast(deployerPrivateKey);
 
-    configAB(deployer, abVault, abWhiteList);
-    configB(deployer, bVault, bWhiteList);
-    configB2(deployer, b2Vault, b2WhiteList);
+    configOIK(deployer, OIKVault, OIKWhiteList);
+    configEGL1(deployer, EGL1Vault, EGL1WhiteList);
 
     vm.stopBroadcast();
 
     console.log("vault config done!");
   }
 
-  function configAB(address deployer, MoolahVault vault, address whiteList) internal {
+  function configOIK(address deployer, MoolahVault vault, address whiteList) internal {
     MarketParams memory BTCBParams = MarketParams({
-      loanToken: AB,
+      loanToken: OIK,
       collateralToken: BTCB,
       oracle: multiOracle,
       irm: alphaIrm,
@@ -76,7 +75,7 @@ contract MoolahVaultConfigDeploy is Script {
     });
 
     MarketParams memory USDTParams = MarketParams({
-      loanToken: AB,
+      loanToken: OIK,
       collateralToken: USDT,
       oracle: multiOracle,
       irm: alphaIrm,
@@ -93,8 +92,8 @@ contract MoolahVaultConfigDeploy is Script {
 
     vault.addWhiteList(whiteList);
 
-    vault.setCap(BTCBParams, 25_000_000 ether);
-    vault.setCap(USDTParams, 25_000_000 ether);
+    vault.setCap(BTCBParams, 50_000_000 ether);
+    vault.setCap(USDTParams, 50_000_000 ether);
 
     Id BTCBId = BTCBParams.id();
     Id USDTId = USDTParams.id();
@@ -110,9 +109,9 @@ contract MoolahVaultConfigDeploy is Script {
     vault.updateWithdrawQueue(withdrawQueue);
   }
 
-  function configB(address deployer, MoolahVault vault, address whiteList) internal {
+  function configEGL1(address deployer, MoolahVault vault, address whiteList) internal {
     MarketParams memory BTCBParams = MarketParams({
-      loanToken: B,
+      loanToken: EGL1,
       collateralToken: BTCB,
       oracle: multiOracle,
       irm: alphaIrm,
@@ -120,7 +119,7 @@ contract MoolahVaultConfigDeploy is Script {
     });
 
     MarketParams memory USDTParams = MarketParams({
-      loanToken: B,
+      loanToken: EGL1,
       collateralToken: USDT,
       oracle: multiOracle,
       irm: alphaIrm,
@@ -138,8 +137,8 @@ contract MoolahVaultConfigDeploy is Script {
 
     vault.addWhiteList(whiteList);
 
-    vault.setCap(BTCBParams, 1_000_000 ether);
-    vault.setCap(USDTParams, 1_000_000 ether);
+    vault.setCap(BTCBParams, 50_000_000 ether);
+    vault.setCap(USDTParams, 50_000_000 ether);
 
     Id BTCBId = BTCBParams.id();
     Id USDTId = USDTParams.id();
