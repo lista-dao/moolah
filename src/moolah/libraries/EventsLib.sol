@@ -177,4 +177,10 @@ library EventsLib {
   /// @param token The token that was removed.
   /// @param provider The provider that was removed.
   event RemoveProvider(Id id, address token, address provider);
+
+  /// @notice Emitted when setting the market broker.
+  /// @param id The market id.
+  /// @param broker The broker address.
+  /// @param isAddition Whether the broker is being added or removed.
+  event SetMarketBroker(Id indexed id, address indexed broker, bool isAddition);
 }

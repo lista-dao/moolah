@@ -315,6 +315,9 @@ interface IMoolahBase {
   /// @notice get the provider for the market.
   function providers(Id id, address token) external view returns (address);
 
+  /// @notice get the broker for the market
+  function brokers(Id id) external view returns (address);
+
   /// @notice Return the whitelist of the market `id`.
   function getWhiteList(Id id) external view returns (address[] memory);
 
@@ -326,6 +329,9 @@ interface IMoolahBase {
 
   /// @notice Remove `account` from the whitelist of the market `id`.
   function removeWhiteList(Id id, address account) external;
+
+  /// @notice Set/Remove the market broker for the market `id`.
+  function setMarketBroker(Id id, address broker, bool isAddition) external;
 }
 
 /// @dev This interface is inherited by Moolah so that function signatures are checked by the compiler.
