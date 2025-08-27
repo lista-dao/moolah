@@ -24,6 +24,7 @@ import { SharesMathLib } from "./libraries/SharesMathLib.sol";
 import { MarketParamsLib } from "./libraries/MarketParamsLib.sol";
 import { SafeTransferLib } from "./libraries/SafeTransferLib.sol";
 import { IProvider } from "../provider/interfaces/IProvider.sol";
+import { IBroker } from "../provider/interfaces/IBroker.sol";
 
 /// @title Moolah
 /// @author Lista DAO
@@ -71,6 +72,10 @@ contract Moolah is
   /// if whitelist is set, only whitelisted addresses can supply, supply collateral, borrow
   mapping(Id => EnumerableSet.AddressSet) private whiteList;
 
+  /// @inheritdoc IMoolahBase
+  // fixed rate & fixed term brokers
+  mapping(Id => address) public brokers;
+  
   /// default market fee rate
   uint256 public defaultMarketFee;
 
@@ -255,6 +260,21 @@ contract Moolah is
 
     emit EventsLib.SetFlashLoanTokenBlacklist(token, isBlacklisted);
   }
+  
+  /// @inheritdoc IMoolahBase
+  function setMarketBroker(Id id, address broker, bool isAddition) external onlyRole(MANAGER) {
+    require(broker != address(0), ErrorsLib.ZERO_ADDRESS);
+    if (isAddition) {
+      require(brokers[id] != broker, ErrorsLib.ALREADY_SET);
+      require(IBroker(broker).LOAN_TOKEN() == idToMarketParams[id].loanToken, ErrorsLib.INVALID_BROKER);
+      require(IBroker(broker).COLLATERAL_TOKEN() == idToMarketParams[id].collateralToken, ErrorsLib.INVALID_BROKER);
+      brokers[id] = broker;
+    } else {
+      require(brokers[id] == broker, ErrorsLib.NOT_SET);
+      delete brokers[id];
+    }
+    emit EventsLib.SetMarketBroker(id, broker, isAddition);
+  }
 
   /* MARKET CREATION */
 
@@ -368,7 +388,11 @@ contract Moolah is
     require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
     // No need to verify that onBehalf != address(0) thanks to the following authorization check.
     address provider = providers[id][marketParams.loanToken];
-    if (provider == msg.sender) {
+    address broker = brokers[id];
+    // if broker exists, only broker can borrow
+    if (broker != address(0)) {
+      require(msg.sender == broker && receiver == broker, ErrorsLib.NOT_BROKER);
+    } else if (provider == msg.sender) {
       require(receiver == provider, ErrorsLib.NOT_PROVIDER);
     } else {
       require(_isSenderAuthorized(onBehalf), ErrorsLib.UNAUTHORIZED);
@@ -407,6 +431,12 @@ contract Moolah is
     require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
     require(UtilsLib.exactlyOneZero(assets, shares), ErrorsLib.INCONSISTENT_INPUT);
     require(onBehalf != address(0), ErrorsLib.ZERO_ADDRESS);
+
+    // if a broker is assigned for this market, only broker can repay
+    address broker = brokers[id];
+    if (broker != address(0)) {
+      require(msg.sender == broker, ErrorsLib.NOT_BROKER);
+    }
 
     _accrueInterest(marketParams, id);
 
