@@ -15,8 +15,8 @@ import { ErrorsLib } from "./libraries/ErrorsLib.sol";
 
 /// @dev Thrown when the rate is already set for this market.
 string constant RATE_SET = "rate set";
-/// @dev Thrown when the rate is zero or negative.
-string constant RATE_INVALID = "rate zero or negative";
+/// @dev Thrown when the rate is negative.
+string constant RATE_INVALID = "negative rate";
 /// @dev Thrown when trying to set a rate that is too high.
 string constant RATE_TOO_HIGH = "rate too high";
 
@@ -60,7 +60,7 @@ contract FixedRateIrm is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IF
 
   /// @inheritdoc IFixedRateIrm
   function setBorrowRate(Id id, int256 newBorrowRate) external onlyRole(MANAGER) {
-    require(newBorrowRate > 0, RATE_INVALID);
+    require(newBorrowRate >= 0, RATE_INVALID);
     require(newBorrowRate <= MAX_BORROW_RATE, RATE_TOO_HIGH);
     require(borrowRateStored[id] != newBorrowRate, RATE_SET);
 
@@ -74,7 +74,7 @@ contract FixedRateIrm is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IF
   /// @inheritdoc IIrm
   function borrowRateView(MarketParams memory marketParams, Market memory) public view returns (uint256) {
     int256 borrowRateCached = borrowRateStored[marketParams.id()];
-    require(borrowRateCached > 0, RATE_INVALID);
+    require(borrowRateCached >= 0, RATE_INVALID);
     int256 _borrowRate = borrowRateCached > MAX_BORROW_RATE ? MAX_BORROW_RATE : borrowRateCached;
     return uint256(_borrowRate);
   }
