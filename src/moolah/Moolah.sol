@@ -536,7 +536,7 @@ contract Moolah is
     _accrueInterest(marketParams, id);
 
     {
-      uint256 collateralPrice = getPrice(marketParams);
+      uint256 collateralPrice = _getPrice(marketParams, borrower);
 
       require(!_isHealthy(marketParams, id, borrower, collateralPrice), ErrorsLib.HEALTHY_POSITION);
 
@@ -723,7 +723,7 @@ contract Moolah is
   /// @dev Assumes that the inputs `marketParams` and `id` match.
   function _isHealthy(MarketParams memory marketParams, Id id, address borrower) internal view returns (bool) {
     if (position[id][borrower].borrowShares == 0) return true;
-    uint256 collateralPrice = getPrice(marketParams);
+    uint256 collateralPrice = _getPrice(marketParams, borrower);
 
     return _isHealthy(marketParams, id, borrower, collateralPrice);
   }
@@ -755,12 +755,35 @@ contract Moolah is
     return maxBorrow >= borrowed;
   }
 
-  function getPrice(MarketParams memory marketParams) public view returns (uint256) {
+  function getPrice(MarketParams memory marketParams) external view returns (uint256) {
+    return _getPrice(marketParams, address(0));
+  }
+
+  /// @dev Returns the price of the collateral asset in terms of the loan asset
+  /// @notice if there is a broker for the market and user address is non-zero
+  ///         will return a price which might deviates from the market price according to user's position
+  /// @param marketParams The market parameters
+  /// @param user The user address
+  /// @return The price of the collateral asset in terms of the loan asset
+  function _getPrice(MarketParams memory marketParams, address user) public view returns (uint256) {
     IOracle _oracle = IOracle(marketParams.oracle);
     uint256 baseTokenDecimals = IERC20Metadata(marketParams.collateralToken).decimals();
     uint256 quotaTokenDecimals = IERC20Metadata(marketParams.loanToken).decimals();
     uint256 basePrice = _oracle.peek(marketParams.collateralToken);
     uint256 quotaPrice = _oracle.peek(marketParams.loanToken);
+
+    address broker = brokers[marketParams.id()];
+    // if market has broker and user address is non-zero
+    if (broker != address(0) && user != address(0)) {
+      // get price from broker
+      // price deviatiates with user's position at broker
+      IBroker _broker = IBroker(broker);
+      basePrice = _broker.peek(marketParams.collateralToken, user);
+      quotaPrice = _broker.peek(marketParams.loanToken, user);
+    } else {
+      basePrice = _oracle.peek(marketParams.collateralToken);
+      quotaPrice = _oracle.peek(marketParams.loanToken);
+    }
 
     uint256 scaleFactor = 10 ** (36 + quotaTokenDecimals - baseTokenDecimals);
     return scaleFactor.mulDivDown(basePrice, quotaPrice);
@@ -833,7 +856,7 @@ contract Moolah is
     if (borrowAssets >= minLoan(marketParams)) {
       return true;
     }
-    return _isHealthy(marketParams, marketParams.id(), account, getPrice(marketParams));
+    return _isHealthy(marketParams, marketParams.id(), account, _getPrice(marketParams, account));
   }
 
   /// @inheritdoc IMoolahBase

@@ -7,4 +7,5 @@ import { Id } from "moolah/interfaces/IMoolah.sol";
 interface IBroker {
   function LOAN_TOKEN() external view returns (address);
   function COLLATERAL_TOKEN() external view returns (address);
+  function peek(address token, address user) external view returns (uint256 price);
 }
