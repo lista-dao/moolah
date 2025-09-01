@@ -9,11 +9,10 @@ import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 contract MoolahVaultDeploy is Script {
   address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
 
-  address AB = 0x95034f653D5D161890836Ad2B6b8cc49D14e029a;
-  address B = 0x6bdcCe4A559076e37755a78Ce0c06214E59e4444;
-  address B2 = 0x783c3f003f172c6Ac5AC700218a357d2D66Ee2a2;
+  address OIK = 0xB035723D62e0e2ea7499D76355c9D560f13ba404;
+  address EGL1 = 0xf4B385849f2e817E92bffBfB9AEb48F950Ff4444;
 
-  MoolahVault impl = MoolahVault(0xAaB62068D44C3b4D4214fb1d4645c071D978a777);
+  MoolahVault impl = MoolahVault(0xA1f832c7C7ECf91A53b4ff36E0ABdb5133C15982);
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -21,13 +20,11 @@ contract MoolahVaultDeploy is Script {
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
 
-    address abProxy = deployVault(deployer, AB, "AB Vault", "AB");
-    address bProxy = deployVault(deployer, B, "B Vault", "B");
-    address b2Proxy = deployVault(deployer, B2, "B2 Vault", "B2");
+    address abProxy = deployVault(deployer, OIK, "OIK Vault", "AB");
+    address bProxy = deployVault(deployer, EGL1, "EGL1 Vault", "B");
 
-    console.log("AB Vault proxy: ", abProxy);
-    console.log("B Vault proxy: ", bProxy);
-    console.log("B2 Vault proxy: ", b2Proxy);
+    console.log("OIK Vault proxy: ", abProxy);
+    console.log("EGL1 Vault proxy: ", bProxy);
     vm.stopBroadcast();
   }
 
