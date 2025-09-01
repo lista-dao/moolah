@@ -24,7 +24,7 @@ import { MarketParamsLib } from "./libraries/MarketParamsLib.sol";
 import { SafeTransferLib } from "./libraries/SafeTransferLib.sol";
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import { IProvider } from "../provider/interfaces/IProvider.sol";
-import { IBroker } from "../provider/interfaces/IBroker.sol";
+import { IBrokerBase } from "../provider/interfaces/IBroker.sol";
 
 /// @title Moolah
 /// @author Lista DAO
@@ -248,8 +248,8 @@ contract Moolah is
     require(broker != address(0), ErrorsLib.ZERO_ADDRESS);
     if (isAddition) {
       require(brokers[id] != broker, ErrorsLib.ALREADY_SET);
-      require(IBroker(broker).LOAN_TOKEN() == idToMarketParams[id].loanToken, ErrorsLib.INVALID_BROKER);
-      require(IBroker(broker).COLLATERAL_TOKEN() == idToMarketParams[id].collateralToken, ErrorsLib.INVALID_BROKER);
+      require(IBrokerBase(broker).LOAN_TOKEN() == idToMarketParams[id].loanToken, ErrorsLib.INVALID_BROKER);
+      require(IBrokerBase(broker).COLLATERAL_TOKEN() == idToMarketParams[id].collateralToken, ErrorsLib.INVALID_BROKER);
       brokers[id] = broker;
     } else {
       require(brokers[id] == broker, ErrorsLib.NOT_SET);
@@ -749,7 +749,7 @@ contract Moolah is
     if (broker != address(0) && user != address(0)) {
       // get price from broker
       // price deviatiates with user's position at broker
-      IBroker _broker = IBroker(broker);
+      IBrokerBase _broker = IBrokerBase(broker);
       basePrice = _broker.peek(marketParams.collateralToken, user);
       quotaPrice = _broker.peek(marketParams.loanToken, user);
     } else {
