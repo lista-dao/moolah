@@ -64,28 +64,6 @@ contract StableSwapPoolInfo is UUPSUpgradeable, AccessControlEnumerableUpgradeab
     amount_j = (amount_i * balance_j) / balance_i;
   }
 
-  /**
-   * @notice Calculate the slippage of adding liquidity to the pool
-   * @param _swap Address of the swap
-   * @param amounts Amounts of each currency to add
-   */
-  function calc_add_liquidity_slippage(address _swap, uint256[N_COINS] memory amounts) external view returns (int256) {
-    uint256 mint_amount = get_add_liquidity_mint_amount(_swap, amounts);
-
-    uint256 totalSupply = token(_swap).totalSupply();
-    if (totalSupply == 0) {
-      return 0;
-    }
-    uint256[N_COINS] memory old_balances = balances(_swap);
-    uint256[N_COINS] memory xp = _xp_mem(_swap, old_balances);
-
-    uint256 x = (totalSupply * amounts[0]) / xp[0];
-    uint256 y = (totalSupply * amounts[1]) / xp[1];
-    uint256 lp_ideal = x > y ? y : x; // smaller one
-
-    return int256(mint_amount) / int256(lp_ideal) - int256(1e18);
-  }
-
   function RATES(address _swap) public view returns (uint256[N_COINS] memory swapRATES) {
     for (uint256 i = 0; i < N_COINS; i++) {
       swapRATES[i] = IStableSwap(_swap).RATES(i);

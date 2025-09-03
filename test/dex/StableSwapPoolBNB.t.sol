@@ -164,9 +164,9 @@ contract StableSwapPoolBNBTest is Test {
 
     assertGe(token1PriceAfter, (oraclePrice1 * 97) / 100); // 3% price diff tolerance
     assertLe(token1PriceAfter, (oraclePrice1 * 103) / 100); // 3% price diff tolerance
-
     assertGe(token0PriceAfter, (oraclePrice0 * 97) / 100); // 3% price diff tolerance
     assertLe(token0PriceAfter, (oraclePrice0 * 103) / 100); // 3% price diff tolerance
+
     uint256 userBBalance0After = token0.balanceOf(userB);
     uint256 userBBalance1After = userB.balance;
     assertEq(userBBalance0After, userBBalance0Before - 100 ether);
