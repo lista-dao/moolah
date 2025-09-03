@@ -2,10 +2,14 @@
 pragma solidity 0.8.28;
 
 import { ERC20Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
+import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 
-contract StableSwapLPCollateral is ERC20Upgradeable {
+contract StableSwapLPCollateral is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerableUpgradeable {
+  address public immutable MOOLAH;
+
+  /// @notice The address of the minter. Should be the smart provider contract.
   address public minter;
-  address public moolah;
 
   /// @notice Checks if the msg.sender is the minter address.
   modifier onlyMinter() {
@@ -15,20 +19,45 @@ contract StableSwapLPCollateral is ERC20Upgradeable {
 
   /// @notice Checks if the msg.sender is the moolah address.
   modifier onlyMoolah() {
-    require(msg.sender == moolah, "Not moolah");
+    require(msg.sender == MOOLAH, "Not moolah");
     _;
   }
 
-  function initialize(address _moolah) external initializer {
+  event SetMinter(address newMinter);
+
+  constructor(address _moolah) {
     require(_moolah != address(0), "Zero address");
 
-    __ERC20_init("Lista StableSwap LPs", "Stable-LP");
-    minter = msg.sender;
-    moolah = _moolah;
+    _disableInitializers();
+    MOOLAH = _moolah;
+  }
+
+  function initialize(
+    address _admin,
+    address _minter,
+    string memory _name,
+    string memory _symbol
+  ) external initializer {
+    require(_admin != address(0) && _minter != address(0), "Zero address");
+
+    string memory name = string.concat(_name, " - Collateral");
+    string memory symbol = string.concat(_symbol, "-C");
+
+    __ERC20_init(name, symbol);
+    __AccessControl_init();
+
+    _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+    minter = _minter;
+
+    emit SetMinter(_minter);
   }
 
   function setMinter(address _newMinter) external onlyMinter {
+    require(_newMinter != address(0), "Zero address");
+    require(_newMinter != minter, "Same minter");
+
     minter = _newMinter;
+    emit SetMinter(_newMinter);
   }
 
   function mint(address _to, uint256 _amount) external onlyMinter {
@@ -45,4 +74,6 @@ contract StableSwapLPCollateral is ERC20Upgradeable {
     _transfer(owner, to, value);
     return true;
   }
+
+  function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 }

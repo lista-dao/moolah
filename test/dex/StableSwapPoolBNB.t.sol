@@ -12,8 +12,13 @@ import { ERC20Mock } from "../../src/moolah/mocks/ERC20Mock.sol";
 import { IOracle } from "../../src/moolah/interfaces/IOracle.sol";
 import "../../src/dex/interfaces/IStableSwap.sol";
 
+import { StableSwapFactory } from "../../src/dex/StableSwapFactory.sol";
+
 contract StableSwapPoolBNBTest is Test {
   address constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+  uint256 constant FEE_DENOMINATOR = 1e10;
+
+  StableSwapFactory factory;
 
   StableSwapPool pool;
   StableSwapPoolInfo poolInfo;
@@ -34,11 +39,14 @@ contract StableSwapPoolBNBTest is Test {
 
   function setUp() public {
     poolInfo = new StableSwapPoolInfo();
+    StableSwapFactory factoryImpl = new StableSwapFactory();
+    ERC1967Proxy factoryProxy = new ERC1967Proxy(
+      address(factoryImpl),
+      abi.encodeWithSelector(factoryImpl.initialize.selector, admin)
+    );
+    factory = StableSwapFactory(address(factoryProxy));
 
-    // Deploy LP token
-    StableSwapLP lpImpl = new StableSwapLP();
-    ERC1967Proxy lpProxy = new ERC1967Proxy(address(lpImpl), abi.encodeWithSelector(lpImpl.initialize.selector));
-    lp = StableSwapLP(address(lpProxy));
+    assertTrue(factory.hasRole(factory.DEFAULT_ADMIN_ROLE(), admin));
 
     token0 = new ERC20Mock();
 
@@ -61,25 +69,30 @@ contract StableSwapPoolBNBTest is Test {
     vm.mockCall(oracle, abi.encodeWithSelector(IOracle.peek.selector, address(token0)), abi.encode(8466e7));
     vm.mockCall(oracle, abi.encodeWithSelector(IOracle.peek.selector, token1), abi.encode(830e8));
 
-    StableSwapPool impl = new StableSwapPool();
-    ERC1967Proxy proxy = new ERC1967Proxy(
-      address(impl),
-      abi.encodeWithSelector(
-        impl.initialize.selector,
-        tokens,
-        _A,
-        _fee,
-        _adminFee,
-        admin,
-        manager,
-        pauser,
-        address(lp),
-        oracle
-      )
-    );
+    address lpImpl = address(new StableSwapLP());
+    address poolImpl = address(new StableSwapPool());
+    vm.startPrank(admin);
+    factory.SetImpls(lpImpl, poolImpl);
+    assertEq(factory.lpImpl(), lpImpl);
+    assertEq(factory.swapImpl(), poolImpl);
 
-    pool = StableSwapPool(address(proxy));
-    lp.setMinter(address(pool));
+    (address _lp, address _pool) = factory.createSwapPair(
+      address(token0),
+      token1,
+      "StableSwap LP Token",
+      "ss-LP",
+      _A,
+      _fee,
+      _adminFee,
+      admin,
+      manager,
+      pauser,
+      oracle
+    );
+    vm.stopPrank();
+
+    lp = StableSwapLP(_lp);
+    pool = StableSwapPool(_pool);
 
     assertEq(pool.coins(0), address(token0));
     assertEq(pool.coins(1), address(token1));

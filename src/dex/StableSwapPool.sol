@@ -21,8 +21,23 @@ contract StableSwapPool is
 {
   using SafeERC20 for IERC20;
 
+  uint256 public constant N_COINS = 2;
+
+  uint256 public constant MAX_DECIMAL = 18;
+  uint256 public constant FEE_DENOMINATOR = 1e10;
+  uint256 public constant PRECISION = 1e18;
   uint256[N_COINS] public PRECISION_MUL;
   uint256[N_COINS] public RATES;
+
+  uint256 public constant MAX_ADMIN_FEE = 1e10;
+  uint256 public constant MAX_FEE = 5e9;
+  uint256 public constant MAX_A = 1e6;
+  uint256 public constant MAX_A_CHANGE = 10;
+  uint256 public constant MIN_BNB_GAS = 2300;
+  uint256 public constant MAX_BNB_GAS = 23000;
+
+  uint256 public constant ADMIN_ACTIONS_DELAY = 3 days;
+  uint256 public constant MIN_RAMP_TIME = 1 days;
 
   address[N_COINS] public coins;
   uint256[N_COINS] public balances;

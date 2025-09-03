@@ -18,6 +18,7 @@ import { StableSwapLP } from "../../src/dex/StableSwapLP.sol";
 import { StableSwapLPCollateral } from "../../src/dex/StableSwapLPCollateral.sol";
 import { ERC20Mock } from "../../src/moolah/mocks/ERC20Mock.sol";
 import { IOracle } from "../../src/moolah/interfaces/IOracle.sol";
+import { StableSwapFactory } from "../../src/dex/StableSwapFactory.sol";
 
 contract SmartProviderTest is Test {
   address constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
@@ -27,6 +28,7 @@ contract SmartProviderTest is Test {
   using SharesMathLib for uint256;
 
   SmartProvider smartProvider;
+  StableSwapFactory factory;
   StableSwapPool dex;
   StableSwapPoolInfo dexInfo;
   StableSwapLP lp; // ss-lp
@@ -75,10 +77,10 @@ contract SmartProviderTest is Test {
     deployDexBnb();
 
     // Deploy LP Collateral
-    lpCollateral = new StableSwapLPCollateral();
+    lpCollateral = new StableSwapLPCollateral(moolahProxy);
     ERC1967Proxy lpCollateralProxy = new ERC1967Proxy(
       address(lpCollateral),
-      abi.encodeWithSelector(lpCollateral.initialize.selector, address(moolahProxy))
+      abi.encodeWithSelector(lpCollateral.initialize.selector, admin, address(this), lp.name(), lp.symbol())
     );
     lpCollateral = StableSwapLPCollateral(address(lpCollateralProxy));
 
@@ -99,7 +101,7 @@ contract SmartProviderTest is Test {
 
     // set minter for lp collateral
     lpCollateral.setMinter(address(smartProvider));
-    assertEq(lpCollateral.moolah(), address(moolah));
+    assertEq(lpCollateral.MOOLAH(), address(moolah));
     assertEq(lpCollateral.minter(), address(smartProvider));
 
     // create market
@@ -108,10 +110,14 @@ contract SmartProviderTest is Test {
 
   function deployDexBnb() public {
     dexInfo = new StableSwapPoolInfo();
-    // Deploy LP token
-    StableSwapLP lpImpl = new StableSwapLP();
-    ERC1967Proxy lpProxy = new ERC1967Proxy(address(lpImpl), abi.encodeWithSelector(lpImpl.initialize.selector));
-    lp = StableSwapLP(address(lpProxy));
+    StableSwapFactory factoryImpl = new StableSwapFactory();
+    ERC1967Proxy factoryProxy = new ERC1967Proxy(
+      address(factoryImpl),
+      abi.encodeWithSelector(factoryImpl.initialize.selector, admin)
+    );
+    factory = StableSwapFactory(address(factoryProxy));
+
+    assertTrue(factory.hasRole(factory.DEFAULT_ADMIN_ROLE(), admin));
 
     token0 = new ERC20Mock();
 
@@ -137,25 +143,30 @@ contract SmartProviderTest is Test {
 
     vm.mockCall(multiOracle, abi.encodeWithSelector(IOracle.peek.selector, USDT), abi.encode(1e8));
 
-    StableSwapPool impl = new StableSwapPool();
-    ERC1967Proxy proxy = new ERC1967Proxy(
-      address(impl),
-      abi.encodeWithSelector(
-        impl.initialize.selector,
-        tokens,
-        _A,
-        _fee,
-        _adminFee,
-        admin,
-        manager,
-        pauser,
-        address(lp),
-        multiOracle
-      )
-    );
+    address lpImpl = address(new StableSwapLP());
+    address poolImpl = address(new StableSwapPool());
+    vm.startPrank(admin);
+    factory.SetImpls(lpImpl, poolImpl);
+    assertEq(factory.lpImpl(), lpImpl);
+    assertEq(factory.swapImpl(), poolImpl);
 
-    dex = StableSwapPool(address(proxy));
-    lp.setMinter(address(dex));
+    (address _lp, address _pool) = factory.createSwapPair(
+      address(token0),
+      token1,
+      "StableSwap LP Token",
+      "ss-LP",
+      _A,
+      _fee,
+      _adminFee,
+      admin,
+      manager,
+      pauser,
+      multiOracle
+    );
+    vm.stopPrank();
+
+    lp = StableSwapLP(_lp);
+    dex = StableSwapPool(_pool);
 
     seedPool();
   }
