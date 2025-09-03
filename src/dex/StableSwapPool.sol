@@ -26,9 +26,14 @@ contract StableSwapPool is
 
   address[N_COINS] public coins;
   uint256[N_COINS] public balances;
-  uint256 public fee; // fee * 1e10. TODO: rename to fee_rate ?
-  uint256 public admin_fee; // admin_fee * 1e10. TODO: rename to admin_fee_rate ?
-  uint256 public bnb_gas = 4029; // transfer bnb gas.
+  /// @dev swap fee; fee * 1e10
+  /// TODO: rename to fee_rate ?
+  uint256 public fee;
+  /// @dev the percentage of the swap fee that is taken as an admin fee. admin_fee * 1e10.
+  /// TODO: rename to admin_fee_rate ?
+  uint256 public admin_fee;
+  /// @dev transfer bnb gas.
+  uint256 public bnb_gas = 4029;
 
   address public token;
 
