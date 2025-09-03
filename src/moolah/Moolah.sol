@@ -76,6 +76,9 @@ contract Moolah is
   /// if whitelist is set, only whitelisted addresses can supply, supply collateral, borrow
   mapping(Id => EnumerableSet.AddressSet) private whiteList;
 
+  /// default market fee rate
+  uint256 public defaultMarketFee;
+
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant PAUSER = keccak256("PAUSER"); // pauser role
   bytes32 public constant OPERATOR = keccak256("OPERATOR"); // operator role
@@ -142,6 +145,16 @@ contract Moolah is
     market[id].fee = uint128(newFee);
 
     emit EventsLib.SetFee(id, newFee);
+  }
+
+  /// @inheritdoc IMoolahBase
+  function setDefaultMarketFee(uint256 newFee) external onlyRole(MANAGER) {
+    require(newFee != defaultMarketFee, ErrorsLib.ALREADY_SET);
+    require(newFee <= MAX_FEE, ErrorsLib.MAX_FEE_EXCEEDED);
+
+    defaultMarketFee = newFee;
+
+    emit EventsLib.SetDefaultMarketFee(newFee);
   }
 
   /// @inheritdoc IMoolahBase
@@ -253,7 +266,7 @@ contract Moolah is
 
     // Safe "unchecked" cast.
     market[id].lastUpdate = uint128(block.timestamp);
-    market[id].fee = DEFAULT_FEE;
+    market[id].fee = uint128(defaultMarketFee);
     idToMarketParams[id] = marketParams;
     IOracle(marketParams.oracle).peek(marketParams.loanToken);
     IOracle(marketParams.oracle).peek(marketParams.collateralToken);

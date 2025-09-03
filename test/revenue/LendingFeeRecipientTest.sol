@@ -71,6 +71,7 @@ contract LendingFeeRecipientTest is Test {
     moolah.enableLltv(lltv);
     moolah.enableIrm(irm);
     moolah.setFeeRecipient(address(lendingFeeRecipient));
+    moolah.setDefaultMarketFee(0.05 ether);
 
     vault.grantRole(CURATOR_ROLE, OWNER);
     vault.grantRole(ALLOCATOR_ROLE, OWNER);

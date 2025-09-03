@@ -326,6 +326,12 @@ interface IMoolahBase {
 
   /// @notice Remove `account` from the whitelist of the market `id`.
   function removeWhiteList(Id id, address account) external;
+
+  /// @notice Returns the default market fee.
+  function defaultMarketFee() external view returns (uint256);
+
+  /// @notice Set the default market fee for new markets.
+  function setDefaultMarketFee(uint256 newFee) external;
 }
 
 /// @dev This interface is inherited by Moolah so that function signatures are checked by the compiler.

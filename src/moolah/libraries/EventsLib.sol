@@ -177,4 +177,8 @@ library EventsLib {
   /// @param token The token that was removed.
   /// @param provider The provider that was removed.
   event RemoveProvider(Id id, address token, address provider);
+
+  /// @notice Emitted when setting the default market fee.
+  /// @param fee The new default market fee.
+  event SetDefaultMarketFee(uint256 fee);
 }
