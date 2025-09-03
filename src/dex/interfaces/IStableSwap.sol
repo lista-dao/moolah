@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
+uint256 constant N_COINS = 2;
+
 // enum
 enum StableSwapType {
   BothERC20, // StableSwap with ERC20 tokens
@@ -9,21 +11,6 @@ enum StableSwapType {
   Others // unknown type
 }
 
-// constants
-uint256 constant N_COINS = 2;
-uint256 constant MAX_DECIMAL = 18;
-uint256 constant FEE_DENOMINATOR = 1e10;
-uint256 constant PRECISION = 1e18;
-uint256 constant MAX_ADMIN_FEE = 1e10;
-uint256 constant MAX_FEE = 5e9;
-uint256 constant MAX_A = 1e6;
-uint256 constant MAX_A_CHANGE = 10;
-uint256 constant MIN_BNB_GAS = 2300;
-uint256 constant MAX_BNB_GAS = 23000;
-
-uint256 constant ADMIN_ACTIONS_DELAY = 3 days;
-uint256 constant MIN_RAMP_TIME = 1 days;
-
 interface IStableSwap {
   function support_BNB() external view returns (bool);
 
@@ -31,7 +18,7 @@ interface IStableSwap {
 
   function balances(uint256 i) external view returns (uint256);
 
-  //  function N_COINS() external view returns (uint256);
+  function N_COINS() external view returns (uint256);
 
   function RATES(uint256 i) external view returns (uint256);
 
