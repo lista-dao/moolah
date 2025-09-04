@@ -14,6 +14,7 @@ struct FixedLoanPosition {
   uint256 apr;
   uint256 start;
   uint256 end;
+  uint256 lastRepaidTime;
   uint256 repaidPrincipal;
 }
 
@@ -44,7 +45,26 @@ interface IBroker is IBrokerBase {
   /// ------------------------------
   ///            Events
   /// ------------------------------
+  event DynamicLoanPositionUpdated(address indexed user, uint256 amount);
+  event FixedLoanPositionCreated(
+    address indexed user,
+    uint256 principal,
+    uint256 start,
+    uint256 end,
+    uint256 apr,
+    uint256 termId
+  );
+  event RepaidFixedLoanPosition(
+    address indexed user, 
+    uint256 principal,
+    uint256 start,
+    uint256 end,
+    uint256 apr,
+    uint256 repaidPrincipal,
+    bool fullyRepaid
+  );
   event MaxFixedLoanPositionsUpdated(uint256 oldMax, uint256 newMax);
+  event FixedTermAndRateUpdated(uint256 termId, uint256 duration, uint256 apr);
 
   /// ------------------------------
   ///        View functions
