@@ -61,6 +61,8 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
     string memory _name,
     string memory _symbol
   ) public returns (address) {
+    require(lpImpl != address(0), "LP implementation not set");
+
     // create LP token
     address minter = address(this);
     ERC1967Proxy proxy = new ERC1967Proxy(
@@ -87,7 +89,9 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
     address _lp,
     address _oracle
   ) internal returns (address) {
+    require(swapImpl != address(0), "Swap implementation not set");
     require(_tokenA != address(0) && _tokenB != address(0) && _tokenA != _tokenB, "Illegal token");
+
     (address t0, address t1) = sortTokens(_tokenA, _tokenB);
     address[N_COINS] memory coins = [t0, t1];
 
@@ -166,7 +170,7 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
     addPairInfoInternal(_swapContract, swap.coins(0), swap.coins(1), swap.token());
   }
 
-  function SetImpls(address _newLpImpl, address _newSwapImpl) external onlyRole(DEFAULT_ADMIN_ROLE) {
+  function setImpls(address _newLpImpl, address _newSwapImpl) external onlyRole(DEFAULT_ADMIN_ROLE) {
     require(_newLpImpl != address(0) && _newSwapImpl != address(0), "Zero address");
 
     if (_newLpImpl != lpImpl) {
