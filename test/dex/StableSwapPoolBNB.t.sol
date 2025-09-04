@@ -72,7 +72,7 @@ contract StableSwapPoolBNBTest is Test {
     address lpImpl = address(new StableSwapLP());
     address poolImpl = address(new StableSwapPool());
     vm.startPrank(admin);
-    factory.SetImpls(lpImpl, poolImpl);
+    factory.setImpls(lpImpl, poolImpl);
     assertEq(factory.lpImpl(), lpImpl);
     assertEq(factory.swapImpl(), poolImpl);
 
