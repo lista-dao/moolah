@@ -45,8 +45,8 @@ contract StableSwapLP is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumera
     _mint(_to, _amount);
   }
 
-  function burnFrom(address _to, uint256 _amount) external onlyMinter {
-    _burn(_to, _amount);
+  function burnFrom(address _from, uint256 _amount) external onlyMinter {
+    _burn(_from, _amount);
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
