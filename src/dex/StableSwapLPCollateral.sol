@@ -64,8 +64,8 @@ contract StableSwapLPCollateral is ERC20Upgradeable, UUPSUpgradeable, AccessCont
     _mint(_to, _amount);
   }
 
-  function burn(address _to, uint256 _amount) external onlyMinter {
-    _burn(_to, _amount);
+  function burn(address _from, uint256 _amount) external onlyMinter {
+    _burn(_from, _amount);
   }
 
   /// @dev only Moolah can transfer
