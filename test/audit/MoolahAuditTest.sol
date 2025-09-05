@@ -191,7 +191,7 @@ contract MoolahAuditTest is Test {
 
     Id marketId = testMarketParams.id();
     uint128 fee = moolah.market(marketId).fee;
-    assertTrue(fee != 0, "fee should not be 0");
+    assertTrue(fee == 0, "fee should be 0");
   }
 
   function test_supplyLessThanMinLoanValue() public {

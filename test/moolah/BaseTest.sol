@@ -95,6 +95,7 @@ contract BaseTest is Test {
     moolah.enableIrm(address(irm));
     moolah.enableLltv(0);
     moolah.setFeeRecipient(FEE_RECIPIENT);
+    moolah.setDefaultMarketFee(0.05 ether);
     vm.stopPrank();
 
     loanToken.approve(address(moolah), type(uint256).max);
