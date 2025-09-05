@@ -142,8 +142,8 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     address onBehalf,
     uint256 amount0,
     uint256 amount1,
-    uint256 minLpAmount, // slippage tolerance
-    bytes calldata data // pass to Moolah contract
+    uint256 minLpAmount,
+    bytes calldata data
   ) external payable {
     require(marketParams.collateralToken == TOKEN, "invalid collateral token");
     address token0 = token(0);
@@ -151,12 +151,19 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
 
     // validate msg.value, amount0 and amount1
     StableSwapType dexType = IStableSwapPoolInfo(dexInfo).stableSwapType(dex);
-    require(
-      (dexType == StableSwapType.BothERC20 && msg.value == 0 && amount0 > 0 && amount1 > 0) ||
-        (dexType == StableSwapType.Token0Bnb && amount0 == msg.value && amount1 > 0) ||
-        (dexType == StableSwapType.Token1Bnb && amount1 == msg.value && amount0 > 0),
-      "invalid value or amounts"
-    );
+
+    if (dexType == StableSwapType.BothERC20) {
+      require(msg.value == 0, "msg.value must be 0");
+      require(amount0 > 0 || amount1 > 0, "invalid amounts");
+    } else if (dexType == StableSwapType.Token0Bnb) {
+      require(amount0 == msg.value, "amount0 should equal msg.value");
+      require(amount0 > 0 || amount1 > 0, "invalid amounts");
+    } else if (dexType == StableSwapType.Token1Bnb) {
+      require(amount1 == msg.value, "amount1 should equal msg.value");
+      require(amount0 > 0 || amount1 > 0, "invalid amounts");
+    } else {
+      revert("unsupported dex type");
+    }
 
     // validate slippage before adding liquidity
     uint256 expectLpToMint = IStableSwapPoolInfo(dexInfo).get_add_liquidity_mint_amount(dex, [amount0, amount1]);
@@ -168,25 +175,26 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
       IERC20(token0).safeIncreaseAllowance(dex, amount0);
       IERC20(token1).safeIncreaseAllowance(dex, amount1);
 
-      IERC20(token0).safeTransferFrom(msg.sender, address(this), amount0);
-      IERC20(token1).safeTransferFrom(msg.sender, address(this), amount1);
+      if (amount0 > 0) IERC20(token0).safeTransferFrom(msg.sender, address(this), amount0);
+      if (amount1 > 0) IERC20(token1).safeTransferFrom(msg.sender, address(this), amount1);
 
       IStableSwap(dex).add_liquidity([amount0, amount1], minLpAmount);
     } else if (dexType == StableSwapType.Token0Bnb) {
       IERC20(token1).safeIncreaseAllowance(dex, amount1);
-      IERC20(token1).safeTransferFrom(msg.sender, address(this), amount1);
+      if (amount1 > 0) IERC20(token1).safeTransferFrom(msg.sender, address(this), amount1);
 
       IStableSwap(dex).add_liquidity{ value: amount0 }([amount0, amount1], minLpAmount);
     } else if (dexType == StableSwapType.Token1Bnb) {
       IERC20(token0).safeIncreaseAllowance(dex, amount0);
-      IERC20(token0).safeTransferFrom(msg.sender, address(this), amount0);
+      if (amount0 > 0) IERC20(token0).safeTransferFrom(msg.sender, address(this), amount0);
 
       IStableSwap(dex).add_liquidity{ value: amount1 }([amount0, amount1], minLpAmount);
     }
 
     // validate the actual LP amount minted
     actualLpAmount = IERC20(dexLP).balanceOf(address(this)) - actualLpAmount;
-    require(actualLpAmount >= minLpAmount, "slippage too high");
+    require(actualLpAmount > 0, "no lp minted");
+    require(actualLpAmount >= minLpAmount, "actual slippage too high");
 
     // 1:1 mint collateral token
     IStableSwapLPCollateral(TOKEN).mint(address(this), actualLpAmount);
@@ -210,8 +218,8 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
   function withdrawCollateral(
     MarketParams calldata marketParams,
     uint256 collateralAmount,
-    uint256 minToken0Amount, // slippage tolerance
-    uint256 minToken1Amount, // slippage tolerance
+    uint256 minToken0Amount,
+    uint256 minToken1Amount,
     address onBehalf,
     address payable receiver
   ) external {
@@ -256,11 +264,12 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
     require(isSenderAuthorized(msg.sender, onBehalf), "unauthorized sender");
     require(marketParams.collateralToken == TOKEN, "invalid collateral token");
+    require(maxCollateralAmount > 0, "invalid collateral amount");
 
     // validate slippage before removing liquidity
     uint256[2] memory amounts = [token0Amount, token1Amount];
-    uint256 maxBurnAmount = IStableSwap(dex).calc_token_amount(amounts, false);
-    require(maxBurnAmount <= maxCollateralAmount, "cap too low");
+    uint256 expectBurnAmount = IStableSwap(dex).calc_token_amount(amounts, false);
+    require(expectBurnAmount <= maxCollateralAmount, "slippage too high");
 
     // remove liquidity from the stableswap pool
     IERC20(dexLP).safeIncreaseAllowance(dex, maxCollateralAmount);
@@ -268,7 +277,7 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     uint256 actualBurnAmount = IERC20(dexLP).balanceOf(address(this));
     IStableSwap(dex).remove_liquidity_imbalance(amounts, maxCollateralAmount);
     actualBurnAmount = actualBurnAmount - IERC20(dexLP).balanceOf(address(this));
-    require(actualBurnAmount <= maxCollateralAmount, "slippage too high");
+    require(actualBurnAmount <= maxCollateralAmount, "actual slippage too high");
 
     // withdraw collateral
     MOOLAH.withdrawCollateral(marketParams, actualBurnAmount, onBehalf, address(this));
@@ -276,8 +285,8 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     // burn collateral token
     IStableSwapLPCollateral(TOKEN).burn(address(this), actualBurnAmount);
 
-    transferOutTo(0, token0Amount, receiver);
-    transferOutTo(1, token1Amount, receiver);
+    if (token0Amount > 0) transferOutTo(0, token0Amount, receiver);
+    if (token1Amount > 0) transferOutTo(1, token1Amount, receiver);
 
     emit WithdrawCollateral(TOKEN, onBehalf, actualBurnAmount, token0Amount, token1Amount, receiver);
   }
@@ -287,15 +296,15 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
    * @param marketParams The market parameters.
    * @param collateralAmount The amount of lp to withdraw.
    * @param i The index of the token to withdraw (0 or 1).
-   * @param minTokenAmount The minimum amount of the specified token to receive (slippage tolerance).
+   * @param minTokenAmount The minimum amount of the specified token i to receive (slippage tolerance).
    * @param onBehalf The address of the position owner.
    * @param receiver The address to receive the withdrawn tokens.
    */
   function withdrawCollateralOneCoin(
     MarketParams calldata marketParams,
     uint256 collateralAmount,
-    uint256 i, // token index
-    uint256 minTokenAmount, // slippage tolerance
+    uint256 i,
+    uint256 minTokenAmount,
     address onBehalf,
     address payable receiver
   ) external {
@@ -305,7 +314,7 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     require(marketParams.collateralToken == TOKEN, "invalid collateral token");
     require(i == 0 || i == 1, "invalid token index");
 
-    // remove liquidity from the stableswap pool
+    // validate expectAmount of token i before removing liquidity
     uint256 expectAmount = IStableSwap(dex).calc_withdraw_one_coin(collateralAmount, i);
     require(expectAmount >= minTokenAmount, "slippage too high");
 
@@ -323,7 +332,7 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     // burn collateral token
     IStableSwapLPCollateral(TOKEN).burn(address(this), collateralAmount);
 
-    transferOutTo(i, actualAmount, receiver);
+    if (actualAmount > 0) transferOutTo(i, actualAmount, receiver);
 
     emit WithdrawCollateral(
       TOKEN,
@@ -336,7 +345,7 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
   }
 
   /**
-   * @dev Transfers the specified amount of the token at index `i` to the receiver.
+   * @dev Transfers the specified amount of the token i to the receiver.
    * @param i The index of the token (0 or 1).
    * @param amount The amount of the token to transfer.
    * @param receiver The address to receive the tokens.
@@ -371,7 +380,7 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     Id id,
     address payable liquidator,
     uint256 seizedAssets,
-    bytes calldata payload // minAmount0 and minAmount1 are encoded in the payload
+    bytes calldata payload
   ) external onlyMoolah {
     MarketParams memory marketParams = MOOLAH.idToMarketParams(id);
     require(marketParams.collateralToken == TOKEN, "invalid collateral token");
@@ -443,7 +452,7 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
 
   /// @dev Returns the price of the token in 8 decimal format.
   function peek(address _token) external view returns (uint256) {
-    if (_token == TOKEN) {
+    if (_token == TOKEN || _token == dexLP) {
       // if token is dexLP, return the price of the LP token
       uint256[2] memory amounts = IStableSwapPoolInfo(dexInfo).calc_coins_amount(dex, 1 ether);
       uint256 price0 = _peek(IStableSwap(dex).coins(0));
@@ -465,10 +474,10 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
 
   /// @dev Returns the oracle configuration for the specified token.
   function getTokenConfig(address _token) external view returns (TokenConfig memory) {
-    if (_token == TOKEN) {
+    if (_token == TOKEN || _token == dexLP) {
       return
         TokenConfig({
-          asset: TOKEN,
+          asset: _token,
           oracles: [address(this), address(0), address(0)],
           enableFlagsForOracles: [true, false, false],
           timeDeltaTolerance: 0
@@ -476,13 +485,17 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     }
 
     if (_token == BNB_ADDRESS) {
-      return IOracle(resilientOracle).getTokenConfig(WBNB);
+      TokenConfig memory config = IOracle(resilientOracle).getTokenConfig(WBNB);
+      config.asset = _token;
+      return config;
     } else {
       return IOracle(resilientOracle).getTokenConfig(_token);
     }
   }
 
-  receive() external payable {}
+  receive() external payable {
+    require(msg.sender == dex, "not dex");
+  }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 }

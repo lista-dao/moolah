@@ -71,7 +71,7 @@ contract StableSwapPool is
   uint256 public price0DiffThreshold;
   /// @dev the threshold for token1 price difference between the pool and the oracle, in 1e18 precision
   uint256 public price1DiffThreshold;
-
+  /// @dev can only be initialized by the ss factory
   address public immutable STABLESWAP_FACTORY;
   bytes32 public constant MANAGER = keccak256("MANAGER");
   bytes32 public constant PAUSER = keccak256("PAUSER");
@@ -79,9 +79,9 @@ contract StableSwapPool is
   /* CONSTRUCTOR */
 
   /// @custom:oz-upgrades-unsafe-allow constructor
-  constructor() {
+  constructor(address _factory) {
     _disableInitializers();
-    //    STABLESWAP_FACTORY = msg.sender;
+    STABLESWAP_FACTORY = _factory;
   }
 
   /**
@@ -106,7 +106,7 @@ contract StableSwapPool is
     address _LP,
     address _oracle
   ) public initializer {
-    //        require(msg.sender == STABLESWAP_FACTORY, "Operations: Not factory");
+    require(msg.sender == STABLESWAP_FACTORY, "Operations: Not factory");
     require(_A <= MAX_A, "_A exceeds maximum");
     require(_fee <= MAX_FEE, "_fee exceeds maximum");
     require(_admin_fee <= MAX_ADMIN_FEE, "_admin_fee exceeds maximum");
@@ -131,7 +131,7 @@ contract StableSwapPool is
         coinDecimal = IERC20Metadata(_coins[i]).decimals();
       }
       require(coinDecimal <= MAX_DECIMAL, "The maximum decimal cannot exceed 18");
-      //set PRECISION_MUL and  RATES
+      //set PRECISION_MUL and RATES
       PRECISION_MUL[i] = 10 ** (MAX_DECIMAL - coinDecimal);
       RATES[i] = PRECISION * PRECISION_MUL[i];
     }
