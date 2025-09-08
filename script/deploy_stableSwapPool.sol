@@ -65,10 +65,10 @@ contract StableSwapFactoryDeploy is Script {
     console.log("StableSwapFactory Proxy deployed to: ", address(proxy));
   }
 
-  function deployImpls() public returns (address, address) {
+  function deployImpls(address factory) public returns (address, address) {
     StableSwapLP lpImpl = new StableSwapLP();
     console.log("StableSwapLP impl deployed to: ", address(lpImpl));
-    StableSwapPool poolImpl = new StableSwapPool();
+    StableSwapPool poolImpl = new StableSwapPool(factory);
     console.log("StableSwapPool impl deployed to: ", address(poolImpl));
     return (address(lpImpl), address(poolImpl));
   }

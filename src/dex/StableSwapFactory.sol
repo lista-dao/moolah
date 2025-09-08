@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
+import { IAccessControlEnumerable } from "@openzeppelin/contracts/access/extensions/IAccessControlEnumerable.sol";
 import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
@@ -19,6 +20,8 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
   mapping(uint256 => address) public swapPairContract;
   uint256 public pairLength;
 
+  bytes32 public DEPLOYER = keccak256("DEPLOYER");
+
   struct StableSwapPairInfo {
     address swapContract;
     address token0;
@@ -35,15 +38,18 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
     _disableInitializers();
   }
 
-  function initialize(address admin) public initializer {
+  function initialize(address admin, address[] memory deployers) public initializer {
     require(admin != address(0), "Zero address");
 
     __AccessControl_init();
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
+    for (uint256 i = 0; i < deployers.length; i++) {
+      _grantRole(DEPLOYER, deployers[i]);
+    }
   }
 
   // returns sorted token addresses, used to handle return values from pairs sorted in this order
-  function sortTokens(address tokenA, address tokenB) internal pure returns (address token0, address token1) {
+  function sortTokens(address tokenA, address tokenB) public pure returns (address token0, address token1) {
     require(tokenA != tokenB, "IDENTICAL_ADDRESSES");
     (token0, token1) = tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
   }
@@ -57,17 +63,17 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
   function createSwapLP(
     address _tokenA,
     address _tokenB,
-    address _admin,
     string memory _name,
     string memory _symbol
-  ) public returns (address) {
+  ) public onlyRole(DEPLOYER) returns (address) {
     require(lpImpl != address(0), "LP implementation not set");
 
     // create LP token
+    address admin = address(this);
     address minter = address(this);
     ERC1967Proxy proxy = new ERC1967Proxy(
       lpImpl,
-      abi.encodeWithSignature("initialize(address,address,string,string)", _admin, minter, _name, _symbol)
+      abi.encodeWithSignature("initialize(address,address,string,string)", admin, minter, _name, _symbol)
     );
 
     // minter is factory contract
@@ -135,19 +141,21 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
     address _manager,
     address _pauser,
     address _oracle
-  ) external onlyRole(DEFAULT_ADMIN_ROLE) returns (address lp, address swapContract) {
+  ) external onlyRole(DEPLOYER) returns (address lp, address swapContract) {
     require(swapImpl != address(0) && lpImpl != address(0), "Implementation not set");
     require(_tokenA != address(0) && _tokenB != address(0) && _tokenA != _tokenB, "Illegal token");
     (address t0, address t1) = sortTokens(_tokenA, _tokenB);
 
-    // 1. create LP token
-    lp = createSwapLP(t0, t1, _admin, _name, _symbol);
+    // 1. create LP token; tranfer admin role after set minter
+    lp = createSwapLP(t0, t1, _name, _symbol);
 
     // 2. create stable swap pool
     swapContract = _createSwapPair(t0, t1, _A, _fee, _admin_fee, _admin, _manager, _pauser, lp, _oracle);
 
-    // 3. transfer minter to swap contract
+    // 3. transfer minter to swap contract; TODO tranfer admin role of lp to _admin
     IStableSwapLP(lp).setMinter(swapContract);
+    IAccessControlEnumerable(lp).grantRole(DEFAULT_ADMIN_ROLE, _admin);
+    IAccessControlEnumerable(lp).revokeRole(DEFAULT_ADMIN_ROLE, address(this));
     addPairInfoInternal(swapContract, t0, t1, lp);
   }
 

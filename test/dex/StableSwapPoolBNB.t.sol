@@ -31,6 +31,8 @@ contract StableSwapPoolBNBTest is Test {
   address admin = makeAddr("admin");
   address manager = makeAddr("manager");
   address pauser = makeAddr("pauser");
+  address deployer1 = makeAddr("deployer1");
+  address deployer2 = makeAddr("deployer2");
   address oracle = makeAddr("oracle");
 
   address userA = makeAddr("userA");
@@ -39,14 +41,19 @@ contract StableSwapPoolBNBTest is Test {
 
   function setUp() public {
     poolInfo = new StableSwapPoolInfo();
+    address[] memory deployers = new address[](2);
+    deployers[0] = deployer1;
+    deployers[1] = deployer2;
     StableSwapFactory factoryImpl = new StableSwapFactory();
     ERC1967Proxy factoryProxy = new ERC1967Proxy(
       address(factoryImpl),
-      abi.encodeWithSelector(factoryImpl.initialize.selector, admin)
+      abi.encodeWithSelector(factoryImpl.initialize.selector, admin, deployers)
     );
     factory = StableSwapFactory(address(factoryProxy));
 
     assertTrue(factory.hasRole(factory.DEFAULT_ADMIN_ROLE(), admin));
+    assertTrue(factory.hasRole(factory.DEPLOYER(), deployer1));
+    assertTrue(factory.hasRole(factory.DEPLOYER(), deployer2));
 
     token0 = new ERC20Mock();
 
@@ -70,12 +77,13 @@ contract StableSwapPoolBNBTest is Test {
     vm.mockCall(oracle, abi.encodeWithSelector(IOracle.peek.selector, token1), abi.encode(830e8));
 
     address lpImpl = address(new StableSwapLP());
-    address poolImpl = address(new StableSwapPool());
-    vm.startPrank(admin);
+    address poolImpl = address(new StableSwapPool(address(factory)));
+    vm.prank(admin);
     factory.setImpls(lpImpl, poolImpl);
     assertEq(factory.lpImpl(), lpImpl);
     assertEq(factory.swapImpl(), poolImpl);
 
+    vm.startPrank(deployer1);
     (address _lp, address _pool) = factory.createSwapPair(
       address(token0),
       token1,

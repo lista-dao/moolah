@@ -27,22 +27,6 @@ contract StableSwapPoolInfo is UUPSUpgradeable, AccessControlEnumerableUpgradeab
     return IERC20(IStableSwap(_swap).token());
   }
 
-  function stableSwapType(address _swap) public view returns (StableSwapType) {
-    IStableSwap swap = IStableSwap(_swap);
-
-    bool supportBnb = swap.support_BNB();
-
-    if (supportBnb && swap.coins(0) == BNB_ADDRESS) {
-      return StableSwapType.Token0Bnb; // token0 is BNB
-    } else if (supportBnb && swap.coins(1) == BNB_ADDRESS) {
-      return StableSwapType.Token1Bnb; // token1 is BNB
-    } else if (!supportBnb) {
-      return StableSwapType.BothERC20; // both tokens are ERC20
-    } else {
-      return StableSwapType.Others; // unknown type
-    }
-  }
-
   function balances(address _swap) public view returns (uint256[N_COINS] memory swapBalances) {
     for (uint256 i = 0; i < N_COINS; i++) {
       swapBalances[i] = IStableSwap(_swap).balances(i);
