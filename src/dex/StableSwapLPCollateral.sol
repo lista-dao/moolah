@@ -52,7 +52,7 @@ contract StableSwapLPCollateral is ERC20Upgradeable, UUPSUpgradeable, AccessCont
     emit SetMinter(_minter);
   }
 
-  function setMinter(address _newMinter) external onlyMinter {
+  function setMinter(address _newMinter) external onlyRole(DEFAULT_ADMIN_ROLE) {
     require(_newMinter != address(0), "Zero address");
     require(_newMinter != minter, "Same minter");
 

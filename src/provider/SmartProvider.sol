@@ -3,8 +3,6 @@ pragma solidity 0.8.28;
 
 import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
-
-import { ISmartProvider } from "./interfaces/IProvider.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -15,6 +13,7 @@ import { Id, IMoolah, MarketParams, Market } from "../moolah/interfaces/IMoolah.
 import { ErrorsLib } from "../moolah/libraries/ErrorsLib.sol";
 import { UtilsLib } from "../moolah/libraries/UtilsLib.sol";
 
+import { ISmartProvider } from "./interfaces/IProvider.sol";
 import { IStableSwap, IStableSwapPoolInfo, StableSwapType } from "../dex/interfaces/IStableSwap.sol";
 import { IStableSwapLPCollateral } from "../dex/interfaces/IStableSwapLPCollateral.sol";
 import { IOracle, TokenConfig } from "../moolah/interfaces/IOracle.sol";
@@ -46,7 +45,6 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
   /// @dev resilient oracle address
   address public resilientOracle;
 
-  address public constant WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
   address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
   bytes32 public constant MANAGER = keccak256("MANAGER");
 
@@ -150,20 +148,14 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     address token1 = token(1);
 
     // validate msg.value, amount0 and amount1
-    StableSwapType dexType = IStableSwapPoolInfo(dexInfo).stableSwapType(dex);
-
-    if (dexType == StableSwapType.BothERC20) {
-      require(msg.value == 0, "msg.value must be 0");
-      require(amount0 > 0 || amount1 > 0, "invalid amounts");
-    } else if (dexType == StableSwapType.Token0Bnb) {
+    if (token0 == BNB_ADDRESS) {
       require(amount0 == msg.value, "amount0 should equal msg.value");
-      require(amount0 > 0 || amount1 > 0, "invalid amounts");
-    } else if (dexType == StableSwapType.Token1Bnb) {
+    } else if (token1 == BNB_ADDRESS) {
       require(amount1 == msg.value, "amount1 should equal msg.value");
-      require(amount0 > 0 || amount1 > 0, "invalid amounts");
     } else {
-      revert("unsupported dex type");
+      require(msg.value == 0, "msg.value must be 0");
     }
+    require(amount0 > 0 || amount1 > 0, "invalid amounts");
 
     // validate slippage before adding liquidity
     uint256 expectLpToMint = IStableSwapPoolInfo(dexInfo).get_add_liquidity_mint_amount(dex, [amount0, amount1]);
@@ -171,25 +163,20 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
 
     // add liquidity to the stableswap pool
     uint256 actualLpAmount = IERC20(dexLP).balanceOf(address(this));
-    if (dexType == StableSwapType.BothERC20) {
+    if (token0 == BNB_ADDRESS) {
+      IERC20(token1).safeIncreaseAllowance(dex, amount1);
+      if (amount1 > 0) IERC20(token1).safeTransferFrom(msg.sender, address(this), amount1);
+    } else if (token1 == BNB_ADDRESS) {
+      IERC20(token0).safeIncreaseAllowance(dex, amount0);
+      if (amount0 > 0) IERC20(token0).safeTransferFrom(msg.sender, address(this), amount0);
+    } else {
       IERC20(token0).safeIncreaseAllowance(dex, amount0);
       IERC20(token1).safeIncreaseAllowance(dex, amount1);
 
       if (amount0 > 0) IERC20(token0).safeTransferFrom(msg.sender, address(this), amount0);
       if (amount1 > 0) IERC20(token1).safeTransferFrom(msg.sender, address(this), amount1);
-
-      IStableSwap(dex).add_liquidity([amount0, amount1], minLpAmount);
-    } else if (dexType == StableSwapType.Token0Bnb) {
-      IERC20(token1).safeIncreaseAllowance(dex, amount1);
-      if (amount1 > 0) IERC20(token1).safeTransferFrom(msg.sender, address(this), amount1);
-
-      IStableSwap(dex).add_liquidity{ value: amount0 }([amount0, amount1], minLpAmount);
-    } else if (dexType == StableSwapType.Token1Bnb) {
-      IERC20(token0).safeIncreaseAllowance(dex, amount0);
-      if (amount0 > 0) IERC20(token0).safeTransferFrom(msg.sender, address(this), amount0);
-
-      IStableSwap(dex).add_liquidity{ value: amount1 }([amount0, amount1], minLpAmount);
     }
+    IStableSwap(dex).add_liquidity{ value: msg.value }([amount0, amount1], minLpAmount);
 
     // validate the actual LP amount minted
     actualLpAmount = IERC20(dexLP).balanceOf(address(this)) - actualLpAmount;
@@ -433,14 +420,11 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
   /// @param i The index of the token (0 or 1).
   function getTokenBalance(uint256 i) public view returns (uint256) {
     address _token = token(i);
-    StableSwapType dexType = IStableSwapPoolInfo(dexInfo).stableSwapType(dex);
 
-    if (i == 0) {
-      return dexType == StableSwapType.Token0Bnb ? address(this).balance : IERC20(_token).balanceOf(address(this));
-    } else if (i == 1) {
-      return dexType == StableSwapType.Token1Bnb ? address(this).balance : IERC20(_token).balanceOf(address(this));
+    if (_token == BNB_ADDRESS) {
+      return address(this).balance;
     } else {
-      revert("Invalid token index");
+      return IERC20(_token).balanceOf(address(this));
     }
   }
 
@@ -455,8 +439,8 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     if (_token == TOKEN || _token == dexLP) {
       // if token is dexLP, return the price of the LP token
       uint256[2] memory amounts = IStableSwapPoolInfo(dexInfo).calc_coins_amount(dex, 1 ether);
-      uint256 price0 = _peek(IStableSwap(dex).coins(0));
-      uint256 price1 = _peek(IStableSwap(dex).coins(1));
+      uint256 price0 = _peek(token(0));
+      uint256 price1 = _peek(token(1));
 
       return (amounts[0] * price0 + amounts[1] * price1) / 1 ether; // 1 ether is the LP token amount
     }
@@ -465,11 +449,7 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
   }
 
   function _peek(address _token) private view returns (uint256) {
-    if (_token == BNB_ADDRESS) {
-      return IOracle(resilientOracle).peek(WBNB);
-    } else {
-      return IOracle(resilientOracle).peek(_token);
-    }
+    return IOracle(resilientOracle).peek(_token);
   }
 
   /// @dev Returns the oracle configuration for the specified token.
@@ -482,12 +462,6 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
           enableFlagsForOracles: [true, false, false],
           timeDeltaTolerance: 0
         });
-    }
-
-    if (_token == BNB_ADDRESS) {
-      TokenConfig memory config = IOracle(resilientOracle).getTokenConfig(WBNB);
-      config.asset = _token;
-      return config;
     } else {
       return IOracle(resilientOracle).getTokenConfig(_token);
     }

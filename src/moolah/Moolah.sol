@@ -521,7 +521,7 @@ contract Moolah is
     address borrower,
     uint256 seizedAssets,
     uint256 repaidShares,
-    bytes memory payload, //min amounts for SmartProvider liquidation
+    bytes memory payload, // min amounts for SmartProvider liquidation
     bytes calldata data
   ) private returns (uint256, uint256) {
     Id id = marketParams.id();

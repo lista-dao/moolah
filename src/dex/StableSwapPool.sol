@@ -42,10 +42,8 @@ contract StableSwapPool is
   address[N_COINS] public coins;
   uint256[N_COINS] public balances;
   /// @dev swap fee; fee * 1e10
-  /// TODO: rename to fee_rate ?
   uint256 public fee;
   /// @dev the percentage of the swap fee that is taken as an admin fee. admin_fee * 1e10.
-  /// TODO: rename to admin_fee_rate ?
   uint256 public admin_fee;
   /// @dev transfer bnb gas.
   uint256 public bnb_gas = 4029;
@@ -144,7 +142,7 @@ contract StableSwapPool is
 
     oracle = _oracle;
     IOracle(oracle).peek(_coins[0]); // just to check that oracle is working
-    IOracle(oracle).peek(_coins[1]); // just to check that oracle is working
+    IOracle(oracle).peek(_coins[1]); // BNB_ADDR should be config to multi-oracle before deploy
     price0DiffThreshold = 3e16; // 3% threshold for token0 price diff
     price1DiffThreshold = 3e16; // 3% threshold for token1 price diff
 
@@ -342,6 +340,8 @@ contract StableSwapPool is
       transfer_in(coin, amount);
     }
 
+    checkPriceDiff();
+
     // Mint pool tokens
     IStableSwapLP(token).mint(msg.sender, mint_amount);
 
@@ -422,8 +422,8 @@ contract StableSwapPool is
 
     uint256[N_COINS] memory oraclePrices = fetchOraclePrice();
 
-    uint256 price0 = (dx / token0Amount) * oraclePrices[1];
-    uint256 price1 = (dx / token1Amount) * oraclePrices[0];
+    uint256 price0 = (dx * oraclePrices[1]) / token0Amount;
+    uint256 price1 = ((dx * oraclePrices[0]) / token1Amount);
 
     // Calculate price differences
     uint256 priceDiff0 = (price0 > oraclePrices[0]) ? price0 - oraclePrices[0] : oraclePrices[0] - price0;
