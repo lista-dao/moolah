@@ -10,6 +10,7 @@ struct FixedTermAndRate {
 }
 
 struct FixedLoanPosition {
+  uint256 posId;
   uint256 principal;
   uint256 apr;
   uint256 start;
@@ -104,6 +105,6 @@ interface IBroker is IBrokerBase {
 
   /// @dev refinance expired fixed positions to dynamic
   /// @param user The address of the user to refinance
-  /// @param positionIdxs The indices of the fixed positions to refinance
-  function refinanceExpiredToDynamic(address user, uint256[] calldata positionIdxs) external;
+  /// @param positionIds The posIds of the fixed positions to refinance
+  function refinanceMaturedFixedPositions(address user, uint256[] calldata positionIds) external;
 }
