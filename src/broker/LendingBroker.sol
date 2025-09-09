@@ -67,6 +67,8 @@ IBroker
   FixedTermAndRate[] public fixedTerms;
   /// @dev user => fixed loan positions
   mapping(address => FixedLoanPosition[]) public fixedLoanPositions;
+  /// @dev global id for fixed loan positions
+  uint256 public fixedPosUuid;
   /// @dev how many fixed loan positions a user can have
   uint256 public maxFixedLoanPositions;
 
@@ -146,7 +148,8 @@ IBroker
     // init state variables
     rateCalculator = _rateCalculator;
     maxFixedLoanPositions = _maxFixedLoanPositions;
-
+    fixedPosUuid = 1;
+    
     // set broker name
     string memory collateralTokenName = IERC20Metadata(COLLATERAL_TOKEN).symbol();
     string memory loanTokenName = IERC20Metadata(LOAN_TOKEN).symbol();
@@ -199,6 +202,7 @@ IBroker
     uint256 end = block.timestamp + term.duration;
     // update state
     fixedLoanPositions[user].push(FixedLoanPosition({
+      posId: fixedPosUuid,
       principal: amount,
       apr: term.apr,
       start: start,
@@ -206,6 +210,8 @@ IBroker
       lastRepaidTime: start,
       repaidPrincipal: 0
     }));
+    // pos uuid increment
+    fixedPosUuid++;
     // transfer loan token to user
     IERC20(LOAN_TOKEN).safeTransfer(user, amount);
     // emit event
@@ -245,16 +251,15 @@ IBroker
     * @dev Repay a Fixed loan position
     * @notice repay interest first then principal, repay amount must larger than interest
     * @param amount The amount to repay
-    * @param posIdx The index of the fixed position to repay
+    * @param posId The ID of the fixed position to repay
    */
-  function repay(uint256 amount, uint256 posIdx) external override whenNotPaused nonReentrant {
+  function repay(uint256 amount, uint256 posId) external override whenNotPaused nonReentrant {
     address user = msg.sender;
-    require(posIdx < fixedLoanPositions[user].length, "broker/invalid-position");
+    // fetch position (will revert if not found)
+    FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
 
     // transfer from user
     IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), amount);
-
-    FixedLoanPosition memory position = fixedLoanPositions[user][posIdx];
     // remaining principal, user might repaid before
     uint256 remainingPrincipal = position.principal - position.repaidPrincipal;
 
@@ -282,14 +287,14 @@ IBroker
       // transfer unused amount
       IERC20(LOAN_TOKEN).safeTransfer(user, repaidAmount - remainingPrincipal);
       // removes it from user's fixed positions
-      _removeFixPositionAtIdx(user, posIdx);
+      _removeFixPositionByPosId(user, posId);
     } else {
       // repay with all amount left
       _repayToMoolah(user, repaidAmount);
       // the rest will be used to repay partially
       position.repaidPrincipal += repaidAmount;
       // update position
-      fixedLoanPositions[user][posIdx] = position;
+      _updateFixedPosition(user, position);
     }
     // emit event
     emit RepaidFixedLoanPosition(
@@ -372,13 +377,49 @@ IBroker
   ///////////////////////////////////////
   /////        Bot functions        /////
   ///////////////////////////////////////
-  function refinanceExpiredToDynamic(address user, uint256[] calldata positionIdxs) 
+
+  /**
+   * @dev convert matured fixed positions to dynamic position
+   * @notice Before the fixed position is qualified to convert to dynamic position
+   *         there will be a tiny time interval awaiting for the bot to trigger the conversion
+   *         interest should be accrued during this interval will be ignored
+   * @param user The address of the user
+   * @param posIds The posIds of the positions to refinance
+   */
+  function refinanceMaturedFixedPositions(address user, uint256[] calldata posIds) 
   external
   override
   whenNotPaused
   nonReentrant
   onlyRole(BOT) {
-
+    require(posIds.length > 0, "Broker/zero-positions");
+    // the additional principal will be add into the dynamic position
+    uint256 _principal = 0;
+    // calculate principal to be refinanced one by one
+    for (uint256 i = 0; i < posIds.length; i++) {
+      uint256 posId = posIds[i];
+      // fetch fixed position and make sure it's matured
+      FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
+      require(block.timestamp >= position.end, "Broker/position-not-expired");
+      // Debt of a fixed loan position consist of (1) and (2)
+      // (1) net principal to pay (original principal - repaid principal)
+      // (2) get accrued interest if user has repaid before, partial of the interest will be excluded
+      _principal +=
+        position.principal - position.repaidPrincipal +
+        _getAccruedInterestForFixedPosition(position);
+    }
+    if (_principal > 0) {
+      // get updated rate
+      uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
+      // calc. normalized debt
+      uint256 normalizedDebt = BrokerMath.normalizeBorrowAmount(_principal, rate);
+      // update user's dynamic position
+      DynamicLoanPosition storage position = dynamicLoanPositions[user];
+      position.principal += _principal;
+      position.normalizedDebt += normalizedDebt;
+      // emit the same event as borrow with dynamic position
+      emit DynamicLoanPositionUpdated(user, _principal, position.principal);
+    }
   }
 
   ///////////////////////////////////////
@@ -474,15 +515,52 @@ IBroker
   /**
    * @dev removes a user's fixed-loan position at a specific index
    * @param user The address of the user
-   * @param posIdx The index of the position to remove
+   * @param posId The ID of the position to remove
    */
-  function _removeFixPositionAtIdx(address user, uint256 posIdx) internal {
+  function _removeFixPositionByPosId(address user, uint256 posId) internal {
     // get user's fixed positions
     FixedLoanPosition[] storage positions = fixedLoanPositions[user];
-    require(posIdx < positions.length, "broker/invalid-position");
-    // remove position
-    positions[posIdx] = positions[positions.length - 1];
-    positions.pop();
+    // loop through user's positions
+    for (uint256 i = 0; i < positions.length; i++) {
+      if (positions[i].posId == posId) {
+        // remove position
+        positions[i] = positions[positions.length - 1];
+        positions.pop();
+        return;
+      }
+    }
+    revert("broker/position-not-found");
+  }
+
+  /**
+   * @dev Get a fixed loan position by PosId
+   * @param user The address of the user
+   * @param posId The ID of the position to get
+   */
+  function _getFixedPositionByPosId(address user, uint256 posId) internal view returns (FixedLoanPosition memory) {
+    FixedLoanPosition[] memory positions = fixedLoanPositions[user];
+    for (uint256 i = 0; i < positions.length; i++) {
+      if (positions[i].posId == posId) {
+        return positions[i];
+      }
+    }
+    revert("broker/position-not-found");
+  }
+
+  /**
+   * @dev Update a fixed loan position
+   * @param user The address of the user
+   * @param position The fixed loan position to update
+   */
+  function _updateFixedPosition(address user, FixedLoanPosition memory position) internal {
+    FixedLoanPosition[] storage positions = fixedLoanPositions[user];
+    for (uint256 i = 0; i < positions.length; i++) {
+      if (positions[i].posId == position.posId) {
+        positions[i] = position;
+        return;
+      }
+    }
+    revert("broker/position-not-found");
   }
 
   /**
