@@ -24,7 +24,7 @@ import { SharesMathLib } from "./libraries/SharesMathLib.sol";
 import { MarketParamsLib } from "./libraries/MarketParamsLib.sol";
 import { SafeTransferLib } from "./libraries/SafeTransferLib.sol";
 import { IProvider } from "../provider/interfaces/IProvider.sol";
-import { IBrokerBase } from "../provider/interfaces/IBroker.sol";
+import { IBrokerBase } from "../broker/interfaces/IBroker.sol";
 
 /// @title Moolah
 /// @author Lista DAO

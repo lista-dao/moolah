@@ -11,12 +11,13 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 import { IBroker, FixedLoanPosition, DynamicLoanPosition, FixedTermAndRate } from "./interfaces/IBroker.sol";
-import { BrokerMath } from "./libraries/BrokerMath.sol";
+import { IRateCalculator } from "./interfaces/IRateCalculator.sol";
+import { BrokerMath, RATE_SCALE } from "./libraries/BrokerMath.sol";
 
 import { MarketParamsLib } from "../moolah/libraries/MarketParamsLib.sol";
 import { SharesMathLib } from "../moolah/libraries/SharesMathLib.sol";
 import { IMoolahVault } from "../moolah-vault/interfaces/IMoolahVault.sol";
-import { Id, IMoolah, MarketParams, Market } from "../moolah/interfaces/IMoolah.sol";
+import { Id, IMoolah, MarketParams, Market, Position } from "../moolah/interfaces/IMoolah.sol";
 import { IOracle } from "../moolah/interfaces/IOracle.sol";
 import { ErrorsLib } from "../moolah/libraries/ErrorsLib.sol";
 import { UtilsLib } from "../moolah/libraries/UtilsLib.sol";
@@ -37,6 +38,7 @@ IBroker
   using SafeERC20 for IERC20;
   using MarketParamsLib for MarketParams;
   using SharesMathLib for uint256;
+  using UtilsLib for uint256;
 
   // ------- Roles -------
   bytes32 public constant MANAGER = keccak256("MANAGER");
@@ -55,19 +57,17 @@ IBroker
   // ------- State variables -------
 
   // --- Dynamic rate loan
-  // user => dynamic loan position
+  /// @dev user => dynamic loan position
   mapping(address => DynamicLoanPosition) public dynamicLoanPositions;
-  // latest rate factor
-  uint256 public currentRate;
-  // timestamp of last rate calculation
-  uint256 public lastCompounded;
+  /// @dev rate calculator
+  address public rateCalculator;
 
-  // --- Fixed rate and terms
-  // Fixed term and rate products
+  // --- Fixed rate and terms ---
+  /// @dev Fixed term and rate products
   FixedTermAndRate[] public fixedTerms;
-  // user => fixed loan positions
+  /// @dev user => fixed loan positions
   mapping(address => FixedLoanPosition[]) public fixedLoanPositions;
-  // how many fixed loan positions a user can have
+  /// @dev how many fixed loan positions a user can have
   uint256 public maxFixedLoanPositions;
 
   // ------- Modifiers -------
@@ -110,24 +110,28 @@ IBroker
 
   /**
    * @dev Initialize the LendingBroker contract
-   * @param admin The address of the admin
-   * @param manager The address of the manager
-   * @param bot The address of the bot
-   * @param pauser The address of the pauser
-   * @param maxFixedLoanPositions The maximum number of fixed loan positions a user can have
+   * @param _admin The address of the admin
+   * @param _manager The address of the manager
+   * @param _bot The address of the bot
+   * @param _pauser The address of the pauser
+   * @param _rateCalculator The address of the rate calculator
+   * @param _maxFixedLoanPositions The maximum number of fixed loan positions a user can have
    */
   function initialize(
-    address admin,
-    address manager,
-    address bot,
-    address pauser,
-    uint256 maxFixedLoanPositions
+    address _admin,
+    address _manager,
+    address _bot,
+    address _pauser,
+    address _rateCalculator,
+    uint256 _maxFixedLoanPositions
   ) public initializer {
     require(
-      admin != address(0) &&
-      manager != address(0) &&
-      bot != address(0) &&
-      pauser != address(0),
+      _admin != address(0) &&
+      _manager != address(0) &&
+      _bot != address(0) &&
+      _pauser != address(0) &&
+      _rateCalculator != address(0) &&
+      _maxFixedLoanPositions > 0,
       ErrorsLib.ZERO_ADDRESS
     );
     
@@ -135,12 +139,13 @@ IBroker
     __Pausable_init();
     __ReentrancyGuard_init();
     // grant roles
-    _grantRole(DEFAULT_ADMIN_ROLE, admin);
-    _grantRole(MANAGER, manager);
-    _grantRole(BOT, bot);
-    _grantRole(PAUSER, pauser);
+    _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+    _grantRole(MANAGER, _manager);
+    _grantRole(BOT, _bot);
+    _grantRole(PAUSER, _pauser);
     // init state variables
-    maxFixedLoanPositions = maxFixedLoanPositions;
+    rateCalculator = _rateCalculator;
+    maxFixedLoanPositions = _maxFixedLoanPositions;
 
     // set broker name
     string memory collateralTokenName = IERC20Metadata(COLLATERAL_TOKEN).symbol();
@@ -153,12 +158,26 @@ IBroker
   ///////////////////////////////////////
 
   /**
-   * @dev Borrow a fixed amount with a dynamic rate
+   * @dev Borrow a fixed amount of loan token with a dynamic rate
    * @param amount The amount to borrow
    */
   function borrow(uint256 amount) external override whenNotPaused nonReentrant {
     require(amount > 0, ErrorsLib.ZERO_ASSETS);
     address user = msg.sender;
+    // get updated rate
+    uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
+    // calc. normalized debt
+    uint256 normalizedDebt = BrokerMath.normalizeBorrowAmount(amount, rate);
+    // update user's dynamic position
+    DynamicLoanPosition storage position = dynamicLoanPositions[user];
+    position.principal += amount;
+    position.normalizedDebt += normalizedDebt;
+    // borrow from moolah
+    _borrowFromMoolah(user, amount);
+    // transfer loan token to user
+    IERC20(LOAN_TOKEN).safeTransfer(user, amount);
+    // emit event
+    emit DynamicLoanPositionUpdated(user, amount, position.principal);
   }
 
   /**
@@ -187,16 +206,39 @@ IBroker
       lastRepaidTime: start,
       repaidPrincipal: 0
     }));
+    // transfer loan token to user
+    IERC20(LOAN_TOKEN).safeTransfer(user, amount);
     // emit event
     emit FixedLoanPositionCreated(user, amount, start, end, term.apr, termId);
   }
 
-  function convertDynamicToFixed(address user, uint256 amount, uint256 termId) external whenNotPaused nonReentrant {
-
-  }
-
+  /**
+    * @dev Repay a Dynamic loan position
+    * @param amount The amount to repay
+   */
   function repay(uint256 amount) external override whenNotPaused nonReentrant {
-
+    require(amount > 0, ErrorsLib.ZERO_ASSETS);
+    address user = msg.sender;
+    // transfer from user
+    IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), amount);
+    // get user's dynamic position
+    DynamicLoanPosition storage position = dynamicLoanPositions[user];
+    // get updated rate
+    uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
+    // calc. actual debt (borrowed amount + accrued interest)
+    uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate);
+    // get net accrued interest
+    uint256 accruedInterest = actualDebt - position.principal;
+    require(amount > accruedInterest, "broker/repay-amount-insufficient");
+    // deduct net accrued interest from repayment amount
+    amount -= accruedInterest;
+    // update position
+    position.principal -= amount;
+    position.normalizedDebt -= BrokerMath.normalizeBorrowAmount(amount, rate);
+    // repay to moolah
+    _repayToMoolah(user, amount);
+    // emit event
+    emit DynamicLoanPositionUpdated(user, amount, position.principal);
   }
 
   /**
@@ -208,8 +250,11 @@ IBroker
   function repay(uint256 amount, uint256 posIdx) external override whenNotPaused nonReentrant {
     address user = msg.sender;
     require(posIdx < fixedLoanPositions[user].length, "broker/invalid-position");
-    FixedLoanPosition memory position = fixedLoanPositions[user][posIdx];
 
+    // transfer from user
+    IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), amount);
+
+    FixedLoanPosition memory position = fixedLoanPositions[user][posIdx];
     // remaining principal, user might repaid before
     uint256 remainingPrincipal = position.principal - position.repaidPrincipal;
 
@@ -270,15 +315,50 @@ IBroker
     return fixedTerms;
   }
 
+  /**
+   * @dev returns the price of a token for a user in 8 decimal places
+   * @param token The address of the token to get the price for
+   * @param user The address of the user
+   */
   function peek(address token, address user) external override view returns (uint256 price) {
-    // total interest (Fixed + Dynamic position)
-    uint256 totalInterest = 0;
-    // [1] interest from fixed positions
-    FixedLoanPosition[] memory positions = fixedLoanPositions[user];
-    for (uint256 i = 0; i < positions.length; i++) {
-      totalInterest += _getAccruedInterestForFixedPosition(positions[i]);
+    // loan token's price never changes
+    if (token == LOAN_TOKEN) {
+      return 10 ** 8;
+    } else if(token == COLLATERAL_TOKEN) {
+      /*
+        Broker accrues interest, so collateral price is adjusted downward,
+        this lets Moolah detect risk as interest grows, despite its 0% rate.
+        [A] Collateral Market Price
+        [B] Broker Total Debt (included interest)
+        [C] Moolah Debt (0% rate)
+        [D] Collateral Amount
+        new collateral price  = A - (B-C)/D
+      */
+      // the total debt of the user (principal + interest)
+      uint256 debtAtBroker = BrokerMath.getTotalDebt(
+        fixedLoanPositions[user],
+        dynamicLoanPositions[user],
+        IRateCalculator(rateCalculator).getRate(address(this))
+      );
+      // fetch collateral price from oracle
+      uint256 collateralPrice = IOracle(ORACLE).peek(COLLATERAL_TOKEN);
+      // get user's position info
+      Position memory _position = MOOLAH.position(MARKET_ID, user);
+      // get market info
+      Market memory _market = MOOLAH.market(MARKET_ID);
+      // convert shares to borrowed amount (Moolah's debt)
+      uint256 debtAtMoolah = uint256(_position.borrowShares).toAssetsUp(
+        _market.totalBorrowAssets,
+        _market.totalBorrowShares
+      );
+      // calculate manipulated price
+      price = collateralPrice - BrokerMath.mulDivCeiling(
+        debtAtBroker - debtAtMoolah,
+        1e10,
+        _position.collateral
+      );
     }
-    // @todo [2] interest from dynamic positions
+    revert("Broker/unsupported-token");
   }
 
   function userFixedPositions(address user) external view returns (FixedLoanPosition[] memory) {
@@ -298,10 +378,6 @@ IBroker
   whenNotPaused
   nonReentrant
   onlyRole(BOT) {
-
-  }
-
-  function upkeepInterest() external whenNotPaused nonReentrant {
 
   }
 
@@ -363,6 +439,8 @@ IBroker
    * @param amount The amount to repay
    */
   function _repayToMoolah(address onBehalf, uint256 amount) internal {
+    // approve
+    IERC20(LOAN_TOKEN).safeIncreaseAllowance(address(MOOLAH), amount);
     MarketParams memory marketParams = _getMarketParams();
     // repay to moolah
     MOOLAH.repay(
@@ -424,18 +502,17 @@ IBroker
     return BrokerMath.getPenaltyForFixedPosition(position, repayAmt);
   }
 
-  function _compoundInterest() internal view {
-    require(block.timestamp >= lastCompounded, "Broker/invalid-now");
-    /*
-    // compounding new rate factor with time elapsed
-    currentRate = BrokerMath.calculateNewRate(
-      base,
-      currentRate,
-      block.timestamp - lastCompounded
-    );
-    // record last compounded timestamp
-    lastCompounded = block.timestamp;
-    */
+  /**
+   * @dev Get the accrued interest for a dynamic loan position
+   * @param position The dynamic loan position to get the accrued interest for
+   */
+  function _getAccruedInterestForDynamicPosition(DynamicLoanPosition memory position) internal view returns (uint256 accruedInterest) {
+    // get updated rate
+    uint256 rate = IRateCalculator(rateCalculator).getRate(address(this));
+    // calc. actual debt (borrowed amount + accrued interest)
+    uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate);
+    // get net accrued interest
+    accruedInterest = actualDebt - position.principal;
   }
 
   ///////////////////////////////////////
@@ -451,7 +528,7 @@ IBroker
   function setFixedTermAndRate(uint256 termId, uint256 duration, uint256 apr) external onlyRole(MANAGER) {
     require(termId > 0, "broker/invalid-term-id");
     require(duration > 0, "broker/invalid-duration");
-    require(apr > 0 && apr < BrokerMath.DENOMINATOR, "broker/invalid-apr");
+    require(apr >= RATE_SCALE, "broker/invalid-apr");
     FixedTermAndRate memory _term = FixedTermAndRate({
       termId: termId,
       duration: duration,

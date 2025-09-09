@@ -20,7 +20,7 @@ struct FixedLoanPosition {
 
 struct DynamicLoanPosition {
   uint256 principal;
-  uint256 normalisedDebt;
+  uint256 normalizedDebt;
 }
 
 /// @dev Broker Base interface
@@ -45,7 +45,11 @@ interface IBroker is IBrokerBase {
   /// ------------------------------
   ///            Events
   /// ------------------------------
-  event DynamicLoanPositionUpdated(address indexed user, uint256 amount);
+  event DynamicLoanPositionUpdated(
+    address indexed user,
+    uint256 borrowed,
+    uint256 principal
+  );
   event FixedLoanPositionCreated(
     address indexed user,
     uint256 principal,
