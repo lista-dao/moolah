@@ -37,7 +37,8 @@ contract StableSwapPoolInfo is UUPSUpgradeable, AccessControlEnumerableUpgradeab
    * @notice Given an amount of currency i, calculate the amount of currency j that would be added without moving the price
    * @param _swap Address of the swap
    * @param i Index value of the input currency
-   * @param amount_i Amount of currency i to convert
+   * @param amount_i Amount of currency i to convert, in original token i precision
+   * @return amount_j Amount of currency j that would be received, in original token j precision
    */
   function calc_amount_i_perfect(address _swap, uint256 i, uint256 amount_i) external view returns (uint256 amount_j) {
     uint256[N_COINS] memory balances = balances(_swap);

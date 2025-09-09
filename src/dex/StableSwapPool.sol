@@ -415,15 +415,23 @@ contract StableSwapPool is
   /// @dev Check if the price difference between the pool and the oracle exceeds the threshold
   /// @notice This function reverts if the token0 or token1 price difference exceeds the threshold
   function checkPriceDiff() public view {
-    // use tiny dx to get swap price
-    uint256 dx = 1e12;
-    uint256 token1Amount = get_dy(0, 1, dx); // token1Amount for 1e12 wei of token0
-    uint256 token0Amount = get_dy(1, 0, dx); // token0Amount for 1e12 wei of token1
+    // use 1 token_i dx to get swap price
+    uint256 dps0 = (coins[0] == BNB_ADDRESS) ? 18 : IERC20Metadata(coins[0]).decimals();
+    uint256 dps1 = (coins[1] == BNB_ADDRESS) ? 18 : IERC20Metadata(coins[1]).decimals();
+    uint256 dx0 = 10 ** (dps0); // 1 token0
+    uint256 dx1 = 10 ** (dps1); // 1 token1
+
+    uint256 dy1 = get_dy(0, 1, dx0); // token1Amount for 1 token0, in original precision
+    uint256 dy0 = get_dy(1, 0, dx1); // token0Amount for 1 token1, in original precision
+
+    // normalize dy to 1e18 dps
+    uint256 token1Amount = dy1 * PRECISION_MUL[1];
+    uint256 token0Amount = dy0 * PRECISION_MUL[0];
 
     uint256[N_COINS] memory oraclePrices = fetchOraclePrice();
 
-    uint256 price0 = (dx * oraclePrices[1]) / token0Amount;
-    uint256 price1 = ((dx * oraclePrices[0]) / token1Amount);
+    uint256 price0 = (1e18 * oraclePrices[1]) / token0Amount;
+    uint256 price1 = (1e18 * oraclePrices[0]) / token1Amount;
 
     // Calculate price differences
     uint256 priceDiff0 = (price0 > oraclePrices[0]) ? price0 - oraclePrices[0] : oraclePrices[0] - price0;
@@ -431,12 +439,12 @@ contract StableSwapPool is
 
     // Check if price differences exceed thresholds
     require(
-      priceDiff0 <= (oraclePrices[0] * price0DiffThreshold) / 1e18,
+      (priceDiff0 * 1e18) <= (oraclePrices[0] * price0DiffThreshold),
       "Price difference for token0 exceeds threshold"
     );
 
     require(
-      priceDiff1 <= (oraclePrices[1] * price1DiffThreshold) / 1e18,
+      (priceDiff1 * 1e18) <= (oraclePrices[1] * price1DiffThreshold),
       "Price difference for token1 exceeds threshold"
     );
   }
