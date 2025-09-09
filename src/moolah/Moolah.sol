@@ -24,7 +24,7 @@ import { MarketParamsLib } from "./libraries/MarketParamsLib.sol";
 import { SafeTransferLib } from "./libraries/SafeTransferLib.sol";
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import { IProvider } from "../provider/interfaces/IProvider.sol";
-import { IBrokerBase } from "../provider/interfaces/IBroker.sol";
+import { IBrokerBase } from "../broker/interfaces/IBroker.sol";
 
 /// @title Moolah
 /// @author Lista DAO
