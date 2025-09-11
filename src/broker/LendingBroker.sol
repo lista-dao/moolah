@@ -236,6 +236,8 @@ IBroker
     // get net accrued interest
     uint256 accruedInterest = actualDebt - position.principal;
     require(amount > accruedInterest, "broker/repay-amount-insufficient");
+    // collect interest and supply to moolah
+    _supplyToMoolah(accruedInterest);
     // deduct net accrued interest from repayment amount
     amount -= accruedInterest;
     // update position
@@ -308,10 +310,166 @@ IBroker
     );
   }
 
-  function liquidate(Id id, address user) external override whenNotPaused nonReentrant {
+  ///////////////////////////////////////
+  /////         Liquidation         /////
+  ///////////////////////////////////////
 
+  /**
+   * @dev Liquidate a borrower's debt by accruing interest and repaying the dynamic
+   *      position first, then settling fixed-rate positions sorted by APR and
+   *      remaining principal. The last fixed position absorbs any rounding delta.
+   * @param id The market id
+   * @param user The address of the user being liquidated
+   */
+  function liquidate(Id id, address user) external override onlyMoolah whenNotPaused nonReentrant {
+    require(
+      _getMarketParams(id).loanToken == _getMarketParams(MARKET_ID).loanToken &&
+      _getMarketParams(id).collateralToken == _getMarketParams(MARKET_ID).collateralToken
+      ,"Broker/invalid-market");
+    require(user != address(0), "Broker/invalid-user");
+    // fetch positions
+    DynamicLoanPosition storage dynamicPosition = dynamicLoanPositions[user];
+    FixedLoanPosition[] memory fixedPositions = fixedLoanPositions[user];
+    // [1] calculate total outstanding debt before liquidation (principal + interest)
+    uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
+    uint256 totalDebt = BrokerMath.getTotalDebt(fixedPositions, dynamicPosition, rate);
+    // [2] calculate actual debt at Moolah after liquidation
+    Market memory market = MOOLAH.market(id);
+    Position memory mPos = MOOLAH.position(id, user);
+    // thats how much user borrowed from Moolah (0% interest, should = total principal at LendingBroker)
+    // after liquidation, this will be the new debt amount (partial of collateral has been liquidated)
+    uint256 debtAfter = uint256(mPos.borrowShares).toAssetsUp(
+      market.totalBorrowAssets,
+      market.totalBorrowShares
+    );
+    // debt at broker > debt at moolah, we need to deduct the diff from positions
+    uint256 principalToDeduct = totalDebt.zeroFloorSub(debtAfter);
+    if (principalToDeduct == 0) return;
+    // deduct from dynamic position and returns the leftover assets to deduct
+    principalToDeduct = _deductDynamicPositionDebt(dynamicPosition, principalToDeduct, rate);
+    // deduct from fixed positions
+    if (principalToDeduct > 0 && fixedPositions.length > 0) {
+      // sort fixed positions from highest APR + remaining principal
+      FixedLoanPosition[] memory sorted = _sortAndFilterFixedPositions(fixedPositions);
+      if (sorted.length > 0) {
+        _deductFixedPositionsDebt(user, sorted, principalToDeduct);
+      }
+    }
+    // emit event
+    emit Liquidated(user, principalToDeduct);
   }
 
+  /**
+   * @dev insertion sort positions by APR(desc) then remaining principal(desc)
+   *      insertion sort is not gas efficient algorithm,
+   *      but it is simple and works well for small arrays as user's number of fixed positions is limited
+   * @param positions The fixed loan positions to sort
+   */
+  function _sortAndFilterFixedPositions(
+    FixedLoanPosition[] memory positions
+  ) internal pure returns (FixedLoanPosition[] memory) {
+    uint256 len = positions.length;
+    FixedLoanPosition[] memory filtered = new FixedLoanPosition[](len);
+    uint256 count;
+    for (uint256 i = 0; i < len; i++) {
+      FixedLoanPosition memory p = positions[i];
+      if (p.principal > p.repaidPrincipal) {
+        uint256 remaining = p.principal - p.repaidPrincipal;
+        uint256 j = count;
+        while (j > 0) {
+          FixedLoanPosition memory prev = filtered[j - 1];
+          uint256 prevRemaining = prev.principal - prev.repaidPrincipal;
+          if (prev.apr > p.apr || (prev.apr == p.apr && prevRemaining >= remaining)) {
+            break;
+          }
+          filtered[j] = prev;
+          j--;
+        }
+        filtered[j] = p;
+        count++;
+      }
+    }
+    // trim `filtered` to length `count`
+    assembly { mstore(filtered, count) }
+    return filtered;
+  }
+
+  /**
+   * @dev deducts debt from the dynamic position and returns leftover assets
+   * @param position The dynamic loan position to modify
+   * @param principalToDeduct The amount of assets repaid during liquidation, leads to deduct from principal and interest
+   * @param rate The current interest rate
+   */
+  function _deductDynamicPositionDebt(
+    DynamicLoanPosition storage position,
+    uint256 principalToDeduct,
+    uint256 rate
+  ) internal returns (uint256) {
+    // get debt at dynamic position
+    uint256 dynamicDebt = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate);
+    if (dynamicDebt > 0) {
+      // calculate the amount to deduct from principal
+      uint256 amountToDeduct = UtilsLib.min(dynamicDebt, principalToDeduct);
+      if (amountToDeduct > 0) {
+        // deduct principal
+        uint256 principalToRepay = UtilsLib.min(position.principal, amountToDeduct);
+        position.principal -= principalToRepay;
+        // deduct normalized debt
+        uint256 normalizedDebtDelta = BrokerMath.normalizeBorrowAmount(amountToDeduct, rate);
+        position.normalizedDebt = position.normalizedDebt.zeroFloorSub(normalizedDebtDelta);
+        // partially(or fully) deduct repaid assets from dynamic position
+        principalToDeduct -= amountToDeduct;
+      }
+    }
+    return principalToDeduct;
+  }
+
+  /**
+   * @dev allocates repayments to fixed positions by APR and remaining principal
+   * @param user The address of the user
+   * @param sortedFixedPositions The sorted fixed loan positions
+   * @param principalToDeduct The amount of assets repaid during liquidation, leads to deduct from principal and interest
+   */
+  function _deductFixedPositionsDebt(
+    address user,
+    FixedLoanPosition[] memory sortedFixedPositions,
+    uint256 principalToDeduct
+  ) internal {
+    uint256 len = sortedFixedPositions.length;
+    for (uint256 i = 0; i < len; i++) {
+      FixedLoanPosition memory p = sortedFixedPositions[i];
+      // get remaining principal
+      uint256 principalRemain = p.principal - p.repaidPrincipal;
+      // get accrued interest
+      uint256 interest = BrokerMath.getAccruedInterestForFixedPosition(p);
+      // calculate total debt
+      uint256 debt = principalRemain + interest;
+      // determine the amount to deduct from principal
+      // if it comes to the last position, deduct all remaining principal
+      uint256 amountToDeduct = (i == len - 1) ? principalToDeduct : UtilsLib.min(debt, principalToDeduct);
+      if (amountToDeduct > 0) {
+        // deduct interest first
+        uint256 repayInterest = UtilsLib.min(interest, amountToDeduct);
+        amountToDeduct -= repayInterest;
+        // deduct principal
+        uint256 repayPrincipal = UtilsLib.min(principalRemain, amountToDeduct);
+        if (repayPrincipal > 0) {
+          p.repaidPrincipal += repayPrincipal;
+          p.lastRepaidTime = block.timestamp;
+        }
+        // deduct interest and principal from total
+        principalToDeduct -= (repayInterest + repayPrincipal);
+      }
+      // remove it if fully repaid, otherwise update it
+      if (p.repaidPrincipal >= p.principal) {
+        _removeFixPositionByPosId(user, p.posId);
+      } else {
+        _updateFixedPosition(user, p);
+      }
+      // terminate process if all deduction is complete
+      if (principalToDeduct == 0) break;
+    }
+  }
 
   ///////////////////////////////////////
   /////        View functions       /////
@@ -371,7 +529,7 @@ IBroker
   }
 
   function userDynamicPosition(address user) external view returns (DynamicLoanPosition memory) {
-
+    return dynamicLoanPositions[user];
   }
 
   ///////////////////////////////////////
@@ -429,8 +587,8 @@ IBroker
   /**
    * @dev Get the market parameters for this broker
    */
-  function _getMarketParams() internal view returns (MarketParams memory) {
-    return MOOLAH.idToMarketParams(MARKET_ID);
+  function _getMarketParams(Id _id) internal view returns (MarketParams memory) {
+    return MOOLAH.idToMarketParams(_id);
   }
 
   /**
@@ -456,7 +614,7 @@ IBroker
    * @param amount The amount to borrow
    */
   function _borrowFromMoolah(address onBehalf, uint256 amount) internal {
-    MarketParams memory marketParams = _getMarketParams();
+    MarketParams memory marketParams = _getMarketParams(MARKET_ID);
     // pre-balance
     uint256 preBalance = IERC20(LOAN_TOKEN).balanceOf(address(this));
     // borrow from moolah with zero interest
@@ -482,7 +640,7 @@ IBroker
   function _repayToMoolah(address onBehalf, uint256 amount) internal {
     // approve
     IERC20(LOAN_TOKEN).safeIncreaseAllowance(address(MOOLAH), amount);
-    MarketParams memory marketParams = _getMarketParams();
+    MarketParams memory marketParams = _getMarketParams(MARKET_ID);
     // repay to moolah
     MOOLAH.repay(
       marketParams,
@@ -503,7 +661,7 @@ IBroker
       IERC20(LOAN_TOKEN).safeIncreaseAllowance(address(MOOLAH), interest);
       // supply interest into vault as revenue
       (uint256 suppliedAmount, /*uint256 shares */) = MOOLAH.supply(
-        _getMarketParams(),
+        _getMarketParams(MARKET_ID),
         interest,
         0,
         address(MOOLAH_VAULT),
