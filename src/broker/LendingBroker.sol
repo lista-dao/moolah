@@ -19,7 +19,6 @@ import { SharesMathLib } from "../moolah/libraries/SharesMathLib.sol";
 import { IMoolahVault } from "../moolah-vault/interfaces/IMoolahVault.sol";
 import { Id, IMoolah, MarketParams, Market, Position } from "../moolah/interfaces/IMoolah.sol";
 import { IOracle } from "../moolah/interfaces/IOracle.sol";
-import { ErrorsLib } from "../moolah/libraries/ErrorsLib.sol";
 import { UtilsLib } from "../moolah/libraries/UtilsLib.sol";
 
 /// @title Broker for Lista Lending
@@ -96,7 +95,7 @@ IBroker
       moolah != address(0) && 
       moolahVault != address(0) && 
       oracle != address(0),
-      ErrorsLib.ZERO_ADDRESS
+      "broker/zero-address-provided"
     );
     // set addresses
     MOOLAH = IMoolah(moolah);
@@ -134,7 +133,7 @@ IBroker
       _pauser != address(0) &&
       _rateCalculator != address(0) &&
       _maxFixedLoanPositions > 0,
-      ErrorsLib.ZERO_ADDRESS
+      "broker/zero-address-provided"
     );
     
     __AccessControlEnumerable_init();
@@ -165,7 +164,7 @@ IBroker
    * @param amount The amount to borrow
    */
   function borrow(uint256 amount) external override whenNotPaused nonReentrant {
-    require(amount > 0, ErrorsLib.ZERO_ASSETS);
+    require(amount > 0, "broker/zero-amount");
     address user = msg.sender;
     // get updated rate
     uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
@@ -180,7 +179,7 @@ IBroker
     // transfer loan token to user
     IERC20(LOAN_TOKEN).safeTransfer(user, amount);
     // emit event
-    emit DynamicLoanPositionUpdated(user, amount, position.principal);
+    emit DynamicLoanPositionBorrowed(user, amount, position.principal);
   }
 
   /**
@@ -193,6 +192,7 @@ IBroker
   function borrow(uint256 amount, uint256 termId) external override whenNotPaused nonReentrant {
     require(amount > 0, "broker/amount-zero");
     address user = msg.sender;
+    require(fixedLoanPositions[user].length < maxFixedLoanPositions, "broker/exceed-max-fixed-positions");
     // borrow from moolah
     _borrowFromMoolah(user, amount);
     // get term by Id
@@ -223,7 +223,7 @@ IBroker
     * @param amount The amount to repay
    */
   function repay(uint256 amount) external override whenNotPaused nonReentrant {
-    require(amount > 0, ErrorsLib.ZERO_ASSETS);
+    require(amount > 0, "broker/zero-amount");
     address user = msg.sender;
     // transfer from user
     IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), amount);
@@ -240,13 +240,27 @@ IBroker
     _supplyToMoolah(accruedInterest);
     // deduct net accrued interest from repayment amount
     amount -= accruedInterest;
+    // fully repaid
+    if (amount >= position.principal) {
+      // repay all principal
+      _repayToMoolah(user, position.principal);
+      // transfer unused amount
+      if (amount > position.principal) {
+        IERC20(LOAN_TOKEN).safeTransfer(user, amount - position.principal);
+      }
+      // clear position
+      delete dynamicLoanPositions[user];
+      // emit event
+      emit DynamicLoanPositionRepaid(user, position.principal, 0);
+      return;
+    }
     // update position
     position.principal -= amount;
     position.normalizedDebt -= BrokerMath.normalizeBorrowAmount(amount, rate);
-    // repay to moolah
+    // repay to moolah (excluded interest)
     _repayToMoolah(user, amount);
     // emit event
-    emit DynamicLoanPositionUpdated(user, amount, position.principal);
+    emit DynamicLoanPositionRepaid(user, amount, position.principal);
   }
 
   /**
@@ -275,11 +289,9 @@ IBroker
     uint256 interestAndPenalty = interest + penalty;
     // repay amount must be larger than interest and penalty
     require(interestAndPenalty < amount, "broker/repay-amount-insufficient");
-
-    // transfer loan tokens from user
-    IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), amount);
     // supply interest into vault as revenue
     _supplyToMoolah(interestAndPenalty);
+    
     // repay principal with the remaining amount
     uint256 repaidAmount = amount - interestAndPenalty;
     // amount left fully covers remaining principal
@@ -295,6 +307,8 @@ IBroker
       _repayToMoolah(user, repaidAmount);
       // the rest will be used to repay partially
       position.repaidPrincipal += repaidAmount;
+      // update repaid time (even user just repays interest)
+      position.lastRepaidTime = block.timestamp;
       // update position
       _updateFixedPosition(user, position);
     }
@@ -356,7 +370,7 @@ IBroker
       }
     }
     // emit event
-    emit Liquidated(user, principalToDeduct);
+    emit Liquidated(user, totalDebt.zeroFloorSub(debtAfter));
   }
 
   /**
@@ -455,8 +469,9 @@ IBroker
         uint256 repayPrincipal = UtilsLib.min(principalRemain, amountToDeduct);
         if (repayPrincipal > 0) {
           p.repaidPrincipal += repayPrincipal;
-          p.lastRepaidTime = block.timestamp;
         }
+        // update repaid time
+        p.lastRepaidTime = block.timestamp;
         // deduct interest and principal from total
         principalToDeduct -= (repayInterest + repayPrincipal);
       }
@@ -486,6 +501,7 @@ IBroker
   function peek(address token, address user) external override view returns (uint256 price) {
     // loan token's price never changes
     if (token == LOAN_TOKEN) {
+      // @todo using IOracle(ORACLE).peek(LOAN_TOKEN) ???
       return 10 ** 8;
     } else if(token == COLLATERAL_TOKEN) {
       /*
@@ -507,6 +523,10 @@ IBroker
       uint256 collateralPrice = IOracle(ORACLE).peek(COLLATERAL_TOKEN);
       // get user's position info
       Position memory _position = MOOLAH.position(MARKET_ID, user);
+      // in case there is no collaterals
+      if (_position.collateral == 0) {
+        return collateralPrice;
+      }
       // get market info
       Market memory _market = MOOLAH.market(MARKET_ID);
       // convert shares to borrowed amount (Moolah's debt)
@@ -514,11 +534,14 @@ IBroker
         _market.totalBorrowAssets,
         _market.totalBorrowShares
       );
+      // get decimal places
+      uint8 collateralDecimals = IERC20Metadata(COLLATERAL_TOKEN).decimals();
+      uint8 loanDecimals = IERC20Metadata(LOAN_TOKEN).decimals();
       // calculate manipulated price
       price = collateralPrice - BrokerMath.mulDivCeiling(
         debtAtBroker - debtAtMoolah,
-        1e10,
-        _position.collateral
+        10 ** (8 + uint256(collateralDecimals)),
+        _position.collateral * (10 ** uint256(loanDecimals))
       );
     }
     revert("Broker/unsupported-token");
@@ -576,7 +599,7 @@ IBroker
       position.principal += _principal;
       position.normalizedDebt += normalizedDebt;
       // emit the same event as borrow with dynamic position
-      emit DynamicLoanPositionUpdated(user, _principal, position.principal);
+      emit DynamicLoanPositionBorrowed(user, _principal, position.principal);
     }
   }
 
@@ -660,7 +683,7 @@ IBroker
       // approve to Moolah
       IERC20(LOAN_TOKEN).safeIncreaseAllowance(address(MOOLAH), interest);
       // supply interest into vault as revenue
-      (uint256 suppliedAmount, /*uint256 shares */) = MOOLAH.supply(
+      MOOLAH.supply(
         _getMarketParams(MARKET_ID),
         interest,
         0,
@@ -804,7 +827,7 @@ IBroker
    * @param maxPositions The new maximum number of fixed loan positions
    */ 
   function setMaxFixedLoanPositions(uint256 maxPositions) external onlyRole(MANAGER) {
-    require(maxFixedLoanPositions != maxPositions, ErrorsLib.INCONSISTENT_INPUT);
+    require(maxFixedLoanPositions != maxPositions, "broker/same-value-provided");
     uint256 oldMaxFixedLoanPositions = maxFixedLoanPositions;
     maxFixedLoanPositions = maxPositions;
     emit MaxFixedLoanPositionsUpdated(oldMaxFixedLoanPositions, maxPositions);
