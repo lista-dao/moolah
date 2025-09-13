@@ -138,7 +138,10 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
    */
   function _setRatePerSecond(address _broker, uint256 _ratePerSecond) internal {
     require(brokers[_broker].lastUpdated != 0, "RateCalculator/broker-not-active");
-    require(brokers[_broker].ratePerSecond >= _ratePerSecond, "RateCalculator/rate-exceeds-max");
+    require(
+      _ratePerSecond <= brokers[_broker].maxRatePerSecond,
+      "RateCalculator/rate-exceeds-max"
+    );
 
     uint256 oldRate = brokers[_broker].ratePerSecond;
     brokers[_broker].ratePerSecond = _ratePerSecond;
