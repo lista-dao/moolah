@@ -48,9 +48,10 @@ IBroker
   IMoolah public immutable MOOLAH;
   IMoolahVault public immutable MOOLAH_VAULT;
   IOracle public immutable ORACLE;
-  address public immutable LOAN_TOKEN;
-  address public immutable COLLATERAL_TOKEN;
-  Id public immutable MARKET_ID;
+  address public TOKEN;
+  address public LOAN_TOKEN;
+  address public COLLATERAL_TOKEN;
+  Id public MARKET_ID;
   string public BROKER_NAME;
 
   // ------- State variables -------
@@ -77,18 +78,21 @@ IBroker
     _;
   }
 
+  modifier marketIdSet() {
+    require(Id.unwrap(MARKET_ID) != bytes32(0), "Broker/market-not-set");
+    _;
+  }
+
   /**
    * @dev Constructor for the LendingBroker contract
    * @param moolah The address of the Moolah contract
    * @param moolahVault The address of the MoolahVault contract
    * @param oracle The address of the oracle
-   * @param marketId The ID of the market
    */
   constructor(
     address moolah,
     address moolahVault,
-    address oracle,
-    Id marketId
+    address oracle
   ) {
     // zero address assert
     require(
@@ -101,10 +105,6 @@ IBroker
     MOOLAH = IMoolah(moolah);
     MOOLAH_VAULT = IMoolahVault(moolahVault);
     ORACLE = IOracle(oracle);
-    MARKET_ID = marketId;
-    MarketParams memory _marketParams = MOOLAH.idToMarketParams(marketId);
-    LOAN_TOKEN = _marketParams.loanToken;
-    COLLATERAL_TOKEN = _marketParams.collateralToken;
 
     _disableInitializers();
   }
@@ -148,11 +148,6 @@ IBroker
     rateCalculator = _rateCalculator;
     maxFixedLoanPositions = _maxFixedLoanPositions;
     fixedPosUuid = 1;
-    
-    // set broker name
-    string memory collateralTokenName = IERC20Metadata(COLLATERAL_TOKEN).symbol();
-    string memory loanTokenName = IERC20Metadata(LOAN_TOKEN).symbol();
-    BROKER_NAME = string(abi.encodePacked("Lista-Lending ", collateralTokenName, "-", loanTokenName, " Broker"));
   }
 
   ///////////////////////////////////////
@@ -163,7 +158,7 @@ IBroker
    * @dev Borrow a fixed amount of loan token with a dynamic rate
    * @param amount The amount to borrow
    */
-  function borrow(uint256 amount) external override whenNotPaused nonReentrant {
+  function borrow(uint256 amount) external override marketIdSet whenNotPaused nonReentrant {
     require(amount > 0, "broker/zero-amount");
     address user = msg.sender;
     // get updated rate
@@ -189,7 +184,7 @@ IBroker
     * @param amount amount to borrow
     * @param termId The ID of the term
     */
-  function borrow(uint256 amount, uint256 termId) external override whenNotPaused nonReentrant {
+  function borrow(uint256 amount, uint256 termId) external override marketIdSet whenNotPaused nonReentrant {
     require(amount > 0, "broker/amount-zero");
     address user = msg.sender;
     require(fixedLoanPositions[user].length < maxFixedLoanPositions, "broker/exceed-max-fixed-positions");
@@ -222,7 +217,7 @@ IBroker
     * @dev Repay a Dynamic loan position
     * @param amount The amount to repay
    */
-  function repay(uint256 amount) external override whenNotPaused nonReentrant {
+  function repay(uint256 amount) external override marketIdSet whenNotPaused nonReentrant {
     require(amount > 0, "broker/zero-amount");
     address user = msg.sender;
     // transfer from user
@@ -269,7 +264,7 @@ IBroker
     * @param amount The amount to repay
     * @param posId The ID of the fixed position to repay
    */
-  function repay(uint256 amount, uint256 posId) external override whenNotPaused nonReentrant {
+  function repay(uint256 amount, uint256 posId) external override marketIdSet whenNotPaused nonReentrant {
     address user = msg.sender;
     // fetch position (will revert if not found)
     FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
@@ -335,7 +330,7 @@ IBroker
    * @param id The market id
    * @param user The address of the user being liquidated
    */
-  function liquidate(Id id, address user) external override onlyMoolah whenNotPaused nonReentrant {
+  function liquidate(Id id, address user) external override onlyMoolah marketIdSet whenNotPaused nonReentrant {
     require(
       _getMarketParams(id).loanToken == _getMarketParams(MARKET_ID).loanToken &&
       _getMarketParams(id).collateralToken == _getMarketParams(MARKET_ID).collateralToken
@@ -494,6 +489,15 @@ IBroker
   }
 
   /**
+   * @dev IOracle-compatible peek for base prices (no user context)
+   * @param asset The token to fetch the price for
+   * @return price Price with 8 decimals, proxied from the underlying oracle
+   */
+  function peek(address asset) external view returns (uint256 price) {
+    return IOracle(ORACLE).peek(asset);
+  }
+
+  /**
    * @dev returns the price of a token for a user in 8 decimal places
    * @param token The address of the token to get the price for
    * @param user The address of the user
@@ -538,11 +542,14 @@ IBroker
       uint8 collateralDecimals = IERC20Metadata(COLLATERAL_TOKEN).decimals();
       uint8 loanDecimals = IERC20Metadata(LOAN_TOKEN).decimals();
       // calculate manipulated price
-      price = collateralPrice - BrokerMath.mulDivCeiling(
-        debtAtBroker - debtAtMoolah,
+      uint256 deltaDebt = debtAtBroker > debtAtMoolah ? (debtAtBroker - debtAtMoolah) : 0;
+      uint256 deduction = BrokerMath.mulDivCeiling(
+        deltaDebt,
         10 ** (8 + uint256(collateralDecimals)),
         _position.collateral * (10 ** uint256(loanDecimals))
       );
+      price = deduction >= collateralPrice ? 0 : (collateralPrice - deduction);
+      return price;
     }
     revert("Broker/unsupported-token");
   }
@@ -572,6 +579,7 @@ IBroker
   override
   whenNotPaused
   nonReentrant
+  marketIdSet
   onlyRole(BOT) {
     require(posIds.length > 0, "Broker/zero-positions");
     // the additional principal will be add into the dynamic position
@@ -777,6 +785,27 @@ IBroker
   ///////////////////////////////////////
   /////       Admin functions       /////
   ///////////////////////////////////////
+
+  /**
+   * @dev Set the market ID for the broker
+   * @param marketId The market ID
+   */
+  function setMarketId(Id marketId) external onlyRole(MANAGER) {
+    // can only be set once
+    require(Id.unwrap(MARKET_ID) == bytes32(0), "broker/invalid-market");
+    MARKET_ID = marketId;
+    MarketParams memory _marketParams = MOOLAH.idToMarketParams(marketId);
+    LOAN_TOKEN = _marketParams.loanToken;
+    COLLATERAL_TOKEN = _marketParams.collateralToken;
+    // compatibility for Moolah's liquidate function
+    TOKEN = _marketParams.collateralToken;
+    // set broker name
+    string memory collateralTokenName = IERC20Metadata(COLLATERAL_TOKEN).symbol();
+    string memory loanTokenName = IERC20Metadata(LOAN_TOKEN).symbol();
+    BROKER_NAME = string(abi.encodePacked("Lista-Lending ", collateralTokenName, "-", loanTokenName, " Broker"));
+    // emit event
+    emit MarketIdSet(marketId);
+  }
 
   /**
    * @dev Set a fixed term and rate for borrowing
