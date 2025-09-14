@@ -4,6 +4,7 @@ src = "src"
 out = "out"
 libs = ["lib"]
 solc = "0.8.28"
+optimizer = true
 optimizer_runs = 200
 
 allow_internal_expect_revert = true
@@ -13,7 +14,8 @@ ast = true
 force = true # force recompile, must clean first in v5: https://docs.openzeppelin.com/upgrades-plugins/1.x/foundry-upgrades#before_running
 build_info = true
 extra_output = ["storageLayout"]
-viaIr = true
+# Enable the Solidity via-IR pipeline for better code size optimization
+via_ir = true
 
 [rpc_endpoints]
 bsc_testnet = "${BSC_TESTNET_RPC_URL}"

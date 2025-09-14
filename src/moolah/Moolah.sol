@@ -23,6 +23,8 @@ import { MathLib, WAD } from "./libraries/MathLib.sol";
 import { SharesMathLib } from "./libraries/SharesMathLib.sol";
 import { MarketParamsLib } from "./libraries/MarketParamsLib.sol";
 import { SafeTransferLib } from "./libraries/SafeTransferLib.sol";
+import { PriceLib } from "./libraries/PriceLib.sol";
+import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import { IProvider } from "../provider/interfaces/IProvider.sol";
 import { IBrokerBase } from "../broker/interfaces/IBroker.sol";
 
@@ -774,27 +776,17 @@ contract Moolah is
   /// @param user The user address
   /// @return The price of the collateral asset in terms of the loan asset
   function _getPrice(MarketParams memory marketParams, address user) public view returns (uint256) {
-    IOracle _oracle = IOracle(marketParams.oracle);
-    uint256 baseTokenDecimals = IERC20Metadata(marketParams.collateralToken).decimals();
-    uint256 quotaTokenDecimals = IERC20Metadata(marketParams.loanToken).decimals();
-    uint256 basePrice = _oracle.peek(marketParams.collateralToken);
-    uint256 quotaPrice = _oracle.peek(marketParams.loanToken);
-
     address broker = brokers[marketParams.id()];
-    // if market has broker and user address is non-zero
-    if (broker != address(0) && user != address(0)) {
-      // get price from broker
-      // price deviatiates with user's position at broker
-      IBrokerBase _broker = IBrokerBase(broker);
-      basePrice = _broker.peek(marketParams.collateralToken, user);
-      quotaPrice = _broker.peek(marketParams.loanToken, user);
-    } else {
-      basePrice = _oracle.peek(marketParams.collateralToken);
-      quotaPrice = _oracle.peek(marketParams.loanToken);
-    }
+
+    (
+      uint256 basePrice,
+      uint256 quotePrice, 
+      uint256 baseTokenDecimals,
+      uint256 quotaTokenDecimals
+    ) = PriceLib._getPrice(marketParams, user, broker);
 
     uint256 scaleFactor = 10 ** (36 + quotaTokenDecimals - baseTokenDecimals);
-    return scaleFactor.mulDivDown(basePrice, quotaPrice);
+    return scaleFactor.mulDivDown(basePrice, quotePrice);
   }
 
   /// @inheritdoc IMoolahBase
