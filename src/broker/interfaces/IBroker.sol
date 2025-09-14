@@ -32,12 +32,19 @@ interface IBrokerBase {
 
   /// @dev user will deposit this token as collateral
   function COLLATERAL_TOKEN() external view returns (address);
+  /// @dev compatibility for Moolah's liquidate function (same as collateral token)
+  function TOKEN() external view returns (address);
 
   /// @dev peek the price of the token per user
   ///      decreasing according to the accruing interest for collateral token
   /// @param token The address of the token to peek
   /// @param user The address of the user to peek
   function peek(address token, address user) external view returns (uint256 price);
+
+  /// @dev liquidate a user's position
+  /// @param marketId The market id of the broker belongs to
+  /// @param user The address of the user position is being liquidated
+  function liquidate(Id marketId, address user) external;
 }
 
 /// @dev Broker interface
@@ -76,6 +83,7 @@ interface IBroker is IBrokerBase {
   event MaxFixedLoanPositionsUpdated(uint256 oldMax, uint256 newMax);
   event FixedTermAndRateUpdated(uint256 termId, uint256 duration, uint256 apr);
   event Liquidated(address indexed user, uint256 principalToDeduct);
+  event MarketIdSet(Id marketId);
 
   /// ------------------------------
   ///        View functions
@@ -103,11 +111,6 @@ interface IBroker is IBrokerBase {
   /// @param amount The amount to repay
   /// @param posIdx The index of the fixed position to repay
   function repay(uint256 amount, uint256 posIdx) external;
-
-  /// @dev liquidate a user's position
-  /// @param marketId The market id of the broker belongs to
-  /// @param user The address of the user position is being liquidated
-  function liquidate(Id marketId, address user) external;
 
   /// @dev refinance expired fixed positions to dynamic
   /// @param user The address of the user to refinance
