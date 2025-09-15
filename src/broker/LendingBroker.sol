@@ -296,7 +296,7 @@ IBroker
       // transfer unused amount
       IERC20(LOAN_TOKEN).safeTransfer(user, repaidAmount - remainingPrincipal);
       // removes it from user's fixed positions
-      _removeFixPositionByPosId(user, posId);
+      _removeFixedPositionByPosId(user, posId);
     } else {
       // repay with all amount left
       _repayToMoolah(user, repaidAmount);
@@ -472,7 +472,7 @@ IBroker
       }
       // remove it if fully repaid, otherwise update it
       if (p.repaidPrincipal >= p.principal) {
-        _removeFixPositionByPosId(user, p.posId);
+        _removeFixedPositionByPosId(user, p.posId);
       } else {
         _updateFixedPosition(user, p);
       }
@@ -596,6 +596,8 @@ IBroker
       _principal +=
         position.principal - position.repaidPrincipal +
         _getAccruedInterestForFixedPosition(position);
+      // remove the fixed position
+      _removeFixedPositionByPosId(user, posId);
     }
     if (_principal > 0) {
       // get updated rate
@@ -706,7 +708,7 @@ IBroker
    * @param user The address of the user
    * @param posId The ID of the position to remove
    */
-  function _removeFixPositionByPosId(address user, uint256 posId) internal {
+  function _removeFixedPositionByPosId(address user, uint256 posId) internal {
     // get user's fixed positions
     FixedLoanPosition[] storage positions = fixedLoanPositions[user];
     // loop through user's positions
