@@ -524,9 +524,9 @@ contract LendingBrokerTest is Test {
     posIds[0] = posId;
     vm.prank(BOT);
     broker.refinanceMaturedFixedPositions(borrower, posIds);
-    // fixed positions remain; refinance only aggregates into dynamic in current implementation
+    // fixed positions will be removed; the principal aggregates into dynamic in current implementation
     positions = broker.userFixedPositions(borrower);
-    assertEq(positions.length, 1);
+    assertEq(positions.length, 0);
     // dynamic position principal increased
     (uint256 dynPrincipal, ) = broker.dynamicLoanPositions(borrower);
     assertGt(dynPrincipal, 0);
