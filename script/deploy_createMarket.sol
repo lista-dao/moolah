@@ -49,6 +49,8 @@ contract CreateMarketDeploy is Script {
   address yUSD = 0x4772D2e014F9fC3a820C444e3313968e9a5C8121;
   address uniBTC = 0x6B2a01A5f79dEb4c2f3c0eDa7b01DF456FbD726a;
   address ptUSR27NOV2025 = 0x4a3846d069B800343D53e72B80a644Bb496D9aB2;
+  address ptSatUSD18DEC2025 = 0x31E88bF4AC49EEf6711756D141F1A63E78F9F665;
+  address WLFI = 0x47474747477b199288bF72a1D702f7Fe0Fb1DEeA;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
@@ -64,6 +66,8 @@ contract CreateMarketDeploy is Script {
   address ptSigmaLP25Sep2025USDTOracle = 0x39D5348B0363AC9D0d4168Bac9A5B8A1E9DBd511;
   address ptUSR27NOV2025USD1Oracle = 0xC36a8F8Ad34A68942979bb50B7792862eFb59cF3;
   address ptUSR27NOV2025USDTOracle = 0x01ccc0f0ae8907bD3EFA947B2Ce841082Bcce29f;
+  address ptSatUSD18DEC2025USD1Oracle = 0x0Ed93c1BF6F81cEd3d5D83b884Fe403A8cb9072E;
+  address ptSatUSD18DEC2025USDTOracle = 0xe98E6D103347fcCB97861DA5071fDAc408fD991A;
 
   address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
   address alphaIrm = 0x5F9f9173B405C6CEAfa7f98d09e4B8447e9797E6;
@@ -86,42 +90,26 @@ contract CreateMarketDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams[] memory params = new MarketParams[](8);
-    params[0] = MarketParams({
+    MarketParams[] memory params = new MarketParams[](4);
+    params[0] = MarketParams({ loanToken: USD1, collateralToken: WLFI, oracle: multiOracle, irm: irm, lltv: lltv50 });
+    params[1] = MarketParams({ loanToken: USDT, collateralToken: WLFI, oracle: multiOracle, irm: irm, lltv: lltv50 });
+    params[2] = MarketParams({
       loanToken: USD1,
-      collateralToken: wstUSR,
-      oracle: multiOracle,
+      collateralToken: ptSatUSD18DEC2025,
+      oracle: ptSatUSD18DEC2025USD1Oracle,
       irm: irm,
       lltv: lltv915
     });
-    params[1] = MarketParams({ loanToken: USD1, collateralToken: yUSD, oracle: multiOracle, irm: irm, lltv: lltv915 });
-    params[2] = MarketParams({ loanToken: USD1, collateralToken: uniBTC, oracle: multiOracle, irm: irm, lltv: lltv70 });
     params[3] = MarketParams({
-      loanToken: USD1,
-      collateralToken: ptUSR27NOV2025,
-      oracle: ptUSR27NOV2025USD1Oracle,
-      irm: irm,
-      lltv: lltv915
-    });
-    params[4] = MarketParams({
       loanToken: USDT,
-      collateralToken: wstUSR,
-      oracle: multiOracle,
+      collateralToken: ptSatUSD18DEC2025,
+      oracle: ptSatUSD18DEC2025USDTOracle,
       irm: irm,
       lltv: lltv915
     });
-    params[5] = MarketParams({ loanToken: USDT, collateralToken: yUSD, oracle: multiOracle, irm: irm, lltv: lltv915 });
-    params[6] = MarketParams({ loanToken: USDT, collateralToken: uniBTC, oracle: multiOracle, irm: irm, lltv: lltv70 });
-    params[7] = MarketParams({
-      loanToken: USDT,
-      collateralToken: ptUSR27NOV2025,
-      oracle: ptUSR27NOV2025USDTOracle,
-      irm: irm,
-      lltv: lltv915
-    });
-
+    //
     vm.startBroadcast(deployerPrivateKey);
-    for (uint256 i = 0; i < 8; i++) {
+    for (uint256 i = 0; i < 4; i++) {
       Id id = params[i].id();
       console.log("market id:");
       console.logBytes32(Id.unwrap(id));
