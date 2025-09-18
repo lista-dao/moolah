@@ -38,7 +38,7 @@ contract BNBProviderTest is Test {
   uint256 lltv80 = 80 * 1e16;
 
   address user = makeAddr("user");
-  address user2 = makeAddr("user2");
+  address user2 = makeAddr("user22");
 
   function setUp() public {
     vm.createSelectFork("https://bsc-dataseed.bnbchain.org");
