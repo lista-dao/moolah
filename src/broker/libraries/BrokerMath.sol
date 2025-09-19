@@ -31,7 +31,7 @@ library BrokerMath {
       // add principal
       totalDebt += _fixedPos.principal;
       // add interest
-      totalDebt += getAccruedInterestForFixedPosition(_fixedPos);
+      totalDebt += getAccruedInterestForFixedPosition(_fixedPos) - _fixedPos.repaidInterest;
     }
     // [2] total debt from dynamic position
     totalDebt += denormalizeBorrowAmount(dynamicPosition.normalizedDebt, currentRate);
@@ -57,10 +57,10 @@ library BrokerMath {
   function getAccruedInterestForFixedPosition(FixedLoanPosition memory position) public view returns (uint256) {
     // term
     uint256 term = position.end - position.start;
-    // accrued interest = principal * APR * (block.timestamp - lastRepaidTime) / term
+    // accrued interest = principal * APR * timeElapsed / term
     return Math.mulDiv(
       Math.mulDiv(position.principal, position.apr, RATE_SCALE, Math.Rounding.Ceil), // principal * APR
-      block.timestamp - position.lastRepaidTime,
+      block.timestamp - position.start,
       term,
       Math.Rounding.Ceil
     );

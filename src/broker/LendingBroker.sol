@@ -48,7 +48,6 @@ IBroker
   IMoolah public immutable MOOLAH;
   IMoolahVault public immutable MOOLAH_VAULT;
   IOracle public immutable ORACLE;
-  address public TOKEN;
   address public LOAN_TOKEN;
   address public COLLATERAL_TOKEN;
   Id public MARKET_ID;
@@ -203,6 +202,7 @@ IBroker
       start: start,
       end: end,
       lastRepaidTime: start,
+      repaidInterest: 0,
       repaidPrincipal: 0
     }));
     // pos uuid increment
@@ -216,46 +216,47 @@ IBroker
   /**
     * @dev Repay a Dynamic loan position
     * @param amount The amount to repay
+    * @param onBehalf The address of the user whose position to repay
    */
-  function repay(uint256 amount) external override marketIdSet whenNotPaused nonReentrant {
+  function repay(uint256 amount, address onBehalf) external override marketIdSet whenNotPaused nonReentrant {
     require(amount > 0, "broker/zero-amount");
+    require(onBehalf != address(0), "broker/zero-address");
     address user = msg.sender;
-    // transfer from user
-    IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), amount);
     // get user's dynamic position
-    DynamicLoanPosition storage position = dynamicLoanPositions[user];
+    DynamicLoanPosition storage position = dynamicLoanPositions[onBehalf];
     // get updated rate
     uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
-    // calc. actual debt (borrowed amount + accrued interest)
-    uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate);
     // get net accrued interest
-    uint256 accruedInterest = actualDebt - position.principal;
-    require(amount > accruedInterest, "broker/repay-amount-insufficient");
-    // collect interest and supply to moolah
-    _supplyToMoolah(accruedInterest);
-    // deduct net accrued interest from repayment amount
-    amount -= accruedInterest;
-    // fully repaid
-    if (amount >= position.principal) {
-      // repay all principal
-      _repayToMoolah(user, position.principal);
-      // transfer unused amount
-      if (amount > position.principal) {
-        IERC20(LOAN_TOKEN).safeTransfer(user, amount - position.principal);
-      }
-      // clear position
-      delete dynamicLoanPositions[user];
-      // emit event
-      emit DynamicLoanPositionRepaid(user, position.principal, 0);
-      return;
-    }
+    uint256 accruedInterest = 
+      BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate) - position.principal;
+    // calculate the amount we need to repay for interest and principal
+    uint256 repayInterestAmt = amount < accruedInterest ? amount : accruedInterest;
+    uint256 amountLeft = amount - repayInterestAmt;
+    uint256 repayPrincipalAmt = amountLeft > position.principal ? position.principal : amountLeft;
+
+    // transfer amount needed from user
+    IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), repayInterestAmt + repayPrincipalAmt);
+
+    // (1) Repay interest first
     // update position
-    position.principal -= amount;
-    position.normalizedDebt -= BrokerMath.normalizeBorrowAmount(amount, rate);
-    // repay to moolah (excluded interest)
-    _repayToMoolah(user, amount);
-    // emit event
-    emit DynamicLoanPositionRepaid(user, amount, position.principal);
+    position.normalizedDebt -= BrokerMath.normalizeBorrowAmount(repayInterestAmt, rate);
+    // supply interest to moolah vault
+    _supplyToMoolahVault(repayInterestAmt);
+
+    // has left to repay principal
+    if (repayPrincipalAmt > 0) {
+      // update position
+      position.principal -= repayPrincipalAmt;
+      position.normalizedDebt -= BrokerMath.normalizeBorrowAmount(repayPrincipalAmt, rate);
+      // repay to moolah (principal only)
+      _repayToMoolah(onBehalf, repayPrincipalAmt);
+      // remove position if fully repaid
+      if (position.principal == 0) {
+        delete dynamicLoanPositions[onBehalf];
+      }
+    }
+
+    emit DynamicLoanPositionRepaid(onBehalf, amount, position.principal);
   }
 
   /**
@@ -263,66 +264,83 @@ IBroker
     * @notice repay interest first then principal, repay amount must larger than interest
     * @param amount The amount to repay
     * @param posId The ID of the fixed position to repay
+    * @param onBehalf The address of the user whose position to repay
    */
-  function repay(uint256 amount, uint256 posId) external override marketIdSet whenNotPaused nonReentrant {
+  function repay(uint256 amount, uint256 posId, address onBehalf) external override marketIdSet whenNotPaused nonReentrant {
+    require(amount > 0, "broker/zero-amount");
+    require(onBehalf != address(0), "broker/zero-address");
     address user = msg.sender;
-    // fetch position (will revert if not found)
-    FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
-
-    // transfer from user
     IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), amount);
-    // remaining principal, user might repaid before
+
+    // fetch position (will revert if not found)
+    FixedLoanPosition memory position = _getFixedPositionByPosId(onBehalf, posId);
+    // remaining principal before repayment
     uint256 remainingPrincipal = position.principal - position.repaidPrincipal;
-
-    // calculate interest
-    uint256 interest = _getAccruedInterestForFixedPosition(position);
-    require(amount > interest, "broker/repay-amount-insufficient");
-
-    // calculate penalty (zero if there is no penalty)
-    uint256 penalty = _getPenaltyForFixedPosition(position, amount - interest);
-    // total interest and penalty required (does not include principal)
-    uint256 interestAndPenalty = interest + penalty;
-    // repay amount must be larger than interest and penalty
-    require(interestAndPenalty < amount, "broker/repay-amount-insufficient");
-    // supply interest into vault as revenue
-    _supplyToMoolah(interestAndPenalty);
+    // get accrued interest from LAST REPAID TIME to NOW
+    uint256 accruedInterest = BrokerMath.getAccruedInterestForFixedPosition(position) - position.repaidInterest;
     
-    // repay principal with the remaining amount
-    uint256 repaidAmount = amount - interestAndPenalty;
-    // amount left fully covers remaining principal
-    if (repaidAmount > remainingPrincipal) {
-      // repay all remaining principal
-      _repayToMoolah(user, remainingPrincipal);
-      // transfer unused amount
-      IERC20(LOAN_TOKEN).safeTransfer(user, repaidAmount - remainingPrincipal);
-      // removes it from user's fixed positions
-      _removeFixedPositionByPosId(user, posId);
-    } else {
-      // repay with all amount left
-      _repayToMoolah(user, repaidAmount);
+    // initialize repay amounts
+    uint256 repayInterestAmt = amount < accruedInterest ? amount : accruedInterest;
+    uint256 repayPrincipalAmt = UtilsLib.min(amount - repayInterestAmt, remainingPrincipal);
+
+    // repay interest first, it might be zero if user just repaid before
+    if (repayInterestAmt > 0) {
+      // update repaid interest amount
+      position.repaidInterest += repayInterestAmt;
+      // supply interest into vault as revenue
+      amount -= repayInterestAmt;
+      _supplyToMoolahVault(repayInterestAmt);
+    }
+
+    // then repay principal if there is any amount left
+    if (repayPrincipalAmt > 0) {
+      // ----- penalty
+      // check penalty if user is repaying before expiration
+      uint256 penalty = _getPenaltyForFixedPosition(position, repayPrincipalAmt);
+      // supply penalty into vault as revenue
+      if (penalty > 0) {
+        amount -= penalty;
+        _supplyToMoolahVault(penalty);
+      }
+
       // the rest will be used to repay partially
-      position.repaidPrincipal += repaidAmount;
+      uint256 actualRepaidPrincipal = amount > repayPrincipalAmt ? repayPrincipalAmt : amount;
+      position.repaidPrincipal += actualRepaidPrincipal;
+      _repayToMoolah(onBehalf, actualRepaidPrincipal);
+      amount -= actualRepaidPrincipal;
+    }
+
+    // return leftover to user
+    if (amount > 0) {
+      IERC20(LOAN_TOKEN).safeTransfer(user, amount);
+    }
+
+    // post repayment
+    if (position.repaidPrincipal >= position.principal) {
+      // removes it from user's fixed positions
+      _removeFixedPositionByPosId(onBehalf, posId);
+    } else {
       // update repaid time (even user just repays interest)
       position.lastRepaidTime = block.timestamp;
       // update position
-      _updateFixedPosition(user, position);
+      _updateFixedPosition(onBehalf, position);
     }
+
     // emit event
     emit RepaidFixedLoanPosition(
-      user,
+      onBehalf,
       position.principal,
       position.start,
       position.end,
       position.apr,
       position.repaidPrincipal,
-      repaidAmount > remainingPrincipal
+      position.repaidPrincipal >= position.principal
     );
   }
 
   ///////////////////////////////////////
   /////         Liquidation         /////
   ///////////////////////////////////////
-
   /**
    * @dev Liquidate a borrower's debt by accruing interest and repaying the dynamic
    *      position first, then settling fixed-rate positions sorted by APR and
@@ -369,8 +387,7 @@ IBroker
   }
 
   /**
-   * @dev insertion sort positions by APR(desc) then remaining principal(desc)
-   *      insertion sort is not gas efficient algorithm,
+   * @dev sorting by end time
    *      but it is simple and works well for small arrays as user's number of fixed positions is limited
    * @param positions The fixed loan positions to sort
    */
@@ -543,6 +560,11 @@ IBroker
       uint8 loanDecimals = IERC20Metadata(LOAN_TOKEN).decimals();
       // calculate manipulated price
       uint256 deltaDebt = debtAtBroker > debtAtMoolah ? (debtAtBroker - debtAtMoolah) : 0;
+      // Convert (brokerDebt − moolahDebt) per unit collateral into an 8‑decimal price.
+      // deltaDebt is in loan token units (10^loanDecimals); collateral is in 10^collateralDecimals.
+      // Scale: ceil(deltaDebt * 10^(8 + collateralDecimals) / (collateral * 10^loanDecimals)).
+      // 10^(collateralDecimals) cancels collateral units; 10^8 sets price precision.
+      // Ceiling rounding avoids under‑deduction (more conservative).
       uint256 deduction = BrokerMath.mulDivCeiling(
         deltaDebt,
         10 ** (8 + uint256(collateralDecimals)),
@@ -595,7 +617,7 @@ IBroker
       // (2) get accrued interest if user has repaid before, partial of the interest will be excluded
       _principal +=
         position.principal - position.repaidPrincipal +
-        _getAccruedInterestForFixedPosition(position);
+        _getAccruedInterestForFixedPosition(position) - position.repaidInterest;
       // remove the fixed position
       _removeFixedPositionByPosId(user, posId);
     }
@@ -688,7 +710,7 @@ IBroker
    * @dev Supply an amount of interest to Moolah
    * @param interest The amount of interest to supply
    */
-  function _supplyToMoolah(uint256 interest) internal {
+  function _supplyToMoolahVault(uint256 interest) internal {
     if (interest > 0) {
       // approve to Moolah
       IERC20(LOAN_TOKEN).safeIncreaseAllowance(address(MOOLAH), interest);
@@ -799,8 +821,6 @@ IBroker
     MarketParams memory _marketParams = MOOLAH.idToMarketParams(marketId);
     LOAN_TOKEN = _marketParams.loanToken;
     COLLATERAL_TOKEN = _marketParams.collateralToken;
-    // compatibility for Moolah's liquidate function
-    TOKEN = _marketParams.collateralToken;
     // set broker name
     string memory collateralTokenName = IERC20Metadata(COLLATERAL_TOKEN).symbol();
     string memory loanTokenName = IERC20Metadata(LOAN_TOKEN).symbol();
