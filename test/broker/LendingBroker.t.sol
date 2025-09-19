@@ -198,7 +198,7 @@ contract LendingBrokerTest is Test {
     // Repay partially (must exceed accrued interest)
     uint256 repayAmt = 400 ether;
     vm.prank(borrower);
-    broker.repay(repayAmt);
+    broker.repay(repayAmt, borrower);
 
     // Dynamic position principal should reduce
     (uint256 principalAfter, uint256 normDebtAfter) = broker.dynamicLoanPositions(borrower);
@@ -240,7 +240,7 @@ contract LendingBrokerTest is Test {
     // Partial repay: ensure amount > interest + penalty
     uint256 partialRepay = 100 ether;
     vm.prank(borrower);
-    broker.repay(partialRepay, posId);
+    broker.repay(partialRepay, posId, borrower);
 
     // Position should still exist with reduced remaining principal
     positions = broker.userFixedPositions(borrower);
@@ -252,7 +252,7 @@ contract LendingBrokerTest is Test {
     LISUSD.setBalance(borrower, 1000 ether);
     uint256 repayAll = 1000 ether;
     vm.prank(borrower);
-    broker.repay(repayAll, posId);
+    broker.repay(repayAll, posId, borrower);
 
     // Position fully removed
     positions = broker.userFixedPositions(borrower);
@@ -283,7 +283,7 @@ contract LendingBrokerTest is Test {
     FixedLoanPosition[] memory beforeFix = broker.userFixedPositions(borrower);
     uint256 lowAprPosId = beforeFix[0].apr < beforeFix[1].apr ? beforeFix[0].posId : beforeFix[1].posId;
     vm.prank(borrower);
-    broker.repay(50 ether, lowAprPosId); // small partial repay
+    broker.repay(50 ether, lowAprPosId, borrower); // small partial repay
 
     // Make position unhealthy by dropping collateral price via OracleMock
     oracle.setPrice(address(BTCB), 10_000_000); // ~$0.10 to force undercollateralization but keep > 0
@@ -401,20 +401,6 @@ contract LendingBrokerTest is Test {
     assertLt(p1, p0, "collateral price did not decrease");
   }
 
-  function test_fixedRepay_Insufficient_Reverts() public {
-    // Create a fixed position
-    vm.prank(MANAGER);
-    broker.setFixedTermAndRate(88, 30 days, RATE_SCALE);
-    vm.prank(borrower);
-    broker.borrow(200 ether, 88);
-    // accrue some interest
-    skip(1 days);
-    // repay too little (<= interest), should revert
-    vm.expectRevert(bytes("broker/repay-amount-insufficient"));
-    vm.prank(borrower);
-    broker.repay(1, 1); // posId is 1 for the first fixed position
-  }
-
   function test_refinance_onlyBot_Reverts() public {
     uint256[] memory posIds = new uint256[](0);
     vm.expectRevert(); // AccessControlUnauthorizedAccount
@@ -498,15 +484,6 @@ contract LendingBrokerTest is Test {
     assertEq(terms[0].apr, RATE_SCALE + 1);
   }
 
-  function test_dynamicRepay_insufficient_interest_reverts() public {
-    vm.prank(borrower);
-    broker.borrow(1000 ether);
-    // accrue some interest to make accruedInterest > 0
-    skip(1 days);
-    vm.expectRevert(bytes("broker/repay-amount-insufficient"));
-    vm.prank(borrower);
-    broker.repay(1);
-  }
 
   function test_refinance_matured_success() public {
     // create a short-term fixed position

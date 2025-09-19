@@ -16,6 +16,7 @@ struct FixedLoanPosition {
   uint256 start;
   uint256 end;
   uint256 lastRepaidTime;
+  uint256 repaidInterest;
   uint256 repaidPrincipal;
 }
 
@@ -29,11 +30,8 @@ struct DynamicLoanPosition {
 interface IBrokerBase {
   /// @dev user will borrow this token against their collateral
   function LOAN_TOKEN() external view returns (address);
-
   /// @dev user will deposit this token as collateral
   function COLLATERAL_TOKEN() external view returns (address);
-  /// @dev compatibility for Moolah's liquidate function (same as collateral token)
-  function TOKEN() external view returns (address);
 
   /// @dev peek the price of the token per user
   ///      decreasing according to the accruing interest for collateral token
@@ -105,12 +103,14 @@ interface IBroker is IBrokerBase {
 
   /// @dev repay a loan with the dynamic rate scheme
   /// @param amount The amount to repay
-  function repay(uint256 amount) external;
+  /// @param onBehalf The address of the user whose position to repay
+  function repay(uint256 amount, address onBehalf) external;
 
   /// @dev repay a loan with a fixed rate and term
   /// @param amount The amount to repay
   /// @param posIdx The index of the fixed position to repay
-  function repay(uint256 amount, uint256 posIdx) external;
+  /// @param onBehalf The address of the user whose position to repay
+  function repay(uint256 amount, uint256 posIdx, address onBehalf) external;
 
   /// @dev refinance expired fixed positions to dynamic
   /// @param user The address of the user to refinance
