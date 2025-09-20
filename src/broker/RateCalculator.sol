@@ -65,24 +65,7 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
    *      otherwise, calculate the new rate based on the elapsed time
    */
   function accrueRate(address broker) external override returns (uint256) {
-    RateConfig storage config = brokers[broker];
-    require(config.lastUpdated != 0, "RateCalculator/broker-not-active");
-    uint256 ratePerSecond = config.ratePerSecond;
-    uint256 lastUpdated = config.lastUpdated;
-    uint256 currentRate = config.currentRate;
-    // no rate set, return default
-    if (ratePerSecond == 0) {
-      return RATE_SCALE;
-    }
-    // no time elapsed, return current rate
-    if (lastUpdated == block.timestamp) {
-      return currentRate;
-    }
-    // update current rate
-    config.currentRate = BrokerMath._rmul(BrokerMath._rpow(ratePerSecond, block.timestamp - lastUpdated, RATE_SCALE), currentRate);
-    // refresh updated timestamp
-    config.lastUpdated = block.timestamp;
-    return config.currentRate;
+    return _accrueRate(broker);
   }
 
   /**
@@ -142,10 +125,39 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
       _ratePerSecond <= brokers[_broker].maxRatePerSecond,
       "RateCalculator/rate-exceeds-max"
     );
-
+    // accrue the rate first before overwriting it to avoid retroactive jumps
+    _accrueRate(_broker);
+    // update rate per second
     uint256 oldRate = brokers[_broker].ratePerSecond;
     brokers[_broker].ratePerSecond = _ratePerSecond;
     emit RatePerSecondUpdated(_broker, oldRate, _ratePerSecond);
+  }
+
+  /**
+   * @dev Returns the current interest rate for the caller's broker
+   *      If time has not elapsed since the last update, return the current rate
+   *      otherwise, calculate the new rate based on the elapsed time
+   */
+  function _accrueRate(address broker) internal returns (uint256) {
+    RateConfig storage config = brokers[broker];
+    require(config.lastUpdated != 0, "RateCalculator/broker-not-active");
+    uint256 ratePerSecond = config.ratePerSecond;
+    uint256 lastUpdated = config.lastUpdated;
+    uint256 currentRate = config.currentRate;
+    // no rate set, return default
+    if (ratePerSecond == 0) {
+      config.lastUpdated = block.timestamp;
+      return RATE_SCALE;
+    }
+    // no time elapsed, return current rate
+    if (lastUpdated == block.timestamp) {
+      return currentRate;
+    }
+    // update current rate
+    config.currentRate = BrokerMath._rmul(BrokerMath._rpow(ratePerSecond, block.timestamp - lastUpdated, RATE_SCALE), currentRate);
+    // refresh updated timestamp
+    config.lastUpdated = block.timestamp;
+    return config.currentRate;
   }
 
   ///////////////////////////////////////
