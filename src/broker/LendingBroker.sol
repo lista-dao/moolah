@@ -376,7 +376,8 @@ IBroker
     principalToDeduct = _deductDynamicPositionDebt(dynamicPosition, principalToDeduct, rate);
     // deduct from fixed positions
     if (principalToDeduct > 0 && fixedPositions.length > 0) {
-      // sort fixed positions from highest APR + remaining principal
+      // sort fixed positions from earliest end time to latest, filter out fully repaid positions
+      // positions with earlier end time will be deducted first
       FixedLoanPosition[] memory sorted = _sortAndFilterFixedPositions(fixedPositions);
       if (sorted.length > 0) {
         _deductFixedPositionsDebt(user, sorted, principalToDeduct);
@@ -430,22 +431,33 @@ IBroker
     uint256 principalToDeduct,
     uint256 rate
   ) internal returns (uint256) {
-    // get debt at dynamic position
-    uint256 dynamicDebt = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate);
-    if (dynamicDebt > 0) {
-      // calculate the amount to deduct from principal
-      uint256 amountToDeduct = UtilsLib.min(dynamicDebt, principalToDeduct);
-      if (amountToDeduct > 0) {
-        // deduct principal
-        uint256 principalToRepay = UtilsLib.min(position.principal, amountToDeduct);
-        position.principal -= principalToRepay;
-        // deduct normalized debt
-        uint256 normalizedDebtDelta = BrokerMath.normalizeBorrowAmount(amountToDeduct, rate);
-        position.normalizedDebt = position.normalizedDebt.zeroFloorSub(normalizedDebtDelta);
-        // partially(or fully) deduct repaid assets from dynamic position
-        principalToDeduct -= amountToDeduct;
-      }
+    // get actual debt
+    uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate);
+    if (actualDebt == 0) return principalToDeduct;
+
+    uint256 outstandingInterest = actualDebt > position.principal
+      ? actualDebt - position.principal
+      : 0;
+
+    // clear as much accrued interest as possible
+    uint256 interestPaid = UtilsLib.min(outstandingInterest, principalToDeduct);
+    if (interestPaid > 0) {
+      position.normalizedDebt = position.normalizedDebt.zeroFloorSub(
+        BrokerMath.normalizeBorrowAmount(interestPaid, rate)
+      );
+      principalToDeduct -= interestPaid;
     }
+
+    // reduce principal with whatever is left
+    uint256 principalPaid = UtilsLib.min(position.principal, principalToDeduct);
+    if (principalPaid > 0) {
+      position.principal -= principalPaid;
+      position.normalizedDebt = position.normalizedDebt.zeroFloorSub(
+        BrokerMath.normalizeBorrowAmount(principalPaid, rate)
+      );
+      principalToDeduct -= principalPaid;
+    }
+
     return principalToDeduct;
   }
 
@@ -462,38 +474,45 @@ IBroker
   ) internal {
     uint256 len = sortedFixedPositions.length;
     for (uint256 i = 0; i < len; i++) {
+      if (principalToDeduct == 0) break;
       FixedLoanPosition memory p = sortedFixedPositions[i];
       // get remaining principal
       uint256 principalRemain = p.principal - p.repaidPrincipal;
-      // get accrued interest
-      uint256 interest = BrokerMath.getAccruedInterestForFixedPosition(p);
-      // calculate total debt
-      uint256 debt = principalRemain + interest;
-      // determine the amount to deduct from principal
-      // if it comes to the last position, deduct all remaining principal
-      uint256 amountToDeduct = (i == len - 1) ? principalToDeduct : UtilsLib.min(debt, principalToDeduct);
-      if (amountToDeduct > 0) {
-        // deduct interest first
-        uint256 repayInterest = UtilsLib.min(interest, amountToDeduct);
+      if (principalRemain == 0) {
+        _removeFixedPositionByPosId(user, p.posId);
+        continue;
+      }
+      // get accrued unpay interest
+      uint256 interest = _getAccruedInterestForFixedPosition(p) - p.repaidInterest;
+      // determine the amount of assets to allocate for this position
+      uint256 amountToDeduct = (i == len - 1)
+        ? principalToDeduct
+        : UtilsLib.min(principalToDeduct, principalRemain + interest);
+      // skip if there's nothing to deduct
+      if (amountToDeduct == 0) continue;
+      // repay interest first
+      uint256 repayInterest = UtilsLib.min(interest, amountToDeduct);
+      if (repayInterest > 0) {
+        p.repaidInterest += repayInterest;
         amountToDeduct -= repayInterest;
-        // deduct principal
-        uint256 repayPrincipal = UtilsLib.min(principalRemain, amountToDeduct);
+        principalToDeduct -= repayInterest;
+      }
+      // then repay principal
+      if (amountToDeduct > 0) {
+        // determine principal that can be repaid with remaining assets
+        uint256 repayPrincipal = UtilsLib.min(amountToDeduct, principalRemain);
         if (repayPrincipal > 0) {
           p.repaidPrincipal += repayPrincipal;
+          amountToDeduct -= repayPrincipal;
+          principalToDeduct -= repayPrincipal;
         }
-        // update repaid time
-        p.lastRepaidTime = block.timestamp;
-        // deduct interest and principal from total
-        principalToDeduct -= (repayInterest + repayPrincipal);
       }
-      // remove it if fully repaid, otherwise update it
+      // update or remove position
       if (p.repaidPrincipal >= p.principal) {
         _removeFixedPositionByPosId(user, p.posId);
       } else {
         _updateFixedPosition(user, p);
       }
-      // terminate process if all deduction is complete
-      if (principalToDeduct == 0) break;
     }
   }
 
