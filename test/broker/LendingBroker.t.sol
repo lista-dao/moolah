@@ -333,6 +333,113 @@ contract LendingBrokerTest is Test {
     assertLe(dynPrincipalAfter, dynBorrow);
   }
 
+  function test_liquidation_prefersEarlierMaturityFixedPosition() public {
+    // configure three fixed terms with increasing maturities
+    vm.startPrank(MANAGER);
+    broker.setFixedTermAndRate(1, 30 days, RATE_SCALE + 1);
+    broker.setFixedTermAndRate(2, 60 days, RATE_SCALE + 1);
+    broker.setFixedTermAndRate(3, 90 days, RATE_SCALE + 1);
+    vm.stopPrank();
+
+    // borrow against each term
+    vm.startPrank(borrower);
+    broker.borrow(200 ether, 1);
+    broker.borrow(200 ether, 2);
+    broker.borrow(200 ether, 3);
+    vm.stopPrank();
+
+    FixedLoanPosition[] memory beforeFix = broker.userFixedPositions(borrower);
+    (uint256 shortPosId, uint256 midPosId, uint256 longPosId) = _classifyByDuration(beforeFix);
+    assertTrue(shortPosId != 0 && midPosId != 0 && longPosId != 0, "missing fixed positions");
+
+    // force undercollateralization
+    oracle.setPrice(address(BTCB), 10_000_000);
+
+    Market memory mmkt = moolah.market(id);
+    Position memory pre = moolah.position(id, borrower);
+    uint256 repayAssets = 50 ether; // less than a single principal so only first maturity should absorb it
+    uint256 repaidShares = repayAssets.toSharesUp(mmkt.totalBorrowAssets, mmkt.totalBorrowShares);
+
+    // perform liquidation at Moolah level
+    LISUSD.setBalance(liquidator, 1_000 ether);
+    vm.startPrank(liquidator);
+    IERC20(address(LISUSD)).approve(address(moolah), type(uint256).max);
+    moolah.liquidate(marketParams, borrower, 0, repaidShares, bytes(""));
+    vm.stopPrank();
+
+    // invoke broker side liquidation (restricted to Moolah)
+    vm.prank(address(moolah));
+    broker.liquidate(id, borrower);
+
+    FixedLoanPosition[] memory afterFix = broker.userFixedPositions(borrower);
+    FixedLoanPosition memory shortAfter;
+    FixedLoanPosition memory midAfter;
+    FixedLoanPosition memory longAfter;
+    bool shortFound;
+    bool midFound;
+    bool longFound;
+    (shortAfter, shortFound) = _findByPosId(afterFix, shortPosId);
+    (midAfter, midFound) = _findByPosId(afterFix, midPosId);
+    (longAfter, longFound) = _findByPosId(afterFix, longPosId);
+
+    // earlier maturity should absorb repayment while later ones remain untouched
+    assertTrue(shortFound, "short maturity position missing");
+    assertGt(shortAfter.repaidPrincipal, 0, "earliest maturity not prioritized");
+
+    if (midFound) {
+      assertEq(midAfter.repaidPrincipal, beforeFix[_indexOf(beforeFix, midPosId)].repaidPrincipal, "mid maturity unexpectedly repaid");
+    }
+    if (longFound) {
+      assertEq(longAfter.repaidPrincipal, beforeFix[_indexOf(beforeFix, longPosId)].repaidPrincipal, "long maturity unexpectedly repaid");
+    }
+
+    Position memory post = moolah.position(id, borrower);
+    assertLt(post.borrowShares, pre.borrowShares, "moolah shares not reduced");
+  }
+
+  function _classifyByDuration(FixedLoanPosition[] memory positions)
+    internal
+    pure
+    returns (uint256 shortPosId, uint256 midPosId, uint256 longPosId)
+  {
+    for (uint256 i = 0; i < positions.length; i++) {
+      uint256 duration = positions[i].end - positions[i].start;
+      if (duration == 30 days) {
+        shortPosId = positions[i].posId;
+      } else if (duration == 60 days) {
+        midPosId = positions[i].posId;
+      } else if (duration == 90 days) {
+        longPosId = positions[i].posId;
+      }
+    }
+  }
+
+  function _findByPosId(FixedLoanPosition[] memory positions, uint256 posId)
+    internal
+    pure
+    returns (FixedLoanPosition memory position, bool found)
+  {
+    for (uint256 i = 0; i < positions.length; i++) {
+      if (positions[i].posId == posId) {
+        return (positions[i], true);
+      }
+    }
+    return (position, false);
+  }
+
+  function _indexOf(FixedLoanPosition[] memory positions, uint256 posId)
+    internal
+    pure
+    returns (uint256)
+  {
+    for (uint256 i = 0; i < positions.length; i++) {
+      if (positions[i].posId == posId) {
+        return i;
+      }
+    }
+    revert("position not found");
+  }
+
   function test_provisioning_and_allocation() public {
     // Verify broker wiring
     assertEq(broker.LOAN_TOKEN(), address(LISUSD));

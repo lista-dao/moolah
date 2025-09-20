@@ -359,18 +359,18 @@ IBroker
     FixedLoanPosition[] memory fixedPositions = fixedLoanPositions[user];
     // [1] calculate total outstanding debt before liquidation (principal + interest)
     uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
-    uint256 totalDebt = BrokerMath.getTotalDebt(fixedPositions, dynamicPosition, rate);
+    uint256 totalDebtAtBroker = BrokerMath.getTotalDebt(fixedPositions, dynamicPosition, rate);
     // [2] calculate actual debt at Moolah after liquidation
     Market memory market = MOOLAH.market(id);
     Position memory mPos = MOOLAH.position(id, user);
     // thats how much user borrowed from Moolah (0% interest, should = total principal at LendingBroker)
     // after liquidation, this will be the new debt amount (partial of collateral has been liquidated)
-    uint256 debtAfter = uint256(mPos.borrowShares).toAssetsUp(
+    uint256 debtAtMoolah = uint256(mPos.borrowShares).toAssetsUp(
       market.totalBorrowAssets,
       market.totalBorrowShares
     );
     // debt at broker > debt at moolah, we need to deduct the diff from positions
-    uint256 principalToDeduct = totalDebt.zeroFloorSub(debtAfter);
+    uint256 principalToDeduct = totalDebtAtBroker.zeroFloorSub(debtAtMoolah);
     if (principalToDeduct == 0) return;
     // deduct from dynamic position and returns the leftover assets to deduct
     principalToDeduct = _deductDynamicPositionDebt(dynamicPosition, principalToDeduct, rate);
@@ -383,12 +383,13 @@ IBroker
       }
     }
     // emit event
-    emit Liquidated(user, totalDebt.zeroFloorSub(debtAfter));
+    emit Liquidated(user, totalDebtAtBroker.zeroFloorSub(debtAtMoolah));
   }
 
   /**
-   * @dev sorting by end time
-   *      but it is simple and works well for small arrays as user's number of fixed positions is limited
+   * @dev sorting by end time ascending and filter out fully repaid positions
+   *      - this is a simple insertion sort, gas cost is O(n^2) in worst case,
+   *      - works well for small arrays as user's number of fixed positions is limited
    * @param positions The fixed loan positions to sort
    */
   function _sortAndFilterFixedPositions(
@@ -400,12 +401,10 @@ IBroker
     for (uint256 i = 0; i < len; i++) {
       FixedLoanPosition memory p = positions[i];
       if (p.principal > p.repaidPrincipal) {
-        uint256 remaining = p.principal - p.repaidPrincipal;
         uint256 j = count;
         while (j > 0) {
           FixedLoanPosition memory prev = filtered[j - 1];
-          uint256 prevRemaining = prev.principal - prev.repaidPrincipal;
-          if (prev.apr > p.apr || (prev.apr == p.apr && prevRemaining >= remaining)) {
+          if (prev.end <= p.end) {
             break;
           }
           filtered[j] = prev;
