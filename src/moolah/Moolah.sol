@@ -782,10 +782,10 @@ contract Moolah is
       uint256 basePrice,
       uint256 quotePrice, 
       uint256 baseTokenDecimals,
-      uint256 quotaTokenDecimals
+      uint256 quoteTokenDecimals
     ) = PriceLib._getPrice(marketParams, user, broker);
 
-    uint256 scaleFactor = 10 ** (36 + quotaTokenDecimals - baseTokenDecimals);
+    uint256 scaleFactor = 10 ** (36 + quoteTokenDecimals - baseTokenDecimals);
     return scaleFactor.mulDivDown(basePrice, quotePrice);
   }
 
