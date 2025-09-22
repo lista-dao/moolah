@@ -30,10 +30,10 @@ contract InterestRateModel is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
   event BorrowRateUpdate(Id indexed id, uint256 avgBorrowRate, uint256 rateAtTarget);
 
   /// @notice Emitted when the minimum cap is updated.
-  event MinCapUpdate(uint256 newMinCap);
+  event MinCapUpdate(uint256 oldMinCap, uint256 newMinCap);
 
   /// @notice Emitted when the borrow rate cap for a market is updated.
-  event BorrowRateCapUpdate(Id indexed id, uint256 newRateCap);
+  event BorrowRateCapUpdate(Id indexed id, uint256 oldRateCap, uint256 newRateCap);
 
   /* IMMUTABLES */
 
@@ -186,18 +186,20 @@ contract InterestRateModel is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
 
   /// @dev Updates the borrow rate cap for a market. The new cap must be >= minCap.
   function updateRateCap(Id id, uint256 newRateCap) external onlyRole(BOT) {
-    require(newRateCap >= minCap && newRateCap != rateCap[id], "invalid rate cap");
+    uint256 oldCap = rateCap[id];
+    require(newRateCap >= minCap && newRateCap != oldCap, "invalid rate cap");
     rateCap[id] = newRateCap;
 
-    emit BorrowRateCapUpdate(id, newRateCap);
+    emit BorrowRateCapUpdate(id, oldCap, newRateCap);
   }
 
   /// @dev Updates the minimum borrow rate cap for all markets.
   function updateMinCap(uint256 newMinCap) external onlyRole(MANAGER) {
-    require(newMinCap > 0 && newMinCap != minCap && newMinCap <= ConstantsLib.DEFAULT_RATE_CAP, "invalid min cap");
+    uint256 oldMinCap = minCap;
+    require(newMinCap > 0 && newMinCap != oldMinCap && newMinCap <= ConstantsLib.DEFAULT_RATE_CAP, "invalid min cap");
     minCap = newMinCap;
 
-    emit MinCapUpdate(newMinCap);
+    emit MinCapUpdate(oldMinCap, newMinCap);
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
