@@ -18,7 +18,9 @@ viaIr = true
 [rpc_endpoints]
 bsc_testnet = "${BSC_TESTNET_RPC_URL}"
 bsc = "${BSC_RPC_URL}"
+sepolia = "${SEPOLIA_RPC_URL}"
 
 [etherscan]
 bsc = { key = "${BSCSCAN_API_KEY}" }
 bsc_testnet = { key = "${BSCSCAN_API_KEY}" }
+sepolia = { key = "${ETHERSCAN_API_KEY}" }
