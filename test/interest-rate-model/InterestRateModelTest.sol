@@ -79,7 +79,7 @@ contract InterestRateModelTest is Test {
   function testRateAfterUtilizationOne() public {
     vm.warp(365 days * 2);
     Market memory market;
-    uint256 _cap = uint256(0.2 ether) / 365 days;
+    uint256 _cap = uint256(0.3 ether) / 365 days;
 
     assertApproxEqRel(
       irm.borrowRate(marketParams, market),
@@ -430,7 +430,7 @@ contract InterestRateModelTest is Test {
     assertLt(ConstantsLib.TARGET_UTILIZATION, 1 ether, "targetUtilization too big");
     assertGe(ConstantsLib.INITIAL_RATE_AT_TARGET, ConstantsLib.MIN_RATE_AT_TARGET, "initialRateAtTarget too small");
     assertLe(ConstantsLib.INITIAL_RATE_AT_TARGET, ConstantsLib.MAX_RATE_AT_TARGET, "initialRateAtTarget too large");
-    assertEq(ConstantsLib.DEFAULT_RATE_CAP, uint256(0.2 ether) / 365 days, "default cap should be 20%");
+    assertEq(ConstantsLib.DEFAULT_RATE_CAP, uint256(0.3 ether) / 365 days, "default cap should be 30%");
   }
 
   /* HELPERS */
