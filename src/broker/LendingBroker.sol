@@ -201,7 +201,6 @@ IBroker
       apr: term.apr,
       start: start,
       end: end,
-      lastRepaidTime: start,
       repaidInterest: 0,
       repaidPrincipal: 0
     }));
@@ -320,8 +319,6 @@ IBroker
       // removes it from user's fixed positions
       _removeFixedPositionByPosId(onBehalf, posId);
     } else {
-      // update repaid time (even user just repays interest)
-      position.lastRepaidTime = block.timestamp;
       // update position
       _updateFixedPosition(onBehalf, position);
     }
@@ -336,6 +333,58 @@ IBroker
       position.repaidPrincipal,
       position.repaidPrincipal >= position.principal
     );
+  }
+
+  /**
+    * @dev Convert a portion of or the entire dynamic loan position to a fixed loan position
+    * @param amount The amount to convert from dynamic to fixed
+    * @param termId The ID of the fixed term to use
+   */
+  function convertDynamicToFixed(uint256 amount, uint256 termId) external override marketIdSet whenNotPaused nonReentrant {
+    require(amount > 0, "broker/zero-amount");
+    address user = msg.sender;
+    DynamicLoanPosition storage position = dynamicLoanPositions[user];
+    require(position.principal >= amount, "broker/insufficient-dynamic-principal");
+    require(fixedLoanPositions[user].length < maxFixedLoanPositions, "broker/exceed-max-fixed-positions");
+
+    // accrue current rate so normalized debt reflects the latest interest
+    uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
+    uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate);
+    uint256 outstandingInterest = actualDebt > position.principal ? actualDebt - position.principal : 0;
+
+    // allocate proportional share of accrued interest to the amount being converted
+    uint256 interestShare = 0;
+    if (outstandingInterest > 0) {
+      interestShare = BrokerMath.mulDivFlooring(outstandingInterest, amount, position.principal);
+    }
+
+    uint256 convertedDebt = amount + interestShare;
+    if (convertedDebt > 0) {
+      uint256 normalizedDebtDelta = BrokerMath.normalizeBorrowAmount(convertedDebt, rate);
+      position.normalizedDebt = position.normalizedDebt.zeroFloorSub(normalizedDebtDelta);
+    }
+
+    position.principal -= amount;
+    if (position.principal == 0 && position.normalizedDebt == 0) {
+      delete dynamicLoanPositions[user];
+    }
+
+    FixedTermAndRate memory term = _getTermById(termId);
+    uint256 start = block.timestamp;
+    uint256 end = start + term.duration;
+
+    fixedLoanPositions[user].push(FixedLoanPosition({
+      posId: fixedPosUuid,
+      principal: convertedDebt,
+      apr: term.apr,
+      start: start,
+      end: end,
+      repaidInterest: 0,
+      repaidPrincipal: 0
+    }));
+    fixedPosUuid++;
+
+    emit FixedLoanPositionCreated(user, convertedDebt, start, end, term.apr, termId);
   }
 
   ///////////////////////////////////////
@@ -476,41 +525,45 @@ IBroker
     for (uint256 i = 0; i < len; i++) {
       if (principalToDeduct == 0) break;
       FixedLoanPosition memory p = sortedFixedPositions[i];
-      // get remaining principal
-      uint256 principalRemain = p.principal - p.repaidPrincipal;
-      if (principalRemain == 0) {
-        _removeFixedPositionByPosId(user, p.posId);
-        continue;
+      // remaining principal before repayment
+      uint256 remainingPrincipal = p.principal - p.repaidPrincipal;
+      // get accrued interest from LAST REPAID TIME to NOW
+      uint256 accruedInterest = BrokerMath.getAccruedInterestForFixedPosition(p) - p.repaidInterest;
+
+      // initialize repay amounts
+      uint256 repayInterestAmt = principalToDeduct < accruedInterest ? principalToDeduct : accruedInterest;
+      uint256 repayPrincipalAmt = UtilsLib.min(principalToDeduct - repayInterestAmt, remainingPrincipal);
+
+      // repay interest first, it might be zero if user just repaid before
+      if (repayInterestAmt > 0) {
+        // update repaid interest amount
+        p.repaidInterest += repayInterestAmt;
+        // supply interest into vault as revenue
+        principalToDeduct -= repayInterestAmt;
       }
-      // get accrued unpay interest
-      uint256 interest = _getAccruedInterestForFixedPosition(p) - p.repaidInterest;
-      // determine the amount of assets to allocate for this position
-      uint256 amountToDeduct = (i == len - 1)
-        ? principalToDeduct
-        : UtilsLib.min(principalToDeduct, principalRemain + interest);
-      // skip if there's nothing to deduct
-      if (amountToDeduct == 0) continue;
-      // repay interest first
-      uint256 repayInterest = UtilsLib.min(interest, amountToDeduct);
-      if (repayInterest > 0) {
-        p.repaidInterest += repayInterest;
-        amountToDeduct -= repayInterest;
-        principalToDeduct -= repayInterest;
-      }
-      // then repay principal
-      if (amountToDeduct > 0) {
-        // determine principal that can be repaid with remaining assets
-        uint256 repayPrincipal = UtilsLib.min(amountToDeduct, principalRemain);
-        if (repayPrincipal > 0) {
-          p.repaidPrincipal += repayPrincipal;
-          amountToDeduct -= repayPrincipal;
-          principalToDeduct -= repayPrincipal;
+
+      // then repay principal if there is any amount left
+      if (repayPrincipalAmt > 0) {
+        // ----- penalty
+        // check penalty if user is repaying before expiration
+        uint256 penalty = _getPenaltyForFixedPosition(p, repayPrincipalAmt);
+        // supply penalty into vault as revenue
+        if (penalty > 0) {
+          principalToDeduct -= penalty;
         }
+
+        // the rest will be used to repay partially
+        uint256 actualRepaidPrincipal = principalToDeduct > repayPrincipalAmt ? repayPrincipalAmt : principalToDeduct;
+        p.repaidPrincipal += actualRepaidPrincipal;
+        principalToDeduct -= actualRepaidPrincipal;
       }
-      // update or remove position
+
+      // post repayment
       if (p.repaidPrincipal >= p.principal) {
+        // removes it from user's fixed positions
         _removeFixedPositionByPosId(user, p.posId);
       } else {
+        // update position
         _updateFixedPosition(user, p);
       }
     }
@@ -540,7 +593,6 @@ IBroker
   function peek(address token, address user) external override view returns (uint256 price) {
     // loan token's price never changes
     if (token == LOAN_TOKEN) {
-      // @todo using IOracle(ORACLE).peek(LOAN_TOKEN) ???
       return 10 ** 8;
     } else if(token == COLLATERAL_TOKEN) {
       /*

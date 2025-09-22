@@ -15,7 +15,6 @@ struct FixedLoanPosition {
   uint256 apr;
   uint256 start;
   uint256 end;
-  uint256 lastRepaidTime;
   uint256 repaidInterest;
   uint256 repaidPrincipal;
 }
@@ -116,4 +115,9 @@ interface IBroker is IBrokerBase {
   /// @param user The address of the user to refinance
   /// @param positionIds The posIds of the fixed positions to refinance
   function refinanceMaturedFixedPositions(address user, uint256[] calldata positionIds) external;
+
+  /// @dev Convert a portion of or the entire dynamic loan position to a fixed loan position
+  /// @param amount The amount to convert from dynamic to fixed
+  /// @param termId The ID of the fixed term to use
+  function convertDynamicToFixed(uint256 amount, uint256 termId) external;
 }
