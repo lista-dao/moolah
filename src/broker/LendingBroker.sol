@@ -693,6 +693,7 @@ IBroker
     require(posIds.length > 0, "Broker/zero-positions");
     // the additional principal will be add into the dynamic position
     uint256 _principal = 0;
+    uint256 _interest = 0;
     // calculate principal to be refinanced one by one
     for (uint256 i = 0; i < posIds.length; i++) {
       uint256 posId = posIds[i];
@@ -700,19 +701,18 @@ IBroker
       FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
       require(block.timestamp >= position.end, "Broker/position-not-expired");
       // Debt of a fixed loan position consist of (1) and (2)
-      // (1) net principal to pay (original principal - repaid principal)
-      // (2) get accrued interest if user has repaid before, partial of the interest will be excluded
-      _principal +=
-        position.principal - position.repaidPrincipal +
-        _getAccruedInterestForFixedPosition(position) - position.repaidInterest;
+      // (1) net principal
+      _principal += position.principal - position.repaidPrincipal;
+      // (2) get outstanding interest
+      _interest += _getAccruedInterestForFixedPosition(position) - position.repaidInterest;
       // remove the fixed position
       _removeFixedPositionByPosId(user, posId);
     }
     if (_principal > 0) {
       // get updated rate
       uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
-      // calc. normalized debt
-      uint256 normalizedDebt = BrokerMath.normalizeBorrowAmount(_principal, rate);
+      // calc. normalized debt (principal + interest)
+      uint256 normalizedDebt = BrokerMath.normalizeBorrowAmount(_principal + _interest, rate);
       // update user's dynamic position
       DynamicLoanPosition storage position = dynamicLoanPositions[user];
       position.principal += _principal;
