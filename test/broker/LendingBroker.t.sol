@@ -171,6 +171,23 @@ contract LendingBrokerTest is Test {
     loanToken.approve(address(broker), type(uint256).max);
   }
 
+  function _snapshot(address user)
+    internal
+    view
+    returns (Market memory market, Position memory pos)
+  {
+    market = moolah.market(id);
+    pos = moolah.position(id, user);
+  }
+
+  function _principalRepaid(Market memory beforeMarket, Market memory afterMarket)
+    internal
+    pure
+    returns (uint256)
+  {
+    return uint256(beforeMarket.totalBorrowAssets) - uint256(afterMarket.totalBorrowAssets);
+  }
+
   // -----------------------------
   // Dynamic borrow and repay
   // -----------------------------
@@ -212,6 +229,239 @@ contract LendingBrokerTest is Test {
     }
   }
 
+  function test_dynamicRepayOnBehalfByThirdParty() public {
+    uint256 borrowAmt = 500 ether;
+    vm.prank(borrower);
+    broker.borrow(borrowAmt);
+
+    (uint256 principalBefore, ) = broker.dynamicLoanPositions(borrower);
+    (Market memory marketBefore, Position memory posBefore) = _snapshot(borrower);
+
+    address helper = address(0x404);
+    uint256 repayAmt = 200 ether;
+    LISUSD.setBalance(helper, repayAmt);
+    vm.startPrank(helper);
+    IERC20(address(LISUSD)).approve(address(broker), type(uint256).max);
+    broker.repay(repayAmt, borrower);
+    vm.stopPrank();
+
+    uint256 helperAfter = loanToken.balanceOf(helper);
+    (uint256 principalAfter, uint256 normalizedAfter) = broker.dynamicLoanPositions(borrower);
+    (Market memory marketAfter, Position memory posAfter) = _snapshot(borrower);
+
+    uint256 principalRepaid = _principalRepaid(marketBefore, marketAfter);
+    assertEq(principalBefore - principalAfter, principalRepaid, "principal mismatch");
+
+    uint256 sharesBurned = uint256(posBefore.borrowShares) - uint256(posAfter.borrowShares);
+    if (principalRepaid == 0) {
+      assertEq(sharesBurned, 0, "unexpected share burn");
+    } else {
+      assertGt(sharesBurned, 0, "no shares burned");
+      assertApproxEqAbs(
+        principalRepaid,
+        sharesBurned.toAssetsUp(marketBefore.totalBorrowAssets, marketBefore.totalBorrowShares),
+        1e12,
+        "share/asset mismatch"
+      );
+    }
+
+    uint256 spent = repayAmt - helperAfter;
+    uint256 interestPaid = spent > principalRepaid ? spent - principalRepaid : 0;
+    assertGe(spent, principalRepaid, "spent less than principal");
+    // interest may be zero if the repayment happens immediately, so only track it for diagnostics
+    assertGt(normalizedAfter, 0, "normalized debt should remain positive until fully repaid");
+  }
+
+  function test_dynamicRepayFullClearsPosition() public {
+    uint256 borrowAmt = 600 ether;
+    vm.prank(borrower);
+    broker.borrow(borrowAmt);
+
+    skip(5 days);
+
+    (Market memory marketBefore, Position memory posBefore) = _snapshot(borrower);
+    (uint256 principalBefore, uint256 normalizedBefore) = broker.dynamicLoanPositions(borrower);
+    uint256 rate = rateCalc.accrueRate(address(broker));
+    uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(normalizedBefore, rate);
+    uint256 outstandingInterest = actualDebt > principalBefore ? actualDebt - principalBefore : 0;
+    uint256 buffer = 5e15; // absorb rounding when brokering to Moolah
+    uint256 budget = actualDebt + buffer;
+
+    LISUSD.setBalance(borrower, budget);
+    uint256 balanceBefore = loanToken.balanceOf(borrower);
+
+    vm.prank(borrower);
+    broker.repay(budget, borrower);
+
+    uint256 balanceAfter = loanToken.balanceOf(borrower);
+    (Market memory marketAfter, Position memory posAfter) = _snapshot(borrower);
+    (uint256 principalAfter, uint256 normalizedAfter) = broker.dynamicLoanPositions(borrower);
+
+    assertEq(principalAfter, 0, "dynamic principal not cleared");
+    assertEq(normalizedAfter, 0, "dynamic normalized debt not cleared");
+    uint256 residualAssets = uint256(posAfter.borrowShares).toAssetsUp(
+      marketAfter.totalBorrowAssets,
+      marketAfter.totalBorrowShares
+    );
+    assertLt(residualAssets, 1e16, "residual borrow assets too large");
+
+    uint256 principalRepaid = _principalRepaid(marketBefore, marketAfter);
+    assertApproxEqAbs(principalRepaid, principalBefore, 5e15, "principal repayment mismatch");
+
+    uint256 sharesBurned = uint256(posBefore.borrowShares) - uint256(posAfter.borrowShares);
+    if (principalRepaid == 0) {
+      assertEq(sharesBurned, 0, "unexpected share burn");
+    } else {
+      assertGt(sharesBurned, 0, "no shares burned");
+      assertApproxEqAbs(
+        sharesBurned.toAssetsUp(marketBefore.totalBorrowAssets, marketBefore.totalBorrowShares),
+        principalRepaid,
+        1e12,
+        "share/asset mismatch"
+      );
+    }
+
+    uint256 spent = balanceBefore - balanceAfter;
+    uint256 expectedDebt = principalBefore + outstandingInterest;
+    assertApproxEqAbs(spent, expectedDebt, buffer, "repayment spent mismatch");
+  }
+
+  function test_dynamicRepayOnBehalfFullClearsPosition() public {
+    uint256 borrowAmt = 650 ether;
+    vm.prank(borrower);
+    broker.borrow(borrowAmt);
+
+    skip(4 days);
+
+    (Market memory marketBefore, Position memory posBefore) = _snapshot(borrower);
+    (uint256 principalBefore, uint256 normalizedBefore) = broker.dynamicLoanPositions(borrower);
+    uint256 rate = rateCalc.accrueRate(address(broker));
+    uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(normalizedBefore, rate);
+    uint256 outstandingInterest = actualDebt > principalBefore ? actualDebt - principalBefore : 0;
+    uint256 buffer = 5e15;
+    uint256 budget = actualDebt + buffer;
+
+    address helper = address(0x606);
+    LISUSD.setBalance(helper, budget);
+    vm.startPrank(helper);
+    IERC20(address(LISUSD)).approve(address(broker), type(uint256).max);
+    broker.repay(budget, borrower);
+    vm.stopPrank();
+
+    uint256 helperAfter = loanToken.balanceOf(helper);
+    (Market memory marketAfter, Position memory posAfter) = _snapshot(borrower);
+    (uint256 principalAfter, uint256 normalizedAfter) = broker.dynamicLoanPositions(borrower);
+
+    assertEq(principalAfter, 0, "dynamic principal not cleared");
+    assertEq(normalizedAfter, 0, "dynamic normalized debt not cleared");
+    uint256 residualAssets = uint256(posAfter.borrowShares).toAssetsUp(
+      marketAfter.totalBorrowAssets,
+      marketAfter.totalBorrowShares
+    );
+    assertLt(residualAssets, 1e16, "residual borrow assets too large");
+
+    uint256 principalRepaid = _principalRepaid(marketBefore, marketAfter);
+    assertApproxEqAbs(principalRepaid, principalBefore, 5e15, "principal repayment mismatch");
+
+    uint256 sharesBurned = uint256(posBefore.borrowShares) - uint256(posAfter.borrowShares);
+    if (principalRepaid == 0) {
+      assertEq(sharesBurned, 0, "unexpected share burn");
+    } else {
+      assertGt(sharesBurned, 0, "no shares burned");
+      assertApproxEqAbs(
+        sharesBurned.toAssetsUp(marketBefore.totalBorrowAssets, marketBefore.totalBorrowShares),
+        principalRepaid,
+        1e12,
+        "share/asset mismatch"
+      );
+    }
+
+    uint256 spent = budget - helperAfter;
+    uint256 expectedDebt = principalBefore + outstandingInterest;
+    assertApproxEqAbs(spent, expectedDebt, buffer, "helper repayment mismatch");
+  }
+
+  // -----------------------------
+  // Dynamic → Fixed conversion
+  // -----------------------------
+  function test_convertDynamicToFixed_partialAmount() public {
+    vm.prank(MANAGER);
+    broker.setFixedTermAndRate(51, 45 days, RATE_SCALE + 2);
+
+    uint256 borrowAmt = 1_000 ether;
+    vm.prank(borrower);
+    broker.borrow(borrowAmt);
+
+    // push rate higher so interest accrues
+    vm.prank(MANAGER);
+    rateCalc.setMaxRatePerSecond(address(broker), RATE_SCALE + 5);
+    vm.prank(BOT);
+    rateCalc.setRatePerSecond(address(broker), RATE_SCALE + 3);
+    skip(5 days);
+
+    (uint256 principalBefore, uint256 normalizedBefore) = broker.dynamicLoanPositions(borrower);
+    uint256 rate = rateCalc.accrueRate(address(broker));
+    uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(normalizedBefore, rate);
+    uint256 outstandingInterest = actualDebt > principalBefore ? actualDebt - principalBefore : 0;
+
+    uint256 convertAmount = 400 ether;
+    uint256 expectedInterestShare = outstandingInterest == 0
+      ? 0
+      : BrokerMath.mulDivFlooring(outstandingInterest, convertAmount, principalBefore);
+    uint256 expectedNormalizedDelta = BrokerMath.normalizeBorrowAmount(convertAmount + expectedInterestShare, rate);
+    uint256 expectedNormalizedAfter = normalizedBefore > expectedNormalizedDelta
+      ? normalizedBefore - expectedNormalizedDelta
+      : 0;
+
+    vm.prank(borrower);
+    broker.convertDynamicToFixed(convertAmount, 51);
+
+    (uint256 principalAfter, uint256 normalizedAfter) = broker.dynamicLoanPositions(borrower);
+    assertEq(principalAfter, principalBefore - convertAmount, "dynamic principal not reduced by amount");
+    assertApproxEqAbs(normalizedAfter, expectedNormalizedAfter, 1, "normalized debt delta mismatch");
+
+    FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(borrower);
+    assertEq(fixedPositions.length, 1, "fixed position not created");
+    assertEq(fixedPositions[0].principal, convertAmount + expectedInterestShare, "converted fixed principal incorrect");
+    assertEq(fixedPositions[0].repaidInterest, 0);
+    assertEq(fixedPositions[0].repaidPrincipal, 0);
+  }
+
+  function test_convertDynamicToFixed_fullAmountClearsDynamic() public {
+    vm.prank(MANAGER);
+    broker.setFixedTermAndRate(52, 30 days, RATE_SCALE + 1);
+
+    uint256 borrowAmt = 750 ether;
+    vm.prank(borrower);
+    broker.borrow(borrowAmt);
+
+    vm.prank(MANAGER);
+    rateCalc.setMaxRatePerSecond(address(broker), RATE_SCALE + 6);
+    vm.prank(BOT);
+    rateCalc.setRatePerSecond(address(broker), RATE_SCALE + 4);
+    skip(3 days);
+
+    (uint256 principalBefore, uint256 normalizedBefore) = broker.dynamicLoanPositions(borrower);
+    uint256 rate = rateCalc.accrueRate(address(broker));
+    uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(normalizedBefore, rate);
+    uint256 outstandingInterest = actualDebt > principalBefore ? actualDebt - principalBefore : 0;
+    uint256 expectedNormalizedDelta = BrokerMath.normalizeBorrowAmount(actualDebt, rate);
+
+    vm.prank(borrower);
+    broker.convertDynamicToFixed(principalBefore, 52);
+
+    (uint256 principalAfter, uint256 normalizedAfter) = broker.dynamicLoanPositions(borrower);
+    assertEq(principalAfter, 0, "dynamic principal should be cleared");
+    assertEq(normalizedAfter, 0, "dynamic normalized debt should be cleared");
+
+    FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(borrower);
+    assertEq(fixedPositions.length, 1);
+    assertEq(fixedPositions[0].principal, principalBefore + outstandingInterest, "fixed principal should equal full outstanding debt");
+
+    // sanity: normalized delta consumed the whole normalized debt (allowing rounding wiggle)
+    assertApproxEqAbs(expectedNormalizedDelta, normalizedBefore, 1, "normalized debt delta rounding");
+  }
+
   // -----------------------------
   // Fixed borrow and repay (partial and full)
   // -----------------------------
@@ -236,21 +486,39 @@ contract LendingBrokerTest is Test {
 
     // Let some time pass to incur a tiny interest (apr == RATE_SCALE => minimal interest)
     skip(1 days);
+    moolah.accrueInterest(marketParams);
 
-    // Partial repay: ensure amount > interest + penalty
-    uint256 partialRepay = 100 ether;
+    (Market memory marketPartialBefore, Position memory posPartialBefore) = _snapshot(borrower);
+    uint256 partialPrincipal = 100 ether;
+    uint256 partialBuffer = 0.1 ether; // cover accrued interest while penalty is handled separately
+    uint256 partialRepay = partialPrincipal + partialBuffer;
     vm.prank(borrower);
     broker.repay(partialRepay, posId, borrower);
 
-    // Position should still exist with reduced remaining principal
     positions = broker.userFixedPositions(borrower);
     assertEq(positions.length, 1);
-    assertLt(positions[0].repaidPrincipal, positions[0].principal);
+    FixedLoanPosition memory midPos = positions[0];
+    (Market memory marketPartialAfter, Position memory posPartialAfter) = _snapshot(borrower);
+    uint256 principalRepaidPartial = _principalRepaid(marketPartialBefore, marketPartialAfter);
+    uint256 sharesBurnedPartial = uint256(posPartialBefore.borrowShares) - uint256(posPartialAfter.borrowShares);
+    if (principalRepaidPartial == 0) {
+      assertEq(sharesBurnedPartial, 0, "unexpected share burn after partial");
+    } else {
+      assertGt(sharesBurnedPartial, 0, "no shares burned after partial");
+      assertApproxEqAbs(
+        principalRepaidPartial,
+        sharesBurnedPartial.toAssetsUp(marketPartialBefore.totalBorrowAssets, marketPartialBefore.totalBorrowShares),
+        1e17,
+        "partial share/asset mismatch"
+      );
+    }
+    assertApproxEqAbs(midPos.repaidPrincipal, principalRepaidPartial, 1e17, "partial principal recorded");
 
     // Full repay remaining
     // Top up borrower to ensure enough balance, then overpay to cover any interest/penalty
-    LISUSD.setBalance(borrower, 1000 ether);
-    uint256 repayAll = 1000 ether;
+    LISUSD.setBalance(borrower, 2_000 ether);
+    uint256 repayAll = 2_000 ether;
+    moolah.accrueInterest(marketParams);
     vm.prank(borrower);
     broker.repay(repayAll, posId, borrower);
 
@@ -259,78 +527,185 @@ contract LendingBrokerTest is Test {
     assertEq(positions.length, 0);
   }
 
+  function test_fixedRepayOnBehalfByThirdParty() public {
+    vm.prank(MANAGER);
+    broker.setFixedTermAndRate(21, 45 days, RATE_SCALE + 5e24);
+
+    uint256 fixedAmt = 300 ether;
+    vm.prank(borrower);
+    broker.borrow(fixedAmt, 21);
+
+    skip(7 days);
+
+    FixedLoanPosition[] memory beforePositions = broker.userFixedPositions(borrower);
+    assertEq(beforePositions.length, 1, "missing fixed position");
+    FixedLoanPosition memory beforePos = beforePositions[0];
+    uint256 posId = beforePos.posId;
+    uint256 interestDue = BrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.repaidInterest;
+    assertGt(interestDue, 0, "interest did not accrue");
+
+    uint256 principalPortion = 40 ether;
+    uint256 penalty = BrokerMath.getPenaltyForFixedPosition(beforePos, principalPortion);
+    uint256 repayAmt = interestDue + principalPortion;
+
+    (Market memory marketBefore, Position memory posBefore) = _snapshot(borrower);
+    uint256 helperInitial = repayAmt + 1 ether;
+
+    address helper = address(0x505);
+    LISUSD.setBalance(helper, helperInitial);
+    vm.startPrank(helper);
+    IERC20(address(LISUSD)).approve(address(broker), type(uint256).max);
+    broker.repay(repayAmt, posId, borrower);
+    vm.stopPrank();
+
+    uint256 helperAfter = loanToken.balanceOf(helper);
+    (Market memory marketAfter, Position memory posAfter) = _snapshot(borrower);
+    FixedLoanPosition[] memory afterPositions = broker.userFixedPositions(borrower);
+    assertEq(afterPositions.length, 1, "position removed unexpectedly");
+    FixedLoanPosition memory afterPos = afterPositions[0];
+    uint256 interestPaid = afterPos.repaidInterest - beforePos.repaidInterest;
+    assertEq(interestPaid, interestDue, "interest repayment mismatch");
+
+    uint256 principalRepaid = _principalRepaid(marketBefore, marketAfter);
+    assertApproxEqAbs(
+      afterPos.repaidPrincipal - beforePos.repaidPrincipal,
+      principalRepaid,
+      2e15,
+      "principal repayment mismatch"
+    );
+
+    uint256 sharesBurned = uint256(posBefore.borrowShares) - uint256(posAfter.borrowShares);
+    if (principalRepaid == 0) {
+      assertEq(sharesBurned, 0, "unexpected share burn");
+    } else {
+      assertGt(sharesBurned, 0, "no shares burned");
+      assertApproxEqAbs(
+        principalRepaid,
+        sharesBurned.toAssetsUp(marketBefore.totalBorrowAssets, marketBefore.totalBorrowShares),
+        2e15,
+        "share/asset mismatch"
+      );
+    }
+
+    uint256 spent = helperInitial - helperAfter;
+    uint256 penaltyPaid = spent - interestPaid - principalRepaid;
+    assertGe(penaltyPaid, penalty, "penalty repayment too small");
+    assertLt(penaltyPaid - penalty, 5e16, "penalty excess too large");
+  }
+
+  function test_fixedRepayOnBehalfByThirdParty_fullClose() public {
+    vm.prank(MANAGER);
+    broker.setFixedTermAndRate(22, 30 days, RATE_SCALE + 3);
+
+    uint256 fixedAmt = 350 ether;
+    vm.prank(borrower);
+    broker.borrow(fixedAmt, 22);
+
+    skip(10 days);
+    moolah.accrueInterest(marketParams);
+
+    (Market memory marketBefore, Position memory posBefore) = _snapshot(borrower);
+    FixedLoanPosition[] memory beforePositions = broker.userFixedPositions(borrower);
+    assertEq(beforePositions.length, 1, "missing fixed position");
+    FixedLoanPosition memory beforePos = beforePositions[0];
+    uint256 posId = beforePos.posId;
+
+    uint256 remainingPrincipal = beforePos.principal - beforePos.repaidPrincipal;
+    uint256 interestDue = BrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.repaidInterest;
+    uint256 penalty = BrokerMath.getPenaltyForFixedPosition(beforePos, remainingPrincipal);
+
+    uint256 repayAll = 2_000 ether;
+    uint256 helperBudget = repayAll + penalty + 1 ether;
+
+    address helper = address(0x6060);
+    LISUSD.setBalance(helper, helperBudget);
+    vm.startPrank(helper);
+    IERC20(address(LISUSD)).approve(address(broker), type(uint256).max);
+    broker.repay(repayAll, posId, borrower);
+    vm.stopPrank();
+
+    FixedLoanPosition[] memory afterPositions = broker.userFixedPositions(borrower);
+    assertEq(afterPositions.length, 0, "fixed position not removed");
+
+    (Market memory marketAfter, Position memory posAfter) = _snapshot(borrower);
+    uint256 residualAssets = uint256(posAfter.borrowShares).toAssetsUp(
+      marketAfter.totalBorrowAssets,
+      marketAfter.totalBorrowShares
+    );
+    assertLt(residualAssets, 1e16, "residual borrow assets too large");
+
+    uint256 helperAfter = loanToken.balanceOf(helper);
+    uint256 spent = helperBudget - helperAfter;
+
+    uint256 principalRepaid = _principalRepaid(marketBefore, marketAfter);
+    assertApproxEqAbs(principalRepaid, remainingPrincipal, 5e15, "principal repayment mismatch");
+
+    uint256 expectedDebt = principalRepaid + interestDue + penalty;
+    assertApproxEqAbs(spent, expectedDebt, 2e16, "helper total spend mismatch");
+
+    uint256 sharesBurned = uint256(posBefore.borrowShares) - uint256(posAfter.borrowShares);
+    if (principalRepaid == 0) {
+      assertEq(sharesBurned, 0, "unexpected share burn");
+    } else {
+      assertGt(sharesBurned, 0, "no shares burned");
+      assertApproxEqAbs(
+        sharesBurned.toAssetsUp(marketBefore.totalBorrowAssets, marketBefore.totalBorrowShares),
+        principalRepaid,
+        5e15,
+        "share/asset mismatch"
+      );
+    }
+  }
+
   // -----------------------------
-  // Liquidation path: dynamic first, then fixed (sorted)
+  // Liquidation path: dynamic first, then fixed (sorted by maturity)
   // -----------------------------
   function test_liquidation_updatesBrokerPositions() public {
-    // Prepare positions
     uint256 dynBorrow = 600 ether;
     vm.prank(borrower);
     broker.borrow(dynBorrow);
 
-    // Two fixed terms with different APRs
-    vm.startPrank(MANAGER);
-    broker.setFixedTermAndRate(1, 60 days, RATE_SCALE + 5e24); // lower APR
-    broker.setFixedTermAndRate(2, 60 days, RATE_SCALE + 1e25); // higher APR
-    vm.stopPrank();
+    vm.prank(MANAGER);
+    broker.setFixedTermAndRate(31, 45 days, RATE_SCALE + 2);
 
-    vm.startPrank(borrower);
-    broker.borrow(300 ether, 1); // lower APR
-    broker.borrow(400 ether, 2); // higher APR
-    vm.stopPrank();
-
-    // Partially repay one fixed position to create different remaining principals
-    FixedLoanPosition[] memory beforeFix = broker.userFixedPositions(borrower);
-    uint256 lowAprPosId = beforeFix[0].apr < beforeFix[1].apr ? beforeFix[0].posId : beforeFix[1].posId;
     vm.prank(borrower);
-    broker.repay(50 ether, lowAprPosId, borrower); // small partial repay
+    broker.borrow(300 ether, 31);
 
-    // Make position unhealthy by dropping collateral price via OracleMock
-    oracle.setPrice(address(BTCB), 10_000_000); // ~$0.10 to force undercollateralization but keep > 0
+    FixedLoanPosition[] memory beforeFix = broker.userFixedPositions(borrower);
+    assertEq(beforeFix.length, 1);
+    uint256 fixedPosId = beforeFix[0].posId;
 
-    // Compute a safe repaidShares amount from a small repayAssets to avoid over-seizing collateral
+    (uint256 dynPrincipalBefore, uint256 dynNormalizedBefore) = broker.dynamicLoanPositions(borrower);
+
+    // make the account unhealthy
+    oracle.setPrice(address(BTCB), 10_000_000);
+
     Market memory mmkt = moolah.market(id);
     Position memory pre = moolah.position(id, borrower);
-    uint256 repayAssets = 10 ether;
+    uint256 repayAssets = 50 ether; // keep smaller than dynamic principal so fixed should remain untouched
     uint256 repaidShares = repayAssets.toSharesUp(mmkt.totalBorrowAssets, mmkt.totalBorrowShares);
 
-    // Fund and approve liquidator for repay
     LISUSD.setBalance(liquidator, 1_000 ether);
     vm.startPrank(liquidator);
     IERC20(address(LISUSD)).approve(address(moolah), type(uint256).max);
-    // Liquidate in Moolah (repay shares option)
     moolah.liquidate(marketParams, borrower, 0, repaidShares, bytes(""));
     vm.stopPrank();
 
-    // Simulate Moolah calling broker.liquidate (onlyMoolah)
     vm.prank(address(moolah));
     broker.liquidate(id, borrower);
 
-    // After liquidation, dynamic principal should reduce (maybe to zero)
-    (uint256 dynPrincipalAfter, ) = broker.dynamicLoanPositions(borrower);
+    (uint256 dynPrincipalAfter, uint256 dynNormalizedAfter) = broker.dynamicLoanPositions(borrower);
+    assertLt(dynPrincipalAfter, dynPrincipalBefore, "dynamic principal not reduced");
+    assertLt(dynNormalizedAfter, dynNormalizedBefore, "normalized debt unchanged");
 
-    // Higher APR fixed position should be favored in deduction
     FixedLoanPosition[] memory afterFix = broker.userFixedPositions(borrower);
-    // If any fixed positions remain, ensure at least one had principal reduced
-    if (afterFix.length > 0) {
-      bool anyReduced = false;
-      for (uint256 i = 0; i < afterFix.length; i++) {
-        // fetch original matching pos
-        for (uint256 j = 0; j < beforeFix.length; j++) {
-          if (afterFix[i].posId == beforeFix[j].posId && afterFix[i].repaidPrincipal > beforeFix[j].repaidPrincipal) {
-            anyReduced = true;
-          }
-        }
-      }
-      assertTrue(anyReduced, "no fixed principal reduction");
-    }
+    assertEq(afterFix.length, 1, "fixed position count should stay the same");
+    FixedLoanPosition memory fixedAfter = afterFix[0];
+    assertEq(fixedAfter.posId, fixedPosId);
+    assertEq(fixedAfter.repaidPrincipal, beforeFix[0].repaidPrincipal, "fixed position should remain untouched until dynamic cleared");
 
-    // Moolah shares reduced
     Position memory post = moolah.position(id, borrower);
-    assertLt(post.borrowShares, pre.borrowShares);
-
-    // Dynamic principal may be zero or smaller after liquidation
-    assertLe(dynPrincipalAfter, dynBorrow);
+    assertLt(post.borrowShares, pre.borrowShares, "moolah borrow shares should fall");
   }
 
   function test_liquidation_prefersEarlierMaturityFixedPosition() public {
@@ -395,6 +770,64 @@ contract LendingBrokerTest is Test {
 
     Position memory post = moolah.position(id, borrower);
     assertLt(post.borrowShares, pre.borrowShares, "moolah shares not reduced");
+  }
+
+  function test_liquidation_dynamicInterestOnlyLeavesPrincipalIntact() public {
+    uint256 borrowAmt = 800 ether;
+    vm.prank(borrower);
+    broker.borrow(borrowAmt);
+
+    vm.prank(BOT);
+    rateCalc.setRatePerSecond(address(broker), RATE_SCALE + 2);
+
+    skip(200 days);
+
+    oracle.setPrice(address(BTCB), 10_000_000);
+
+    (uint256 principalBefore, uint256 normalizedBefore) = broker.dynamicLoanPositions(borrower);
+    uint256 rate = IRateCalculator(address(rateCalc)).accrueRate(address(broker));
+    uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(normalizedBefore, rate);
+    uint256 interestOutstanding = actualDebt > principalBefore ? actualDebt - principalBefore : 0;
+    assertGt(interestOutstanding, 0, "no accrued interest");
+
+    Market memory marketBefore = moolah.market(id);
+    uint256 repaidShares = interestOutstanding.toSharesDown(marketBefore.totalBorrowAssets, marketBefore.totalBorrowShares);
+    if (repaidShares == 0) {
+      repaidShares = interestOutstanding.toSharesUp(marketBefore.totalBorrowAssets, marketBefore.totalBorrowShares);
+    }
+    assertGt(repaidShares, 0, "repaid shares zero");
+
+    uint256 assumedAssets = repaidShares.toAssetsUp(marketBefore.totalBorrowAssets, marketBefore.totalBorrowShares);
+    assertLe(assumedAssets, interestOutstanding + 1 ether, "liquidation tries to repay principal portion");
+
+    address liquidator2 = address(0xABC);
+    uint256 startingBalance = assumedAssets + 1 ether;
+    LISUSD.setBalance(liquidator2, startingBalance);
+    vm.startPrank(liquidator2);
+    IERC20(address(LISUSD)).approve(address(moolah), type(uint256).max);
+    moolah.liquidate(marketParams, borrower, 0, repaidShares, bytes(""));
+    vm.stopPrank();
+
+    vm.prank(address(moolah));
+    broker.liquidate(id, borrower);
+
+    (uint256 principalAfter, uint256 normalizedAfter) = broker.dynamicLoanPositions(borrower);
+    uint256 balanceAfter = loanToken.balanceOf(liquidator2);
+    uint256 spentAssets = startingBalance - balanceAfter;
+    assertGt(spentAssets, 0, "no assets spent");
+
+    uint256 tolerance = 1e9; // allow for rounding noise
+    if (spentAssets <= interestOutstanding + tolerance) {
+      assertEq(principalAfter, principalBefore, "principal should remain when only interest is repaid");
+    } else {
+      uint256 principalPaid = spentAssets - interestOutstanding;
+      uint256 actualPrincipalPaid = principalBefore - principalAfter;
+      assertApproxEqAbs(actualPrincipalPaid, principalPaid, tolerance, "principal repayment mismatch");
+    }
+
+    uint256 principalDrop = principalBefore - principalAfter;
+    assertLe(principalDrop, spentAssets + tolerance, "principal decreased more than assets repaid");
+    assertLe(normalizedAfter, normalizedBefore, "normalized debt increased");
   }
 
   function _classifyByDuration(FixedLoanPosition[] memory positions)
@@ -498,7 +931,7 @@ contract LendingBrokerTest is Test {
   function test_peekCollateralReducedWithFixedInterest() public {
     // Set a fixed term, borrow fixed, wait, then check price reduces
     vm.prank(MANAGER);
-    broker.setFixedTermAndRate(77, 30 days, RATE_SCALE);
+    broker.setFixedTermAndRate(77, 30 days, RATE_SCALE + 5e24);
     // initial price from oracle
     uint256 p0 = broker.peek(address(BTCB), borrower);
     vm.prank(borrower);

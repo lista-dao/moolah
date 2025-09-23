@@ -233,29 +233,35 @@ IBroker
     uint256 amountLeft = amount - repayInterestAmt;
     uint256 repayPrincipalAmt = amountLeft > position.principal ? position.principal : amountLeft;
 
-    // transfer amount needed from user
-    IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), repayInterestAmt + repayPrincipalAmt);
+    // record the actual repaid amount for event
+    uint256 totalRepaid = 0;
 
     // (1) Repay interest first
+    IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), repayInterestAmt);
     // update position
     position.normalizedDebt -= BrokerMath.normalizeBorrowAmount(repayInterestAmt, rate);
     // supply interest to moolah vault
     _supplyToMoolahVault(repayInterestAmt);
+    totalRepaid += repayInterestAmt;
 
     // has left to repay principal
     if (repayPrincipalAmt > 0) {
-      // update position
-      position.principal -= repayPrincipalAmt;
-      position.normalizedDebt -= BrokerMath.normalizeBorrowAmount(repayPrincipalAmt, rate);
-      // repay to moolah (principal only)
-      _repayToMoolah(onBehalf, repayPrincipalAmt);
+      uint256 principalRepaid = _repayToMoolah(user, onBehalf, repayPrincipalAmt);
+      if (principalRepaid > 0) {
+        // update position
+        position.principal = position.principal.zeroFloorSub(principalRepaid);
+        position.normalizedDebt = position.normalizedDebt.zeroFloorSub(
+          BrokerMath.normalizeBorrowAmount(principalRepaid, rate)
+        );
+        totalRepaid += principalRepaid;
+      }
       // remove position if fully repaid
       if (position.principal == 0) {
         delete dynamicLoanPositions[onBehalf];
       }
     }
 
-    emit DynamicLoanPositionRepaid(onBehalf, amount, position.principal);
+    emit DynamicLoanPositionRepaid(onBehalf, totalRepaid, position.principal);
   }
 
   /**
@@ -269,7 +275,6 @@ IBroker
     require(amount > 0, "broker/zero-amount");
     require(onBehalf != address(0), "broker/zero-address");
     address user = msg.sender;
-    IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), amount);
 
     // fetch position (will revert if not found)
     FixedLoanPosition memory position = _getFixedPositionByPosId(onBehalf, posId);
@@ -284,10 +289,10 @@ IBroker
 
     // repay interest first, it might be zero if user just repaid before
     if (repayInterestAmt > 0) {
+      IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), repayInterestAmt);
       // update repaid interest amount
       position.repaidInterest += repayInterestAmt;
       // supply interest into vault as revenue
-      amount -= repayInterestAmt;
       _supplyToMoolahVault(repayInterestAmt);
     }
 
@@ -298,20 +303,16 @@ IBroker
       uint256 penalty = _getPenaltyForFixedPosition(position, repayPrincipalAmt);
       // supply penalty into vault as revenue
       if (penalty > 0) {
-        amount -= penalty;
+        IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), penalty);
         _supplyToMoolahVault(penalty);
       }
 
       // the rest will be used to repay partially
-      uint256 actualRepaidPrincipal = amount > repayPrincipalAmt ? repayPrincipalAmt : amount;
-      position.repaidPrincipal += actualRepaidPrincipal;
-      _repayToMoolah(onBehalf, actualRepaidPrincipal);
-      amount -= actualRepaidPrincipal;
-    }
-
-    // return leftover to user
-    if (amount > 0) {
-      IERC20(LOAN_TOKEN).safeTransfer(user, amount);
+      if (repayPrincipalAmt > 0) {
+        uint256 budget = UtilsLib.min(repayPrincipalAmt, remainingPrincipal);
+        uint256 principalRepaid = _repayToMoolah(user, onBehalf, budget);
+        position.repaidPrincipal += principalRepaid;
+      }
     }
 
     // post repayment
@@ -759,21 +760,39 @@ IBroker
 
   /**
    * @dev Repay an amount on behalf of a user to Moolah
+   * @param payer The address of the user who pays for the repayment
    * @param onBehalf The address of the user to repay on behalf of
    * @param amount The amount to repay
    */
-  function _repayToMoolah(address onBehalf, uint256 amount) internal {
-    // approve
+  function _repayToMoolah(address payer, address onBehalf, uint256 amount) 
+  internal
+  returns (uint256 assetsRepaid) {
+    if (amount == 0) return 0;
+
+    IERC20(LOAN_TOKEN).safeTransferFrom(payer, address(this), amount);
     IERC20(LOAN_TOKEN).safeIncreaseAllowance(address(MOOLAH), amount);
-    MarketParams memory marketParams = _getMarketParams(MARKET_ID);
-    // repay to moolah
-    MOOLAH.repay(
-      marketParams,
-      amount,
-      0,
+
+    Market memory market = MOOLAH.market(MARKET_ID);
+    Position memory pos = MOOLAH.position(MARKET_ID, onBehalf);
+    // convert amount to shares
+    uint256 amountShares = amount.toSharesDown(
+      market.totalBorrowAssets,
+      market.totalBorrowShares
+    );
+    bool repayByShares = amountShares >= pos.borrowShares;
+    // for the last bit of repayment
+    // using `shares` to ensure full repayment
+    (assetsRepaid, /* sharesRepaid */) = MOOLAH.repay(
+      _getMarketParams(MARKET_ID),
+      repayByShares ? 0 : amount,
+      repayByShares ? pos.borrowShares : 0,
       onBehalf,
       ""
     );
+    // refund any excess amount to payer
+    if (amount > assetsRepaid ) {
+      IERC20(LOAN_TOKEN).safeTransfer(payer, amount - assetsRepaid);
+    }
   }
 
   /**
