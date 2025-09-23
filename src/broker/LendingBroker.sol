@@ -280,7 +280,7 @@ IBroker
     FixedLoanPosition memory position = _getFixedPositionByPosId(onBehalf, posId);
     // remaining principal before repayment
     uint256 remainingPrincipal = position.principal - position.repaidPrincipal;
-    // get accrued interest from LAST REPAID TIME to NOW
+    // get outstanding accrued interest
     uint256 accruedInterest = BrokerMath.getAccruedInterestForFixedPosition(position) - position.repaidInterest;
     
     // initialize repay amounts
@@ -304,6 +304,7 @@ IBroker
       // supply penalty into vault as revenue
       if (penalty > 0) {
         IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), penalty);
+        repayPrincipalAmt -= penalty;
         _supplyToMoolahVault(penalty);
       }
 
