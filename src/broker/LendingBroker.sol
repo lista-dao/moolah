@@ -573,12 +573,17 @@ IBroker
   ///////////////////////////////////////
   /////        View functions       /////
   ///////////////////////////////////////
+
+  /**
+   * @dev returns all fixed terms and rates products
+   */
   function getFixedTerms() external view override returns (FixedTermAndRate[] memory) {
     return fixedTerms;
   }
 
   /**
    * @dev IOracle-compatible peek for base prices (no user context)
+   *      essential for Moolah to init the market
    * @param asset The token to fetch the price for
    * @return price Price with 8 decimals, proxied from the underlying oracle
    */
@@ -591,7 +596,7 @@ IBroker
    * @param token The address of the token to get the price for
    * @param user The address of the user
    */
-  function peek(address token, address user) external override view returns (uint256 price) {
+  function peek(address token, address user) external override marketIdSet view returns (uint256 price) {
     // loan token's price never changes
     if (token == LOAN_TOKEN) {
       return 10 ** 8;
@@ -647,10 +652,20 @@ IBroker
     revert("Broker/unsupported-token");
   }
 
+  /**
+   * @dev Get all fixed loan positions of a user
+   * @param user The address of the user
+   * @return An array of FixedLoanPosition structs
+   */
   function userFixedPositions(address user) external view returns (FixedLoanPosition[] memory) {
     return fixedLoanPositions[user];
   }
 
+  /**
+   * @dev Get the dynamic loan position of a user
+   * @param user The address of the user
+   * @return The DynamicLoanPosition struct
+   */
   function userDynamicPosition(address user) external view returns (DynamicLoanPosition memory) {
     return dynamicLoanPositions[user];
   }
