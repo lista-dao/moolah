@@ -60,11 +60,11 @@ library BrokerMath {
     // time elapsed since start
     uint256 timeElapsed = block.timestamp > position.end ? term : block.timestamp - position.start;
     if (position.principal == 0 || timeElapsed == 0) return 0;
-    // accrued interest = principal * APR * timeElapsed / term
+    // accrued interest = principal * APR(per second) * timeElapsed
     return Math.mulDiv(
-      Math.mulDiv(position.principal, _aprPerSecond(position.apr), RATE_SCALE, Math.Rounding.Ceil), // principal * APR
-      timeElapsed,
-      term,
+      position.principal,
+      _aprPerSecond(position.apr) * timeElapsed,
+      RATE_SCALE,
       Math.Rounding.Ceil
     );
   }
@@ -79,13 +79,11 @@ library BrokerMath {
     if (block.timestamp > position.end) return 0;
     // time left before expiration
     uint256 timeLeft = position.end - block.timestamp;
-    // duration of the loan
-    uint256 term = position.end - position.start;
     // penalty = (repayAmt * APR) * timeleft/term * 1/2
     penalty = Math.mulDiv(
-      Math.mulDiv(repayAmt, _aprPerSecond(position.apr), RATE_SCALE, Math.Rounding.Ceil), // repayAmt * APR
+      Math.mulDiv(repayAmt, _aprPerSecond(position.apr), RATE_SCALE, Math.Rounding.Ceil), // repayAmt * APR(per second)
       timeLeft,
-      term * 2,
+      2,
       Math.Rounding.Ceil
     );
   }
