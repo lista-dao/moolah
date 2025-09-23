@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
-
+import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "interest-rate-model/InterestRateModel.sol";
 
 import "forge-std/Test.sol";
+import "forge-std/console.sol";
 
 contract InterestRateModelTest is Test {
   using MathLib for int256;
@@ -13,13 +14,32 @@ contract InterestRateModelTest is Test {
   using MoolahMathLib for uint256;
   using MarketParamsLib for MarketParams;
 
+  bytes32 constant MANAGER = keccak256("MANAGER");
+  bytes32 constant BOT = keccak256("BOT");
+
   event BorrowRateUpdate(Id indexed id, uint256 avgBorrowRate, uint256 rateAtTarget);
 
-  IInterestRateModel internal irm;
+  InterestRateModel internal irm;
   MarketParams internal marketParams = MarketParams(address(0), address(0), address(0), address(0), 0);
 
   function setUp() public {
     irm = new InterestRateModel(address(this));
+    address admin = makeAddr("admin");
+    address manager = makeAddr("manager");
+    address bot = makeAddr("bot");
+    ERC1967Proxy proxy_ = new ERC1967Proxy(
+      address(irm),
+      abi.encodeWithSelector(InterestRateModel.initialize.selector, admin)
+    );
+    irm = InterestRateModel(address(proxy_));
+    vm.startPrank(admin);
+    irm.grantRole(MANAGER, manager);
+    irm.grantRole(BOT, bot);
+    vm.stopPrank();
+
+    assertTrue(irm.hasRole(MANAGER, manager));
+    assertTrue(irm.hasRole(BOT, bot));
+
     vm.warp(90 days);
 
     bytes4[] memory selectors = new bytes4[](1);
@@ -59,9 +79,11 @@ contract InterestRateModelTest is Test {
   function testRateAfterUtilizationOne() public {
     vm.warp(365 days * 2);
     Market memory market;
+    uint256 _cap = uint256(0.3 ether) / 365 days;
+
     assertApproxEqRel(
       irm.borrowRate(marketParams, market),
-      uint256(ConstantsLib.INITIAL_RATE_AT_TARGET / 4),
+      uint256(ConstantsLib.INITIAL_RATE_AT_TARGET / 4) > _cap ? _cap : uint256(ConstantsLib.INITIAL_RATE_AT_TARGET / 4),
       0.001 ether
     );
 
@@ -76,17 +98,26 @@ contract InterestRateModelTest is Test {
         (ConstantsLib.INITIAL_RATE_AT_TARGET * 4).wMulToZero(
           ((1.9836 ether - 1 ether) * WAD) / (ConstantsLib.ADJUSTMENT_SPEED * 5 days)
         )
-      ),
+      ) > _cap
+        ? _cap
+        : uint256(
+          (ConstantsLib.INITIAL_RATE_AT_TARGET * 4).wMulToZero(
+            ((1.9836 ether - 1 ether) * WAD) / (ConstantsLib.ADJUSTMENT_SPEED * 5 days)
+          )
+        ),
       0.1 ether
     );
     // The average value of exp((50/365)*x) between 0 and 5 is approx. 1.4361.
     assertApproxEqRel(
       irm.borrowRateView(marketParams, market),
-      uint256((ConstantsLib.INITIAL_RATE_AT_TARGET * 4).wMulToZero(1.4361 ether)),
+      uint256((ConstantsLib.INITIAL_RATE_AT_TARGET * 4).wMulToZero(1.4361 ether)) > _cap
+        ? _cap
+        : uint256((ConstantsLib.INITIAL_RATE_AT_TARGET * 4).wMulToZero(1.4361 ether)),
       0.1 ether
     );
     // Expected rate: 22.976%.
-    assertApproxEqRel(irm.borrowRateView(marketParams, market), uint256(0.22976 ether) / 365 days, 0.1 ether);
+    uint256 expectRate = uint256(0.22976 ether) / 365 days;
+    assertApproxEqRel(irm.borrowRateView(marketParams, market), expectRate > _cap ? _cap : expectRate, 0.1 ether);
   }
 
   function testRateAfterUtilizationZero() public {
@@ -327,6 +358,21 @@ contract InterestRateModelTest is Test {
     assertApproxEqRel(irm.rateAtTarget(marketParams.id()), expectedRateAtTarget, 0.001 ether, "rateAtTarget");
   }
 
+  function testUpdateRateCap(Id id, uint256 newCap) public {
+    newCap = bound(newCap, 1, uint256(ConstantsLib.MAX_RATE_AT_TARGET));
+    vm.prank(makeAddr("bot"));
+    irm.updateRateCap(id, newCap);
+    assertEq(irm.rateCap(id), newCap);
+  }
+
+  function testUpateMinCap(uint256 newMinCap) public {
+    // minCap = uint256(0.05 ether) / 365 days; // 5%
+    newMinCap = bound(newMinCap, 1, uint256(0.05 ether) / 365 days);
+    vm.prank(makeAddr("manager"));
+    irm.updateMinCap(newMinCap);
+    assertEq(irm.minCap(), newMinCap);
+  }
+
   /* HANDLERS */
 
   function handleBorrowRate(uint256 totalSupplyAssets, uint256 totalBorrowAssets, uint256 elapsed) external {
@@ -384,6 +430,7 @@ contract InterestRateModelTest is Test {
     assertLt(ConstantsLib.TARGET_UTILIZATION, 1 ether, "targetUtilization too big");
     assertGe(ConstantsLib.INITIAL_RATE_AT_TARGET, ConstantsLib.MIN_RATE_AT_TARGET, "initialRateAtTarget too small");
     assertLe(ConstantsLib.INITIAL_RATE_AT_TARGET, ConstantsLib.MAX_RATE_AT_TARGET, "initialRateAtTarget too large");
+    assertEq(ConstantsLib.DEFAULT_RATE_CAP, uint256(0.3 ether) / 365 days, "default cap should be 30%");
   }
 
   /* HELPERS */
@@ -419,6 +466,8 @@ contract InterestRateModelTest is Test {
       // Safe "unchecked" cast to uint256 because linearAdaptation < 0 <=> newBorrowRate <= borrowRateAfterJump.
       avgBorrowRate = uint256((int256(newBorrowRate) - int256(_curve(rateAtTarget, err))).wDivToZero(linearAdaptation));
     }
+    uint256 cap = irm.rateCap(id) != 0 ? irm.rateCap(id) : ConstantsLib.DEFAULT_RATE_CAP;
+    if (avgBorrowRate > cap) avgBorrowRate = cap;
     return avgBorrowRate;
   }
 

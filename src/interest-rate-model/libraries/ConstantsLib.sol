@@ -29,4 +29,7 @@ library ConstantsLib {
   /// @notice Maximum rate at target per second (scaled by WAD).
   /// @dev Maximum rate at target = 200% (maximum rate = 800%).
   int256 public constant MAX_RATE_AT_TARGET = 2.0 ether / int256(365 days);
+
+  /// @dev Default borrow rate cap = 30% (scaled by WAD).
+  uint256 public constant DEFAULT_RATE_CAP = uint256(0.3 ether) / 365 days;
 }
