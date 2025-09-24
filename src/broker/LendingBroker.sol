@@ -282,7 +282,7 @@ contract LendingBroker is
 
     // initialize repay amounts
     uint256 repayInterestAmt = amount < accruedInterest ? amount : accruedInterest;
-    uint256 repayPrincipalAmt = UtilsLib.min(amount - repayInterestAmt, remainingPrincipal);
+    uint256 repayPrincipalAmt = amount - repayInterestAmt;
 
     // repay interest first, it might be zero if user just repaid before
     if (repayInterestAmt > 0) {
@@ -297,7 +297,7 @@ contract LendingBroker is
     if (repayPrincipalAmt > 0) {
       // ----- penalty
       // check penalty if user is repaying before expiration
-      uint256 penalty = _getPenaltyForFixedPosition(position, repayPrincipalAmt);
+      uint256 penalty = _getPenaltyForFixedPosition(position, UtilsLib.min(repayPrincipalAmt, remainingPrincipal));
       // supply penalty into vault as revenue
       if (penalty > 0) {
         IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), penalty);
@@ -307,8 +307,9 @@ contract LendingBroker is
 
       // the rest will be used to repay partially
       if (repayPrincipalAmt > 0) {
-        uint256 budget = UtilsLib.min(repayPrincipalAmt, remainingPrincipal);
-        uint256 principalRepaid = _repayToMoolah(user, onBehalf, budget);
+        // even if user transferred more than needed, we only repay what is needed
+        // this allows user to fully repay, tokens unused will be returned to user
+        uint256 principalRepaid = _repayToMoolah(user, onBehalf, repayPrincipalAmt);
         position.principalRepaid += principalRepaid;
         // reset repaid interest to zero (all accrued interest has been cleared)
         position.interestRepaid = 0;

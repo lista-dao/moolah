@@ -407,8 +407,8 @@ contract LendingBrokerTest is Test {
     FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(borrower);
     assertEq(fixedPositions.length, 1, "fixed position not created");
     assertEq(fixedPositions[0].principal, convertAmount + expectedInterestShare, "converted fixed principal incorrect");
-    assertEq(fixedPositions[0].repaidInterest, 0);
-    assertEq(fixedPositions[0].repaidPrincipal, 0);
+    assertEq(fixedPositions[0].interestRepaid, 0);
+    assertEq(fixedPositions[0].principalRepaid, 0);
   }
 
   function test_convertDynamicToFixed_fullAmountClearsDynamic() public {
@@ -500,7 +500,7 @@ contract LendingBrokerTest is Test {
         "partial share/asset mismatch"
       );
     }
-    assertApproxEqAbs(midPos.repaidPrincipal, principalRepaidPartial, 1e17, "partial principal recorded");
+    assertApproxEqAbs(midPos.principalRepaid, principalRepaidPartial, 1e17, "partial principal recorded");
 
     // Full repay remaining
     // Top up borrower to ensure enough balance, then overpay to cover any interest/penalty
@@ -529,7 +529,7 @@ contract LendingBrokerTest is Test {
     assertEq(beforePositions.length, 1, "missing fixed position");
     FixedLoanPosition memory beforePos = beforePositions[0];
     uint256 posId = beforePos.posId;
-    uint256 interestDue = BrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.repaidInterest;
+    uint256 interestDue = BrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.interestRepaid;
     assertGt(interestDue, 0, "interest did not accrue");
 
     uint256 principalPortion = 40 ether;
@@ -551,16 +551,17 @@ contract LendingBrokerTest is Test {
     FixedLoanPosition[] memory afterPositions = broker.userFixedPositions(borrower);
     assertEq(afterPositions.length, 1, "position removed unexpectedly");
     FixedLoanPosition memory afterPos = afterPositions[0];
-    uint256 interestPaid = afterPos.repaidInterest - beforePos.repaidInterest;
-    assertEq(interestPaid, interestDue, "interest repayment mismatch");
-
     uint256 principalRepaid = _principalRepaid(marketBefore, marketAfter);
     assertApproxEqAbs(
-      afterPos.repaidPrincipal - beforePos.repaidPrincipal,
+      afterPos.principalRepaid - beforePos.principalRepaid,
       principalRepaid,
       2e15,
       "principal repayment mismatch"
     );
+
+    // interest should be fully cleared after the partial principal repayment
+    uint256 residualInterest = BrokerMath.getAccruedInterestForFixedPosition(afterPos) - afterPos.interestRepaid;
+    assertEq(residualInterest, 0, "interest outstanding after repay");
 
     uint256 sharesBurned = uint256(posBefore.borrowShares) - uint256(posAfter.borrowShares);
     if (principalRepaid == 0) {
@@ -576,7 +577,8 @@ contract LendingBrokerTest is Test {
     }
 
     uint256 spent = helperInitial - helperAfter;
-    uint256 penaltyPaid = spent - interestPaid - principalRepaid;
+    uint256 principalDelta = afterPos.principalRepaid - beforePos.principalRepaid;
+    uint256 penaltyPaid = spent > interestDue + principalDelta ? spent - (interestDue + principalDelta) : 0;
     assertGe(penaltyPaid, penalty, "penalty repayment too small");
     assertLt(penaltyPaid - penalty, 5e16, "penalty excess too large");
   }
@@ -598,8 +600,8 @@ contract LendingBrokerTest is Test {
     FixedLoanPosition memory beforePos = beforePositions[0];
     uint256 posId = beforePos.posId;
 
-    uint256 remainingPrincipal = beforePos.principal - beforePos.repaidPrincipal;
-    uint256 interestDue = BrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.repaidInterest;
+    uint256 remainingPrincipal = beforePos.principal - beforePos.principalRepaid;
+    uint256 interestDue = BrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.interestRepaid;
     uint256 penalty = BrokerMath.getPenaltyForFixedPosition(beforePos, remainingPrincipal);
 
     uint256 repayAll = 2_000 ether;
@@ -691,8 +693,8 @@ contract LendingBrokerTest is Test {
     FixedLoanPosition memory fixedAfter = afterFix[0];
     assertEq(fixedAfter.posId, fixedPosId);
     assertEq(
-      fixedAfter.repaidPrincipal,
-      beforeFix[0].repaidPrincipal,
+      fixedAfter.principalRepaid,
+      beforeFix[0].principalRepaid,
       "fixed position should remain untouched until dynamic cleared"
     );
 
@@ -751,19 +753,19 @@ contract LendingBrokerTest is Test {
 
     // earlier maturity should absorb repayment while later ones remain untouched
     assertTrue(shortFound, "short maturity position missing");
-    assertGt(shortAfter.repaidPrincipal, 0, "earliest maturity not prioritized");
+    assertGt(shortAfter.principalRepaid, 0, "earliest maturity not prioritized");
 
     if (midFound) {
       assertEq(
-        midAfter.repaidPrincipal,
-        beforeFix[_indexOf(beforeFix, midPosId)].repaidPrincipal,
+        midAfter.principalRepaid,
+        beforeFix[_indexOf(beforeFix, midPosId)].principalRepaid,
         "mid maturity unexpectedly repaid"
       );
     }
     if (longFound) {
       assertEq(
-        longAfter.repaidPrincipal,
-        beforeFix[_indexOf(beforeFix, longPosId)].repaidPrincipal,
+        longAfter.principalRepaid,
+        beforeFix[_indexOf(beforeFix, longPosId)].principalRepaid,
         "long maturity unexpectedly repaid"
       );
     }
