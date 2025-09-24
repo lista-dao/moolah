@@ -6,23 +6,17 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
-import {
-  IBroker,
-  FixedLoanPosition,
-  DynamicLoanPosition,
-  FixedTermAndRate
-} from "../interfaces/IBroker.sol";
+import { IBroker, FixedLoanPosition, DynamicLoanPosition, FixedTermAndRate } from "../interfaces/IBroker.sol";
 
 uint256 constant RATE_SCALE = 10 ** 27;
 
 library BrokerMath {
-
   // =========================== //
   //           Helpers           //
   // =========================== //
   function getTotalDebt(
-    FixedLoanPosition[] memory fixedPositions, 
-    DynamicLoanPosition memory dynamicPosition, 
+    FixedLoanPosition[] memory fixedPositions,
+    DynamicLoanPosition memory dynamicPosition,
     uint256 currentRate
   ) public view returns (uint256 totalDebt) {
     // [1] total debt from fixed position
@@ -45,15 +39,14 @@ library BrokerMath {
     return Math.mulDiv(a, b, c, Math.Rounding.Floor);
   }
 
-
   // =========================== //
   //          Fixed Loan         //
   // =========================== //
 
   /**
-  * @dev Get the interest for a fixed loan position (without subtracting repaid interest)
-  * @param position The fixed loan position to get the interest for
-  */
+   * @dev Get the interest for a fixed loan position (without subtracting repaid interest)
+   * @param position The fixed loan position to get the interest for
+   */
   function getAccruedInterestForFixedPosition(FixedLoanPosition memory position) public view returns (uint256) {
     // term
     uint256 term = position.end - position.start;
@@ -61,20 +54,18 @@ library BrokerMath {
     uint256 timeElapsed = block.timestamp > position.end ? term : block.timestamp - position.start;
     if (position.principal == 0 || timeElapsed == 0) return 0;
     // accrued interest = principal * APR(per second) * timeElapsed
-    return Math.mulDiv(
-      position.principal,
-      _aprPerSecond(position.apr) * timeElapsed,
-      RATE_SCALE,
-      Math.Rounding.Ceil
-    );
+    return Math.mulDiv(position.principal, _aprPerSecond(position.apr) * timeElapsed, RATE_SCALE, Math.Rounding.Ceil);
   }
 
   /**
-  * @dev Get the penalty for a fixed loan position
-  * @param position The fixed loan position to get the penalty for
-  * @param repayAmt The actual repay amount (repay amount excluded accrued interest)
-  */
-  function getPenaltyForFixedPosition(FixedLoanPosition memory position, uint256 repayAmt) public view returns (uint256 penalty) {
+   * @dev Get the penalty for a fixed loan position
+   * @param position The fixed loan position to get the penalty for
+   * @param repayAmt The actual repay amount (repay amount excluded accrued interest)
+   */
+  function getPenaltyForFixedPosition(
+    FixedLoanPosition memory position,
+    uint256 repayAmt
+  ) public view returns (uint256 penalty) {
     // only early repayment will incur penalty
     if (block.timestamp > position.end) return 0;
     // time left before expiration
@@ -97,7 +88,6 @@ library BrokerMath {
     if (apr <= RATE_SCALE) return 0;
     return Math.mulDiv(apr - RATE_SCALE, 1, 365 days, Math.Rounding.Floor);
   }
-
 
   // =========================== //
   //         Dynamic Loan        //
@@ -132,21 +122,48 @@ library BrokerMath {
   function _rpow(uint x, uint n, uint b) public pure returns (uint z) {
     /// @solidity memory-safe-assembly
     assembly {
-      switch x case 0 {switch n case 0 {z := b} default {z := 0}}
+      switch x
+      case 0 {
+        switch n
+        case 0 {
+          z := b
+        }
+        default {
+          z := 0
+        }
+      }
       default {
-        switch mod(n, 2) case 0 { z := b } default { z := x }
-        let half := div(b, 2)  // for rounding.
-        for { n := div(n, 2) } n { n := div(n,2) } {
+        switch mod(n, 2)
+        case 0 {
+          z := b
+        }
+        default {
+          z := x
+        }
+        let half := div(b, 2) // for rounding.
+        for {
+          n := div(n, 2)
+        } n {
+          n := div(n, 2)
+        } {
           let xx := mul(x, x)
-          if iszero(eq(div(xx, x), x)) { revert(0,0) }
+          if iszero(eq(div(xx, x), x)) {
+            revert(0, 0)
+          }
           let xxRound := add(xx, half)
-          if lt(xxRound, xx) { revert(0,0) }
+          if lt(xxRound, xx) {
+            revert(0, 0)
+          }
           x := div(xxRound, b)
-          if mod(n,2) {
+          if mod(n, 2) {
             let zx := mul(z, x)
-            if and(iszero(iszero(x)), iszero(eq(div(zx, x), z))) { revert(0,0) }
+            if and(iszero(iszero(x)), iszero(eq(div(zx, x), z))) {
+              revert(0, 0)
+            }
             let zxRound := add(zx, half)
-            if lt(zxRound, zx) { revert(0,0) }
+            if lt(zxRound, zx) {
+              revert(0, 0)
+            }
             z := div(zxRound, b)
           }
         }
@@ -161,5 +178,4 @@ library BrokerMath {
       z = z / RATE_SCALE;
     }
   }
-  
 }

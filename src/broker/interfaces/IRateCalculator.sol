@@ -10,7 +10,6 @@ struct RateConfig {
 
 /// @dev RateCalculator Interface
 interface IRateCalculator {
-
   /// ------------------------------
   ///      External functions
   /// ------------------------------

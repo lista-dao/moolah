@@ -9,7 +9,6 @@ import { BrokerMath, RATE_SCALE } from "./libraries/BrokerMath.sol";
 /// @author Lista DAO
 /// @notice This contract calculates and update the latest rate for LendingBrokers
 contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IRateCalculator {
-
   // ------- Roles -------
   bytes32 public constant MANAGER = keccak256("MANAGER");
   bytes32 public constant PAUSER = keccak256("PAUSER");
@@ -32,17 +31,9 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
    * @param _pauser The address of the pauser role
    * @param _bot The address of the bot role
    */
-  function initialize(
-    address _admin,
-    address _manager,
-    address _pauser,
-    address _bot
-  ) public initializer {
+  function initialize(address _admin, address _manager, address _pauser, address _bot) public initializer {
     require(
-      _admin != address(0) &&
-      _manager != address(0) &&
-      _pauser != address(0) &&
-      _bot != address(0),
+      _admin != address(0) && _manager != address(0) && _pauser != address(0) && _bot != address(0),
       "RateCalculator/zero-address-provided"
     );
 
@@ -85,7 +76,10 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
     if (lastUpdated == block.timestamp) {
       return currentRate;
     }
-    return uint256(BrokerMath._rmul(BrokerMath._rpow(ratePerSecond, block.timestamp - lastUpdated, RATE_SCALE), currentRate));
+    return
+      uint256(
+        BrokerMath._rmul(BrokerMath._rpow(ratePerSecond, block.timestamp - lastUpdated, RATE_SCALE), currentRate)
+      );
   }
 
   /**
@@ -93,7 +87,10 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
    * @param _brokers The addresses of the brokers
    * @param _ratePerSeconds The interest rates per second
    */
-  function batchSetRatePerSecond(address[] calldata _brokers, uint256[] calldata _ratePerSeconds) external onlyRole(BOT) {
+  function batchSetRatePerSecond(
+    address[] calldata _brokers,
+    uint256[] calldata _ratePerSeconds
+  ) external onlyRole(BOT) {
     require(_brokers.length > 0, "RateCalculator/empty-input");
     require(_brokers.length == _ratePerSeconds.length, "RateCalculator/length-mismatch");
     for (uint256 i = 0; i < _brokers.length; i++) {
@@ -121,10 +118,7 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
    */
   function _setRatePerSecond(address _broker, uint256 _ratePerSecond) internal {
     require(brokers[_broker].lastUpdated != 0, "RateCalculator/broker-not-active");
-    require(
-      _ratePerSecond <= brokers[_broker].maxRatePerSecond,
-      "RateCalculator/rate-exceeds-max"
-    );
+    require(_ratePerSecond <= brokers[_broker].maxRatePerSecond, "RateCalculator/rate-exceeds-max");
     // accrue the rate first before overwriting it to avoid retroactive jumps
     _accrueRate(_broker);
     // update rate per second
@@ -154,7 +148,10 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
       return currentRate;
     }
     // update current rate
-    config.currentRate = BrokerMath._rmul(BrokerMath._rpow(ratePerSecond, block.timestamp - lastUpdated, RATE_SCALE), currentRate);
+    config.currentRate = BrokerMath._rmul(
+      BrokerMath._rpow(ratePerSecond, block.timestamp - lastUpdated, RATE_SCALE),
+      currentRate
+    );
     // refresh updated timestamp
     config.lastUpdated = block.timestamp;
     return config.currentRate;
@@ -182,7 +179,11 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
    * @param _ratePerSecond The interest rate per second
    * @param _maxRatePerSecond The maximum interest rate per second
    */
-  function registerBroker(address _broker, uint256 _ratePerSecond, uint256 _maxRatePerSecond) external onlyRole(MANAGER) {
+  function registerBroker(
+    address _broker,
+    uint256 _ratePerSecond,
+    uint256 _maxRatePerSecond
+  ) external onlyRole(MANAGER) {
     require(_broker != address(0), "RateCalculator/zero-address");
     require(brokers[_broker].lastUpdated == 0, "RateCalculator/broker-already-registered");
     require(_ratePerSecond > RATE_SCALE, "RateCalculator/rate-below-min");

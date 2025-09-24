@@ -46,20 +46,11 @@ interface IBrokerBase {
 
 /// @dev Broker interface
 interface IBroker is IBrokerBase {
-  
   /// ------------------------------
   ///            Events
   /// ------------------------------
-  event DynamicLoanPositionBorrowed(
-    address indexed user,
-    uint256 borrowed,
-    uint256 principalLeft
-  );
-  event DynamicLoanPositionRepaid(
-    address indexed user,
-    uint256 repaid,
-    uint256 principalLeft
-  );
+  event DynamicLoanPositionBorrowed(address indexed user, uint256 borrowed, uint256 principalLeft);
+  event DynamicLoanPositionRepaid(address indexed user, uint256 repaid, uint256 principalLeft);
   event FixedLoanPositionCreated(
     address indexed user,
     uint256 principal,
@@ -69,7 +60,7 @@ interface IBroker is IBrokerBase {
     uint256 termId
   );
   event RepaidFixedLoanPosition(
-    address indexed user, 
+    address indexed user,
     uint256 principal,
     uint256 start,
     uint256 end,

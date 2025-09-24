@@ -49,7 +49,7 @@ contract LendingBrokerTest is Test {
   address supplier = address(0x201);
   address borrower = address(0x202);
   address liquidator = address(0x203);
-  
+
   uint256 constant LTV = 0.8e18;
   uint256 constant SUPPLY_LIQ = 1_000_000 ether;
   uint256 constant COLLATERAL = 1_000 ether;
@@ -114,15 +114,7 @@ contract LendingBrokerTest is Test {
     LendingBroker bImpl = new LendingBroker(address(moolah), address(vault), address(oracle));
     ERC1967Proxy bProxy = new ERC1967Proxy(
       address(bImpl),
-      abi.encodeWithSelector(
-        LendingBroker.initialize.selector,
-        ADMIN,
-        MANAGER,
-        BOT,
-        PAUSER,
-        address(rateCalc),
-        10
-      )
+      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
     );
     broker = LendingBroker(payable(address(bProxy)));
 
@@ -152,7 +144,7 @@ contract LendingBrokerTest is Test {
     LISUSD.setBalance(supplier, seed);
     vm.startPrank(supplier);
     IERC20(address(LISUSD)).approve(address(moolah), type(uint256).max);
-    moolah.supply(marketParams, seed, 0, supplier, bytes("") );
+    moolah.supply(marketParams, seed, 0, supplier, bytes(""));
     vm.stopPrank();
 
     // Token handles
@@ -171,20 +163,12 @@ contract LendingBrokerTest is Test {
     loanToken.approve(address(broker), type(uint256).max);
   }
 
-  function _snapshot(address user)
-    internal
-    view
-    returns (Market memory market, Position memory pos)
-  {
+  function _snapshot(address user) internal view returns (Market memory market, Position memory pos) {
     market = moolah.market(id);
     pos = moolah.position(id, user);
   }
 
-  function _principalRepaid(Market memory beforeMarket, Market memory afterMarket)
-    internal
-    pure
-    returns (uint256)
-  {
+  function _principalRepaid(Market memory beforeMarket, Market memory afterMarket) internal pure returns (uint256) {
     return uint256(beforeMarket.totalBorrowAssets) - uint256(afterMarket.totalBorrowAssets);
   }
 
@@ -456,7 +440,11 @@ contract LendingBrokerTest is Test {
 
     FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(borrower);
     assertEq(fixedPositions.length, 1);
-    assertEq(fixedPositions[0].principal, principalBefore + outstandingInterest, "fixed principal should equal full outstanding debt");
+    assertEq(
+      fixedPositions[0].principal,
+      principalBefore + outstandingInterest,
+      "fixed principal should equal full outstanding debt"
+    );
 
     // sanity: normalized delta consumed the whole normalized debt (allowing rounding wiggle)
     assertApproxEqAbs(expectedNormalizedDelta, normalizedBefore, 1, "normalized debt delta rounding");
@@ -702,7 +690,11 @@ contract LendingBrokerTest is Test {
     assertEq(afterFix.length, 1, "fixed position count should stay the same");
     FixedLoanPosition memory fixedAfter = afterFix[0];
     assertEq(fixedAfter.posId, fixedPosId);
-    assertEq(fixedAfter.repaidPrincipal, beforeFix[0].repaidPrincipal, "fixed position should remain untouched until dynamic cleared");
+    assertEq(
+      fixedAfter.repaidPrincipal,
+      beforeFix[0].repaidPrincipal,
+      "fixed position should remain untouched until dynamic cleared"
+    );
 
     Position memory post = moolah.position(id, borrower);
     assertLt(post.borrowShares, pre.borrowShares, "moolah borrow shares should fall");
@@ -762,10 +754,18 @@ contract LendingBrokerTest is Test {
     assertGt(shortAfter.repaidPrincipal, 0, "earliest maturity not prioritized");
 
     if (midFound) {
-      assertEq(midAfter.repaidPrincipal, beforeFix[_indexOf(beforeFix, midPosId)].repaidPrincipal, "mid maturity unexpectedly repaid");
+      assertEq(
+        midAfter.repaidPrincipal,
+        beforeFix[_indexOf(beforeFix, midPosId)].repaidPrincipal,
+        "mid maturity unexpectedly repaid"
+      );
     }
     if (longFound) {
-      assertEq(longAfter.repaidPrincipal, beforeFix[_indexOf(beforeFix, longPosId)].repaidPrincipal, "long maturity unexpectedly repaid");
+      assertEq(
+        longAfter.repaidPrincipal,
+        beforeFix[_indexOf(beforeFix, longPosId)].repaidPrincipal,
+        "long maturity unexpectedly repaid"
+      );
     }
 
     Position memory post = moolah.position(id, borrower);
@@ -791,7 +791,10 @@ contract LendingBrokerTest is Test {
     assertGt(interestOutstanding, 0, "no accrued interest");
 
     Market memory marketBefore = moolah.market(id);
-    uint256 repaidShares = interestOutstanding.toSharesDown(marketBefore.totalBorrowAssets, marketBefore.totalBorrowShares);
+    uint256 repaidShares = interestOutstanding.toSharesDown(
+      marketBefore.totalBorrowAssets,
+      marketBefore.totalBorrowShares
+    );
     if (repaidShares == 0) {
       repaidShares = interestOutstanding.toSharesUp(marketBefore.totalBorrowAssets, marketBefore.totalBorrowShares);
     }
@@ -830,11 +833,9 @@ contract LendingBrokerTest is Test {
     assertLe(normalizedAfter, normalizedBefore, "normalized debt increased");
   }
 
-  function _classifyByDuration(FixedLoanPosition[] memory positions)
-    internal
-    pure
-    returns (uint256 shortPosId, uint256 midPosId, uint256 longPosId)
-  {
+  function _classifyByDuration(
+    FixedLoanPosition[] memory positions
+  ) internal pure returns (uint256 shortPosId, uint256 midPosId, uint256 longPosId) {
     for (uint256 i = 0; i < positions.length; i++) {
       uint256 duration = positions[i].end - positions[i].start;
       if (duration == 30 days) {
@@ -847,11 +848,10 @@ contract LendingBrokerTest is Test {
     }
   }
 
-  function _findByPosId(FixedLoanPosition[] memory positions, uint256 posId)
-    internal
-    pure
-    returns (FixedLoanPosition memory position, bool found)
-  {
+  function _findByPosId(
+    FixedLoanPosition[] memory positions,
+    uint256 posId
+  ) internal pure returns (FixedLoanPosition memory position, bool found) {
     for (uint256 i = 0; i < positions.length; i++) {
       if (positions[i].posId == posId) {
         return (positions[i], true);
@@ -860,11 +860,7 @@ contract LendingBrokerTest is Test {
     return (position, false);
   }
 
-  function _indexOf(FixedLoanPosition[] memory positions, uint256 posId)
-    internal
-    pure
-    returns (uint256)
-  {
+  function _indexOf(FixedLoanPosition[] memory positions, uint256 posId) internal pure returns (uint256) {
     for (uint256 i = 0; i < positions.length; i++) {
       if (positions[i].posId == posId) {
         return i;
@@ -957,15 +953,7 @@ contract LendingBrokerTest is Test {
     LendingBroker bImpl2 = new LendingBroker(address(moolah), address(vault), address(oracle));
     ERC1967Proxy bProxy2 = new ERC1967Proxy(
       address(bImpl2),
-      abi.encodeWithSelector(
-        LendingBroker.initialize.selector,
-        ADMIN,
-        MANAGER,
-        BOT,
-        PAUSER,
-        address(rateCalc),
-        10
-      )
+      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
     );
     LendingBroker broker2 = LendingBroker(payable(address(bProxy2)));
     vm.expectRevert(bytes("Broker/market-not-set"));
@@ -1023,7 +1011,6 @@ contract LendingBrokerTest is Test {
     assertEq(terms[0].duration, 14 days);
     assertEq(terms[0].apr, RATE_SCALE + 1);
   }
-
 
   function test_refinance_matured_success() public {
     // create a short-term fixed position

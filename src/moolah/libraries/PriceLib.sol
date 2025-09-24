@@ -7,7 +7,6 @@ import { IBrokerBase } from "../../broker/interfaces/IBroker.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 library PriceLib {
-
   /// @dev Returns the price of the collateral asset in terms of the loan asset
   /// @notice if there is a broker for the market and user address is non-zero
   ///         will return a price which might deviates from the market price according to user's position
@@ -22,12 +21,7 @@ library PriceLib {
     MarketParams memory marketParams,
     address user,
     address broker
-  ) public view returns (
-    uint256 basePrice,
-    uint256 quotePrice,
-    uint256 baseTokenDecimals,
-    uint256 quoteTokenDecimals
-) {
+  ) public view returns (uint256 basePrice, uint256 quotePrice, uint256 baseTokenDecimals, uint256 quoteTokenDecimals) {
     IOracle _oracle = IOracle(marketParams.oracle);
     baseTokenDecimals = IERC20Metadata(marketParams.collateralToken).decimals();
     quoteTokenDecimals = IERC20Metadata(marketParams.loanToken).decimals();
@@ -42,5 +36,5 @@ library PriceLib {
       basePrice = _broker.peek(marketParams.collateralToken, user);
       quotePrice = _broker.peek(marketParams.loanToken, user);
     }
-   }
+  }
 }

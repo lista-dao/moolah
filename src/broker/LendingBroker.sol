@@ -28,11 +28,11 @@ import { UtilsLib } from "../moolah/libraries/UtilsLib.sol";
 /// - all borrow and repay has to be done through the broker, broker manages the positions
 /// - User can have multiple fixed rate & terms position and a single dynamic position at the same time
 contract LendingBroker is
-UUPSUpgradeable,
-AccessControlEnumerableUpgradeable,
-PausableUpgradeable,
-ReentrancyGuardUpgradeable,
-IBroker
+  UUPSUpgradeable,
+  AccessControlEnumerableUpgradeable,
+  PausableUpgradeable,
+  ReentrancyGuardUpgradeable,
+  IBroker
 {
   using SafeERC20 for IERC20;
   using MarketParamsLib for MarketParams;
@@ -88,18 +88,9 @@ IBroker
    * @param moolahVault The address of the MoolahVault contract
    * @param oracle The address of the oracle
    */
-  constructor(
-    address moolah,
-    address moolahVault,
-    address oracle
-  ) {
+  constructor(address moolah, address moolahVault, address oracle) {
     // zero address assert
-    require(
-      moolah != address(0) && 
-      moolahVault != address(0) && 
-      oracle != address(0),
-      "broker/zero-address-provided"
-    );
+    require(moolah != address(0) && moolahVault != address(0) && oracle != address(0), "broker/zero-address-provided");
     // set addresses
     MOOLAH = IMoolah(moolah);
     MOOLAH_VAULT = IMoolahVault(moolahVault);
@@ -127,14 +118,14 @@ IBroker
   ) public initializer {
     require(
       _admin != address(0) &&
-      _manager != address(0) &&
-      _bot != address(0) &&
-      _pauser != address(0) &&
-      _rateCalculator != address(0) &&
-      _maxFixedLoanPositions > 0,
+        _manager != address(0) &&
+        _bot != address(0) &&
+        _pauser != address(0) &&
+        _rateCalculator != address(0) &&
+        _maxFixedLoanPositions > 0,
       "broker/zero-address-provided"
     );
-    
+
     __AccessControlEnumerable_init();
     __Pausable_init();
     __ReentrancyGuard_init();
@@ -177,12 +168,12 @@ IBroker
   }
 
   /**
-    * @dev borrow an fixed amount with fixed term and rate
-    *      user is not allowed to alter the position once it has been created
-    *      but user can repay the loan at any time
-    * @param amount amount to borrow
-    * @param termId The ID of the term
-    */
+   * @dev borrow an fixed amount with fixed term and rate
+   *      user is not allowed to alter the position once it has been created
+   *      but user can repay the loan at any time
+   * @param amount amount to borrow
+   * @param termId The ID of the term
+   */
   function borrow(uint256 amount, uint256 termId) external override marketIdSet whenNotPaused nonReentrant {
     require(amount > 0, "broker/amount-zero");
     address user = msg.sender;
@@ -195,15 +186,17 @@ IBroker
     uint256 start = block.timestamp;
     uint256 end = block.timestamp + term.duration;
     // update state
-    fixedLoanPositions[user].push(FixedLoanPosition({
-      posId: fixedPosUuid,
-      principal: amount,
-      apr: term.apr,
-      start: start,
-      end: end,
-      repaidInterest: 0,
-      repaidPrincipal: 0
-    }));
+    fixedLoanPositions[user].push(
+      FixedLoanPosition({
+        posId: fixedPosUuid,
+        principal: amount,
+        apr: term.apr,
+        start: start,
+        end: end,
+        repaidInterest: 0,
+        repaidPrincipal: 0
+      })
+    );
     // pos uuid increment
     fixedPosUuid++;
     // transfer loan token to user
@@ -213,9 +206,9 @@ IBroker
   }
 
   /**
-    * @dev Repay a Dynamic loan position
-    * @param amount The amount to repay
-    * @param onBehalf The address of the user whose position to repay
+   * @dev Repay a Dynamic loan position
+   * @param amount The amount to repay
+   * @param onBehalf The address of the user whose position to repay
    */
   function repay(uint256 amount, address onBehalf) external override marketIdSet whenNotPaused nonReentrant {
     require(amount > 0, "broker/zero-amount");
@@ -226,8 +219,7 @@ IBroker
     // get updated rate
     uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
     // get net accrued interest
-    uint256 accruedInterest = 
-      BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate) - position.principal;
+    uint256 accruedInterest = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate) - position.principal;
     // calculate the amount we need to repay for interest and principal
     uint256 repayInterestAmt = amount < accruedInterest ? amount : accruedInterest;
     uint256 amountLeft = amount - repayInterestAmt;
@@ -265,13 +257,17 @@ IBroker
   }
 
   /**
-    * @dev Repay a Fixed loan position
-    * @notice repay interest first then principal, repay amount must larger than interest
-    * @param amount The amount to repay
-    * @param posId The ID of the fixed position to repay
-    * @param onBehalf The address of the user whose position to repay
+   * @dev Repay a Fixed loan position
+   * @notice repay interest first then principal, repay amount must larger than interest
+   * @param amount The amount to repay
+   * @param posId The ID of the fixed position to repay
+   * @param onBehalf The address of the user whose position to repay
    */
-  function repay(uint256 amount, uint256 posId, address onBehalf) external override marketIdSet whenNotPaused nonReentrant {
+  function repay(
+    uint256 amount,
+    uint256 posId,
+    address onBehalf
+  ) external override marketIdSet whenNotPaused nonReentrant {
     require(amount > 0, "broker/zero-amount");
     require(onBehalf != address(0), "broker/zero-address");
     address user = msg.sender;
@@ -282,7 +278,7 @@ IBroker
     uint256 remainingPrincipal = position.principal - position.repaidPrincipal;
     // get outstanding accrued interest
     uint256 accruedInterest = BrokerMath.getAccruedInterestForFixedPosition(position) - position.repaidInterest;
-    
+
     // initialize repay amounts
     uint256 repayInterestAmt = amount < accruedInterest ? amount : accruedInterest;
     uint256 repayPrincipalAmt = UtilsLib.min(amount - repayInterestAmt, remainingPrincipal);
@@ -338,11 +334,14 @@ IBroker
   }
 
   /**
-    * @dev Convert a portion of or the entire dynamic loan position to a fixed loan position
-    * @param amount The amount to convert from dynamic to fixed
-    * @param termId The ID of the fixed term to use
+   * @dev Convert a portion of or the entire dynamic loan position to a fixed loan position
+   * @param amount The amount to convert from dynamic to fixed
+   * @param termId The ID of the fixed term to use
    */
-  function convertDynamicToFixed(uint256 amount, uint256 termId) external override marketIdSet whenNotPaused nonReentrant {
+  function convertDynamicToFixed(
+    uint256 amount,
+    uint256 termId
+  ) external override marketIdSet whenNotPaused nonReentrant {
     require(amount > 0, "broker/zero-amount");
     address user = msg.sender;
     DynamicLoanPosition storage position = dynamicLoanPositions[user];
@@ -375,15 +374,17 @@ IBroker
     uint256 start = block.timestamp;
     uint256 end = start + term.duration;
 
-    fixedLoanPositions[user].push(FixedLoanPosition({
-      posId: fixedPosUuid,
-      principal: convertedDebt,
-      apr: term.apr,
-      start: start,
-      end: end,
-      repaidInterest: 0,
-      repaidPrincipal: 0
-    }));
+    fixedLoanPositions[user].push(
+      FixedLoanPosition({
+        posId: fixedPosUuid,
+        principal: convertedDebt,
+        apr: term.apr,
+        start: start,
+        end: end,
+        repaidInterest: 0,
+        repaidPrincipal: 0
+      })
+    );
     fixedPosUuid++;
 
     emit FixedLoanPositionCreated(user, convertedDebt, start, end, term.apr, termId);
@@ -402,8 +403,9 @@ IBroker
   function liquidate(Id id, address user) external override onlyMoolah marketIdSet whenNotPaused nonReentrant {
     require(
       _getMarketParams(id).loanToken == _getMarketParams(MARKET_ID).loanToken &&
-      _getMarketParams(id).collateralToken == _getMarketParams(MARKET_ID).collateralToken
-      ,"Broker/invalid-market");
+        _getMarketParams(id).collateralToken == _getMarketParams(MARKET_ID).collateralToken,
+      "Broker/invalid-market"
+    );
     require(user != address(0), "Broker/invalid-user");
     // fetch positions
     DynamicLoanPosition storage dynamicPosition = dynamicLoanPositions[user];
@@ -416,10 +418,7 @@ IBroker
     Position memory mPos = MOOLAH.position(id, user);
     // thats how much user borrowed from Moolah (0% interest, should = total principal at LendingBroker)
     // after liquidation, this will be the new debt amount (partial of collateral has been liquidated)
-    uint256 debtAtMoolah = uint256(mPos.borrowShares).toAssetsUp(
-      market.totalBorrowAssets,
-      market.totalBorrowShares
-    );
+    uint256 debtAtMoolah = uint256(mPos.borrowShares).toAssetsUp(market.totalBorrowAssets, market.totalBorrowShares);
     // debt at broker > debt at moolah, we need to deduct the diff from positions
     uint256 principalToDeduct = totalDebtAtBroker.zeroFloorSub(debtAtMoolah);
     if (principalToDeduct == 0) return;
@@ -467,7 +466,9 @@ IBroker
       }
     }
     // trim `filtered` to length `count`
-    assembly { mstore(filtered, count) }
+    assembly {
+      mstore(filtered, count)
+    }
     return filtered;
   }
 
@@ -486,9 +487,7 @@ IBroker
     uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate);
     if (actualDebt == 0) return principalToDeduct;
 
-    uint256 outstandingInterest = actualDebt > position.principal
-      ? actualDebt - position.principal
-      : 0;
+    uint256 outstandingInterest = actualDebt > position.principal ? actualDebt - position.principal : 0;
 
     // clear as much accrued interest as possible
     uint256 interestPaid = UtilsLib.min(outstandingInterest, principalToDeduct);
@@ -597,11 +596,11 @@ IBroker
    * @param token The address of the token to get the price for
    * @param user The address of the user
    */
-  function peek(address token, address user) external override marketIdSet view returns (uint256 price) {
+  function peek(address token, address user) external view override marketIdSet returns (uint256 price) {
     // loan token's price never changes
     if (token == LOAN_TOKEN) {
       return 10 ** 8;
-    } else if(token == COLLATERAL_TOKEN) {
+    } else if (token == COLLATERAL_TOKEN) {
       /*
         Broker accrues interest, so collateral price is adjusted downward,
         this lets Moolah detect risk as interest grows, despite its 0% rate.
@@ -683,13 +682,10 @@ IBroker
    * @param user The address of the user
    * @param posIds The posIds of the positions to refinance
    */
-  function refinanceMaturedFixedPositions(address user, uint256[] calldata posIds) 
-  external
-  override
-  whenNotPaused
-  nonReentrant
-  marketIdSet
-  onlyRole(BOT) {
+  function refinanceMaturedFixedPositions(
+    address user,
+    uint256[] calldata posIds
+  ) external override whenNotPaused nonReentrant marketIdSet onlyRole(BOT) {
     require(posIds.length > 0, "Broker/zero-positions");
     // the additional principal will be add into the dynamic position
     uint256 _principal = 0;
@@ -760,18 +756,9 @@ IBroker
     // pre-balance
     uint256 preBalance = IERC20(LOAN_TOKEN).balanceOf(address(this));
     // borrow from moolah with zero interest
-    MOOLAH.borrow(
-      marketParams,
-      amount,
-      0,
-      onBehalf,
-      address(this)
-    );
+    MOOLAH.borrow(marketParams, amount, 0, onBehalf, address(this));
     // should increase the loan balance same as borrowed amount
-    require(
-      IERC20(LOAN_TOKEN).balanceOf(address(this)) - preBalance == amount,
-      "broker/invalid-borrowed-amount"
-    );
+    require(IERC20(LOAN_TOKEN).balanceOf(address(this)) - preBalance == amount, "broker/invalid-borrowed-amount");
   }
 
   /**
@@ -780,9 +767,7 @@ IBroker
    * @param onBehalf The address of the user to repay on behalf of
    * @param amount The amount to repay
    */
-  function _repayToMoolah(address payer, address onBehalf, uint256 amount) 
-  internal
-  returns (uint256 assetsRepaid) {
+  function _repayToMoolah(address payer, address onBehalf, uint256 amount) internal returns (uint256 assetsRepaid) {
     if (amount == 0) return 0;
 
     IERC20(LOAN_TOKEN).safeTransferFrom(payer, address(this), amount);
@@ -791,14 +776,11 @@ IBroker
     Market memory market = MOOLAH.market(MARKET_ID);
     Position memory pos = MOOLAH.position(MARKET_ID, onBehalf);
     // convert amount to shares
-    uint256 amountShares = amount.toSharesDown(
-      market.totalBorrowAssets,
-      market.totalBorrowShares
-    );
+    uint256 amountShares = amount.toSharesDown(market.totalBorrowAssets, market.totalBorrowShares);
     bool repayByShares = amountShares >= pos.borrowShares;
     // for the last bit of repayment
     // using `shares` to ensure full repayment
-    (assetsRepaid, /* sharesRepaid */) = MOOLAH.repay(
+    (assetsRepaid /* sharesRepaid */, ) = MOOLAH.repay(
       _getMarketParams(MARKET_ID),
       repayByShares ? 0 : amount,
       repayByShares ? pos.borrowShares : 0,
@@ -806,7 +788,7 @@ IBroker
       ""
     );
     // refund any excess amount to payer
-    if (amount > assetsRepaid ) {
+    if (amount > assetsRepaid) {
       IERC20(LOAN_TOKEN).safeTransfer(payer, amount - assetsRepaid);
     }
   }
@@ -820,13 +802,7 @@ IBroker
       // approve to Moolah
       IERC20(LOAN_TOKEN).safeIncreaseAllowance(address(MOOLAH), interest);
       // supply interest into vault as revenue
-      MOOLAH.supply(
-        _getMarketParams(MARKET_ID),
-        interest,
-        0,
-        address(MOOLAH_VAULT),
-        ""
-      );
+      MOOLAH.supply(_getMarketParams(MARKET_ID), interest, 0, address(MOOLAH_VAULT), "");
     }
   }
 
@@ -894,7 +870,10 @@ IBroker
    * @param position The fixed loan position to get the penalty for
    * @param repayAmt The actual repay amount (repay amount excluded accrued interest)
    */
-  function _getPenaltyForFixedPosition(FixedLoanPosition memory position, uint256 repayAmt) internal view returns (uint256 penalty) {
+  function _getPenaltyForFixedPosition(
+    FixedLoanPosition memory position,
+    uint256 repayAmt
+  ) internal view returns (uint256 penalty) {
     return BrokerMath.getPenaltyForFixedPosition(position, repayAmt);
   }
 
@@ -931,15 +910,11 @@ IBroker
     require(termId > 0, "broker/invalid-term-id");
     require(duration > 0, "broker/invalid-duration");
     require(apr >= RATE_SCALE, "broker/invalid-apr");
-    FixedTermAndRate memory _term = FixedTermAndRate({
-      termId: termId,
-      duration: duration,
-      apr: apr
-    });
+    FixedTermAndRate memory _term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr });
     // emit event first
     emit FixedTermAndRateUpdated(termId, duration, apr);
     // update term if it exists
-    for(uint256 i = 0; i < fixedTerms.length; i++) {
+    for (uint256 i = 0; i < fixedTerms.length; i++) {
       if (fixedTerms[i].termId == termId) {
         fixedTerms[i] = _term;
         return;
@@ -955,7 +930,7 @@ IBroker
    */
   function removeFixedTermAndRate(uint256 termId) external onlyRole(MANAGER) {
     require(termId > 0, "broker/invalid-term-id");
-    for(uint256 i = 0; i < fixedTerms.length; i++) {
+    for (uint256 i = 0; i < fixedTerms.length; i++) {
       if (fixedTerms[i].termId == termId) {
         fixedTerms[i] = fixedTerms[fixedTerms.length - 1];
         fixedTerms.pop();
@@ -968,7 +943,7 @@ IBroker
   /**
    * @dev Set the maximum number of fixed loan positions a user can have
    * @param maxPositions The new maximum number of fixed loan positions
-   */ 
+   */
   function setMaxFixedLoanPositions(uint256 maxPositions) external onlyRole(MANAGER) {
     require(maxFixedLoanPositions != maxPositions, "broker/same-value-provided");
     uint256 oldMaxFixedLoanPositions = maxFixedLoanPositions;
