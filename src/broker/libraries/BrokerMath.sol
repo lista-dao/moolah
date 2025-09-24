@@ -95,6 +95,45 @@ library BrokerMath {
     return Math.mulDiv(apr - RATE_SCALE, 1, 365 days, Math.Rounding.Floor);
   }
 
+  /**
+   * @dev Preview the repayment of a fixed loan position
+   * @param position The fixed loan position to preview the repayment for
+   * @param amount The amount to repay
+   * @return interestRepaid The amount of interest that will be repaid
+   * @return penalty The amount of penalty that will be incurred
+   * @return principalRepaid The amount of principal that will be repaid
+   */
+  function previewRepayFixedLoanPosition(
+    FixedLoanPosition memory position,
+    uint256 amount
+  ) public view returns (uint256 interestRepaid, uint256 penalty, uint256 principalRepaid) {
+    // remaining principal before repayment
+    uint256 remainingPrincipal = position.principal - position.principalRepaid;
+    // get outstanding accrued interest
+    uint256 accruedInterest = getAccruedInterestForFixedPosition(position) - position.interestRepaid;
+
+    // initialize repay amounts
+    interestRepaid = amount < accruedInterest ? amount : accruedInterest;
+    uint256 repayPrincipalAmt = amount - interestRepaid;
+
+    // then repay principal if there is any amount left
+    if (repayPrincipalAmt > 0) {
+      // ----- penalty
+      penalty = getPenaltyForFixedPosition(
+        position,
+        repayPrincipalAmt > remainingPrincipal ? remainingPrincipal : repayPrincipalAmt
+      );
+      repayPrincipalAmt -= penalty;
+
+      // ----- principal
+      if (repayPrincipalAmt > 0) {
+        // even if user transferred more than needed, we only repay what is needed
+        // this allows user to fully repay, tokens unused will be returned to user
+        principalRepaid = repayPrincipalAmt > remainingPrincipal ? remainingPrincipal : repayPrincipalAmt;
+      }
+    }
+  }
+
   // =========================== //
   //         Dynamic Loan        //
   // =========================== //

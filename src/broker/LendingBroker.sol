@@ -682,6 +682,27 @@ contract LendingBroker is
     return dynamicLoanPositions[user];
   }
 
+  /**
+   * @dev Preview the interest, penalty and principal repaid
+   * @notice for frontend usage, when user is repaying a fixed loan position with certain amount
+   * @param user The address of the user
+   * @param amount The amount to repay
+   * @param posId The ID of the fixed position to repay
+   * @return interest The interest portion of the repayment
+   * @return penalty The penalty portion of the repayment
+   * @return principalRepaid The principal portion of the repayment
+   */
+  function previewRepayFixedLoanPosition(
+    address user,
+    uint256 amount,
+    uint256 posId
+  ) external view returns (uint256 interest, uint256 penalty, uint256 principalRepaid) {
+    require(amount > 0, "broker/zero-amount");
+    require(user != address(0), "broker/zero-address");
+    FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
+    (interest, penalty, principalRepaid) = BrokerMath.previewRepayFixedLoanPosition(position, amount);
+  }
+
   ///////////////////////////////////////
   /////        Bot functions        /////
   ///////////////////////////////////////
