@@ -79,7 +79,7 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
     uint256 currentRate = config.currentRate;
     // no rate set, return default
     if (ratePerSecond == 0) {
-      return RATE_SCALE;
+      return currentRate;
     }
     // no time elapsed, return current rate
     if (lastUpdated == block.timestamp) {
@@ -147,7 +147,7 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
     // no rate set, return default
     if (ratePerSecond == 0) {
       config.lastUpdated = block.timestamp;
-      return RATE_SCALE;
+      return currentRate;
     }
     // no time elapsed, return current rate
     if (lastUpdated == block.timestamp) {
