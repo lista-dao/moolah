@@ -898,19 +898,6 @@ IBroker
     return BrokerMath.getPenaltyForFixedPosition(position, repayAmt);
   }
 
-  /**
-   * @dev Get the accrued interest for a dynamic loan position
-   * @param position The dynamic loan position to get the accrued interest for
-   */
-  function _getAccruedInterestForDynamicPosition(DynamicLoanPosition memory position) internal view returns (uint256 accruedInterest) {
-    // get updated rate
-    uint256 rate = IRateCalculator(rateCalculator).getRate(address(this));
-    // calc. actual debt (borrowed amount + accrued interest)
-    uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate);
-    // get net accrued interest
-    accruedInterest = actualDebt - position.principal;
-  }
-
   ///////////////////////////////////////
   /////       Admin functions       /////
   ///////////////////////////////////////
