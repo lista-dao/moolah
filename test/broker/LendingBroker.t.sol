@@ -897,6 +897,53 @@ contract LendingBrokerTest is Test {
     broker.borrow(100 ether, 999);
   }
 
+  function test_setBorrowPaused_onlyManager_Reverts() public {
+    vm.expectRevert();
+    vm.prank(borrower);
+    broker.setBorrowPaused(true);
+  }
+
+  function test_setBorrowPaused_sameValue_reverts() public {
+    vm.prank(MANAGER);
+    broker.setBorrowPaused(true);
+    vm.expectRevert(bytes("broker/same-value-provided"));
+    vm.prank(MANAGER);
+    broker.setBorrowPaused(true);
+  }
+
+  function test_borrowDynamic_whenPaused_reverts() public {
+    vm.prank(MANAGER);
+    broker.setBorrowPaused(true);
+
+    vm.expectRevert(bytes("Broker/borrow-paused"));
+    vm.prank(borrower);
+    broker.borrow(1 ether);
+  }
+
+  function test_borrowFixed_whenPaused_reverts() public {
+    vm.startPrank(MANAGER);
+    broker.setFixedTermAndRate(111, 30 days, RATE_SCALE);
+    broker.setBorrowPaused(true);
+    vm.stopPrank();
+
+    vm.expectRevert(bytes("Broker/borrow-paused"));
+    vm.prank(borrower);
+    broker.borrow(1 ether, 111);
+  }
+
+  function test_borrowDynamic_afterUnpause_succeeds() public {
+    vm.prank(MANAGER);
+    broker.setBorrowPaused(true);
+    vm.prank(MANAGER);
+    broker.setBorrowPaused(false);
+
+    uint256 amount = 50 ether;
+    vm.prank(borrower);
+    broker.borrow(amount);
+
+    assertEq(loanToken.balanceOf(borrower), amount);
+  }
+
   function test_setFixedTermOnlyManager_Reverts() public {
     vm.expectRevert(); // AccessControlUnauthorizedAccount
     vm.prank(borrower);

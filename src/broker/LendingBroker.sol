@@ -71,6 +71,10 @@ contract LendingBroker is
   /// @dev how many fixed loan positions a user can have
   uint256 public maxFixedLoanPositions;
 
+  // --- switch ---
+  /// @dev if true, new borrow will be paused
+  bool public borrowPaused;
+
   // ------- Modifiers -------
   modifier onlyMoolah() {
     require(msg.sender == address(MOOLAH), "Broker/not-moolah");
@@ -79,6 +83,11 @@ contract LendingBroker is
 
   modifier marketIdSet() {
     require(Id.unwrap(MARKET_ID) != bytes32(0), "Broker/market-not-set");
+    _;
+  }
+
+  modifier whenBorrowNotPaused() {
+    require(!borrowPaused, "Broker/borrow-paused");
     _;
   }
 
@@ -138,6 +147,7 @@ contract LendingBroker is
     rateCalculator = _rateCalculator;
     maxFixedLoanPositions = _maxFixedLoanPositions;
     fixedPosUuid = 0;
+    borrowPaused = false;
   }
 
   ///////////////////////////////////////
@@ -148,7 +158,7 @@ contract LendingBroker is
    * @dev Borrow a fixed amount of loan token with a dynamic rate
    * @param amount The amount to borrow
    */
-  function borrow(uint256 amount) external override marketIdSet whenNotPaused nonReentrant {
+  function borrow(uint256 amount) external override marketIdSet whenNotPaused whenBorrowNotPaused nonReentrant {
     require(amount > 0, "broker/zero-amount");
     address user = msg.sender;
     // get updated rate
@@ -174,7 +184,10 @@ contract LendingBroker is
    * @param amount amount to borrow
    * @param termId The ID of the term
    */
-  function borrow(uint256 amount, uint256 termId) external override marketIdSet whenNotPaused nonReentrant {
+  function borrow(
+    uint256 amount,
+    uint256 termId
+  ) external override marketIdSet whenNotPaused whenBorrowNotPaused nonReentrant {
     require(amount > 0, "broker/amount-zero");
     address user = msg.sender;
     require(fixedLoanPositions[user].length < maxFixedLoanPositions, "broker/exceed-max-fixed-positions");
@@ -982,6 +995,16 @@ contract LendingBroker is
     uint256 oldMaxFixedLoanPositions = maxFixedLoanPositions;
     maxFixedLoanPositions = maxPositions;
     emit MaxFixedLoanPositionsUpdated(oldMaxFixedLoanPositions, maxPositions);
+  }
+
+  /**
+   * @dev Pause or unpause the borrow function
+   * @param paused True to pause, false to unpause
+   */
+  function setBorrowPaused(bool paused) external onlyRole(MANAGER) {
+    require(borrowPaused != paused, "broker/same-value-provided");
+    borrowPaused = paused;
+    emit BorrowPaused(paused);
   }
 
   /// @dev only callable by the DEFAULT_ADMIN_ROLE (must be a TimeLock contract)

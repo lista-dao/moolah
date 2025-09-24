@@ -73,6 +73,7 @@ interface IBroker is IBrokerBase {
   event FixedTermAndRateUpdated(uint256 termId, uint256 duration, uint256 apr);
   event Liquidated(address indexed user, uint256 principalToDeduct);
   event MarketIdSet(Id marketId);
+  event BorrowPaused(bool paused);
 
   /// ------------------------------
   ///        View functions
