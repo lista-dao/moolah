@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
 import "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
@@ -118,6 +119,7 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
    */
   function _setRatePerSecond(address _broker, uint256 _ratePerSecond) internal {
     require(brokers[_broker].lastUpdated != 0, "RateCalculator/broker-not-active");
+    require(_ratePerSecond >= RATE_SCALE, "RateCalculator/rate-below-min");
     require(_ratePerSecond <= brokers[_broker].maxRatePerSecond, "RateCalculator/rate-exceeds-max");
     // accrue the rate first before overwriting it to avoid retroactive jumps
     _accrueRate(_broker);
@@ -168,6 +170,7 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
    */
   function setMaxRatePerSecond(address _broker, uint256 _maxRatePerSecond) external onlyRole(MANAGER) {
     require(brokers[_broker].lastUpdated != 0, "RateCalculator/broker-not-active");
+    require(_maxRatePerSecond >= RATE_SCALE, "RateCalculator/max-rate-too-low");
     uint256 oldRate = brokers[_broker].maxRatePerSecond;
     brokers[_broker].maxRatePerSecond = _maxRatePerSecond;
     emit MaxRatePerSecondSet(_broker, oldRate, _maxRatePerSecond);
@@ -186,7 +189,7 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
   ) external onlyRole(MANAGER) {
     require(_broker != address(0), "RateCalculator/zero-address");
     require(brokers[_broker].lastUpdated == 0, "RateCalculator/broker-already-registered");
-    require(_ratePerSecond > RATE_SCALE, "RateCalculator/rate-below-min");
+    require(_ratePerSecond >= RATE_SCALE, "RateCalculator/rate-below-min");
     require(_maxRatePerSecond >= _ratePerSecond, "RateCalculator/max-rate-too-low");
     brokers[_broker] = RateConfig({
       currentRate: RATE_SCALE,
