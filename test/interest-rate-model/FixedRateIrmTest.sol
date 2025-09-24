@@ -52,11 +52,12 @@ contract FixedRateIrmTest is Test {
     fixedRateIrm.setBorrowRate(id, newBorrowRate1);
   }
 
-  function testSetBorrowRateRateZero(Id id) external {
-    vm.expectRevert(bytes(RATE_INVALID));
-    vm.prank(manager);
-    fixedRateIrm.setBorrowRate(id, 0);
-  }
+  // @note zero rate is allowed now
+  // function testSetBorrowRateRateZero(Id id) external {
+  //   vm.expectRevert(bytes(RATE_INVALID));
+  //   vm.prank(manager);
+  //   fixedRateIrm.setBorrowRate(id, 0);
+  // }
 
   function testSetBorrowRateTooHigh(Id id, int256 newBorrowRate) external {
     newBorrowRate = bound(newBorrowRate, fixedRateIrm.MAX_BORROW_RATE() + 1, type(int256).max);
@@ -72,10 +73,11 @@ contract FixedRateIrmTest is Test {
     assertEq(fixedRateIrm.borrowRate(marketParams, market), uint256(newBorrowRate));
   }
 
-  function testBorrowRateRateNotSet(MarketParams memory marketParams, Market memory market) external {
-    vm.expectRevert(bytes(RATE_INVALID));
-    fixedRateIrm.borrowRate(marketParams, market);
-  }
+  // @note zero rate is allowed now
+  // function testBorrowRateRateNotSet(MarketParams memory marketParams, Market memory market) external {
+  //   vm.expectRevert(bytes(RATE_INVALID));
+  //   fixedRateIrm.borrowRate(marketParams, market);
+  // }
 
   function testBorrowRateView(MarketParams memory marketParams, Market memory market, int256 newBorrowRate) external {
     newBorrowRate = bound(newBorrowRate, 1, fixedRateIrm.MAX_BORROW_RATE());
@@ -84,8 +86,9 @@ contract FixedRateIrmTest is Test {
     assertEq(fixedRateIrm.borrowRateView(marketParams, market), uint256(newBorrowRate));
   }
 
-  function testBorrowRateViewRateNotSet(MarketParams memory marketParams, Market memory market) external {
-    vm.expectRevert(bytes(RATE_INVALID));
-    fixedRateIrm.borrowRateView(marketParams, market);
-  }
+  // @note zero rate is allowed now
+  // function testBorrowRateViewRateNotSet(MarketParams memory marketParams, Market memory market) external {
+  //   vm.expectRevert(bytes(RATE_INVALID));
+  //   fixedRateIrm.borrowRateView(marketParams, market);
+  // }
 }
