@@ -15,8 +15,9 @@ struct FixedLoanPosition {
   uint256 apr;
   uint256 start;
   uint256 end;
-  uint256 repaidInterest;
-  uint256 repaidPrincipal;
+  uint256 lastRepaidTime; // the last time interest was repaid, initialized to `start`, set to now when partial of principal is repaid
+  uint256 interestRepaid; // the interest repaid since `lastRepaidTime`, reset to zero when partial of principal is repaid
+  uint256 principalRepaid; // the principal repaid
 }
 
 struct DynamicLoanPosition {
@@ -65,7 +66,7 @@ interface IBroker is IBrokerBase {
     uint256 start,
     uint256 end,
     uint256 apr,
-    uint256 repaidPrincipal,
+    uint256 principalRepaid,
     bool fullyRepaid
   );
   event MaxFixedLoanPositionsUpdated(uint256 oldMax, uint256 newMax);

@@ -137,7 +137,7 @@ contract LendingBroker is
     // init state variables
     rateCalculator = _rateCalculator;
     maxFixedLoanPositions = _maxFixedLoanPositions;
-    fixedPosUuid = 1;
+    fixedPosUuid = 0;
   }
 
   ///////////////////////////////////////
@@ -185,6 +185,8 @@ contract LendingBroker is
     // prepare position info
     uint256 start = block.timestamp;
     uint256 end = block.timestamp + term.duration;
+    // pos uuid increment
+    fixedPosUuid++;
     // update state
     fixedLoanPositions[user].push(
       FixedLoanPosition({
@@ -193,12 +195,11 @@ contract LendingBroker is
         apr: term.apr,
         start: start,
         end: end,
-        repaidInterest: 0,
-        repaidPrincipal: 0
+        lastRepaidTime: start,
+        interestRepaid: 0,
+        principalRepaid: 0
       })
     );
-    // pos uuid increment
-    fixedPosUuid++;
     // transfer loan token to user
     IERC20(LOAN_TOKEN).safeTransfer(user, amount);
     // emit event
@@ -275,9 +276,9 @@ contract LendingBroker is
     // fetch position (will revert if not found)
     FixedLoanPosition memory position = _getFixedPositionByPosId(onBehalf, posId);
     // remaining principal before repayment
-    uint256 remainingPrincipal = position.principal - position.repaidPrincipal;
+    uint256 remainingPrincipal = position.principal - position.principalRepaid;
     // get outstanding accrued interest
-    uint256 accruedInterest = BrokerMath.getAccruedInterestForFixedPosition(position) - position.repaidInterest;
+    uint256 accruedInterest = _getAccruedInterestForFixedPosition(position) - position.interestRepaid;
 
     // initialize repay amounts
     uint256 repayInterestAmt = amount < accruedInterest ? amount : accruedInterest;
@@ -287,7 +288,7 @@ contract LendingBroker is
     if (repayInterestAmt > 0) {
       IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), repayInterestAmt);
       // update repaid interest amount
-      position.repaidInterest += repayInterestAmt;
+      position.interestRepaid += repayInterestAmt;
       // supply interest into vault as revenue
       _supplyToMoolahVault(repayInterestAmt);
     }
@@ -308,12 +309,16 @@ contract LendingBroker is
       if (repayPrincipalAmt > 0) {
         uint256 budget = UtilsLib.min(repayPrincipalAmt, remainingPrincipal);
         uint256 principalRepaid = _repayToMoolah(user, onBehalf, budget);
-        position.repaidPrincipal += principalRepaid;
+        position.principalRepaid += principalRepaid;
+        // reset repaid interest to zero (all accrued interest has been cleared)
+        position.interestRepaid = 0;
+        // reset last repay time to now
+        position.lastRepaidTime = block.timestamp;
       }
     }
 
     // post repayment
-    if (position.repaidPrincipal >= position.principal) {
+    if (position.principalRepaid >= position.principal) {
       // removes it from user's fixed positions
       _removeFixedPositionByPosId(onBehalf, posId);
     } else {
@@ -328,8 +333,8 @@ contract LendingBroker is
       position.start,
       position.end,
       position.apr,
-      position.repaidPrincipal,
-      position.repaidPrincipal >= position.principal
+      position.principalRepaid,
+      position.principalRepaid >= position.principal
     );
   }
 
@@ -373,7 +378,9 @@ contract LendingBroker is
     FixedTermAndRate memory term = _getTermById(termId);
     uint256 start = block.timestamp;
     uint256 end = start + term.duration;
-
+    // pos uuid increment
+    fixedPosUuid++;
+    // create new fixed position
     fixedLoanPositions[user].push(
       FixedLoanPosition({
         posId: fixedPosUuid,
@@ -381,11 +388,11 @@ contract LendingBroker is
         apr: term.apr,
         start: start,
         end: end,
-        repaidInterest: 0,
-        repaidPrincipal: 0
+        lastRepaidTime: start,
+        interestRepaid: 0,
+        principalRepaid: 0
       })
     );
-    fixedPosUuid++;
 
     emit FixedLoanPositionCreated(user, convertedDebt, start, end, term.apr, termId);
   }
@@ -451,7 +458,7 @@ contract LendingBroker is
     uint256 count;
     for (uint256 i = 0; i < len; i++) {
       FixedLoanPosition memory p = positions[i];
-      if (p.principal > p.repaidPrincipal) {
+      if (p.principal > p.principalRepaid) {
         uint256 j = count;
         while (j > 0) {
           FixedLoanPosition memory prev = filtered[j - 1];
@@ -527,9 +534,9 @@ contract LendingBroker is
       if (principalToDeduct == 0) break;
       FixedLoanPosition memory p = sortedFixedPositions[i];
       // remaining principal before repayment
-      uint256 remainingPrincipal = p.principal - p.repaidPrincipal;
+      uint256 remainingPrincipal = p.principal - p.principalRepaid;
       // get accrued interest from LAST REPAID TIME to NOW
-      uint256 accruedInterest = BrokerMath.getAccruedInterestForFixedPosition(p) - p.repaidInterest;
+      uint256 accruedInterest = _getAccruedInterestForFixedPosition(p) - p.interestRepaid;
 
       // initialize repay amounts
       uint256 repayInterestAmt = principalToDeduct < accruedInterest ? principalToDeduct : accruedInterest;
@@ -538,7 +545,7 @@ contract LendingBroker is
       // repay interest first, it might be zero if user just repaid before
       if (repayInterestAmt > 0) {
         // update repaid interest amount
-        p.repaidInterest += repayInterestAmt;
+        p.interestRepaid += repayInterestAmt;
         // supply interest into vault as revenue
         principalToDeduct -= repayInterestAmt;
       }
@@ -555,12 +562,16 @@ contract LendingBroker is
 
         // the rest will be used to repay partially
         uint256 actualRepaidPrincipal = principalToDeduct > repayPrincipalAmt ? repayPrincipalAmt : principalToDeduct;
-        p.repaidPrincipal += actualRepaidPrincipal;
         principalToDeduct -= actualRepaidPrincipal;
+        p.principalRepaid += actualRepaidPrincipal;
+        // reset repaid interest to zero (all accrued interest has been cleared)
+        p.interestRepaid = 0;
+        // reset repaid time to now
+        p.lastRepaidTime = block.timestamp;
       }
 
       // post repayment
-      if (p.repaidPrincipal >= p.principal) {
+      if (p.principalRepaid >= p.principal) {
         // removes it from user's fixed positions
         _removeFixedPositionByPosId(user, p.posId);
       } else {
@@ -698,9 +709,9 @@ contract LendingBroker is
       require(block.timestamp >= position.end, "Broker/position-not-expired");
       // Debt of a fixed loan position consist of (1) and (2)
       // (1) net principal
-      _principal += position.principal - position.repaidPrincipal;
+      _principal += position.principal - position.principalRepaid;
       // (2) get outstanding interest
-      _interest += _getAccruedInterestForFixedPosition(position) - position.repaidInterest;
+      _interest += _getAccruedInterestForFixedPosition(position) - position.interestRepaid;
       // remove the fixed position
       _removeFixedPositionByPosId(user, posId);
     }

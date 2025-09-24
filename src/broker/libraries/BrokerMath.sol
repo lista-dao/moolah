@@ -23,9 +23,9 @@ library BrokerMath {
     for (uint256 i = 0; i < fixedPositions.length; i++) {
       FixedLoanPosition memory _fixedPos = fixedPositions[i];
       // add principal
-      totalDebt += _fixedPos.principal - _fixedPos.repaidPrincipal;
+      totalDebt += _fixedPos.principal - _fixedPos.principalRepaid;
       // add interest
-      totalDebt += getAccruedInterestForFixedPosition(_fixedPos) - _fixedPos.repaidInterest;
+      totalDebt += getAccruedInterestForFixedPosition(_fixedPos) - _fixedPos.interestRepaid;
     }
     // [2] total debt from dynamic position
     totalDebt += denormalizeBorrowAmount(dynamicPosition.normalizedDebt, currentRate);
@@ -44,17 +44,23 @@ library BrokerMath {
   // =========================== //
 
   /**
-   * @dev Get the interest for a fixed loan position (without subtracting repaid interest)
+   * @dev Get the accrued interest for a fixed loan position
    * @param position The fixed loan position to get the interest for
    */
   function getAccruedInterestForFixedPosition(FixedLoanPosition memory position) public view returns (uint256) {
-    // term
-    uint256 term = position.end - position.start;
-    // time elapsed since start
-    uint256 timeElapsed = block.timestamp > position.end ? term : block.timestamp - position.start;
+    uint256 cap = block.timestamp > position.end ? position.end : block.timestamp;
+    uint256 start = position.lastRepaidTime > position.end ? position.end : position.lastRepaidTime;
+    // time elapsed since last repayment
+    uint256 timeElapsed = cap - start;
     if (position.principal == 0 || timeElapsed == 0) return 0;
     // accrued interest = principal * APR(per second) * timeElapsed
-    return Math.mulDiv(position.principal, _aprPerSecond(position.apr) * timeElapsed, RATE_SCALE, Math.Rounding.Ceil);
+    return
+      Math.mulDiv(
+        position.principal - position.principalRepaid,
+        _aprPerSecond(position.apr) * timeElapsed,
+        RATE_SCALE,
+        Math.Rounding.Ceil
+      );
   }
 
   /**
