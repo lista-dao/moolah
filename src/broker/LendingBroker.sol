@@ -239,6 +239,8 @@ contract LendingBroker is
     uint256 amountLeft = amount - repayInterestAmt;
     uint256 repayPrincipalAmt = amountLeft > position.principal ? position.principal : amountLeft;
 
+    require(repayInterestAmt + repayPrincipalAmt > 0, "broker/nothing-to-repay");
+
     // record the actual repaid amount for event
     uint256 totalRepaid = 0;
 
