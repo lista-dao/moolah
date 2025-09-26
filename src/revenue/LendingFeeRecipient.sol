@@ -3,11 +3,14 @@ pragma solidity 0.8.28;
 
 import "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+import { SafeERC20, IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import "moolah-vault/interfaces/IMoolahVault.sol";
 import "moolah/interfaces/IMoolah.sol";
 
 contract LendingFeeRecipient is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
+  using SafeERC20 for IERC20;
+
   IMoolah public moolah;
   address[] public vaults;
   address public marketFeeRecipient;
@@ -22,6 +25,7 @@ contract LendingFeeRecipient is UUPSUpgradeable, AccessControlEnumerableUpgradea
   event VaultRemoved(address vault);
   event SetMarketFeeRecipient(address feeRecipient);
   event SetVaultFeeRecipient(address feeRecipient);
+  event EmergencyWithdraw(address token, uint256 amount);
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor() {
@@ -154,6 +158,17 @@ contract LendingFeeRecipient is UUPSUpgradeable, AccessControlEnumerableUpgradea
       vaultsList[i] = vaults[i];
     }
     return vaultsList;
+  }
+
+  /**
+   * @dev allows manager to withdraw reward tokens for emergency or recover any other mistaken ERC20 tokens.
+   * @param token ERC20 token address
+   * @param amount token amount
+   * @param receiver address to receive the tokens
+   */
+  function emergencyWithdraw(address token, uint256 amount, address receiver) external onlyRole(MANAGER) {
+    IERC20(token).safeTransfer(receiver, amount);
+    emit EmergencyWithdraw(token, amount);
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
