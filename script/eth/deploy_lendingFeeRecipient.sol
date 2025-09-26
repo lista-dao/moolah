@@ -7,7 +7,7 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { LendingFeeRecipient } from "revenue/LendingFeeRecipient.sol";
 
 contract LendingFeeRecipientDeploy is Script {
-  address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
+  address moolah = 0xf820fB4680712CD7263a0D3D024D5b5aEA82Fd70;
   address vault = 0x57134a64B7cD9F9eb72F8255A671F5Bf2fe3E2d0;
   address marketFeeRecipient = 0x34B504A5CF0fF41F8A480580533b6Dda687fa3Da;
   address vaultFeeRecipient = 0xea55952a51ddd771d6eBc45Bd0B512276dd0b866;
