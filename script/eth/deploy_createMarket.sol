@@ -9,7 +9,7 @@ import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 contract CreateMarketDeploy is Script {
   using MarketParamsLib for MarketParams;
 
-  Moolah moolah = Moolah(0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C);
+  Moolah moolah = Moolah(0xf820fB4680712CD7263a0D3D024D5b5aEA82Fd70);
   address USD1 = 0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d;
   address WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
   address WBTC = 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599;
@@ -19,9 +19,10 @@ contract CreateMarketDeploy is Script {
   address cbBTC = 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf;
 
   address multiOracle = 0xA64FE284EB8279B9b63946DD51813b0116099301;
+  address PTUSDe27NOV2025USD1Oracle = 0xb169d2459F51d02d7fC8A39498ec2801652b594c;
 
-  address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
-  address alphaIrm = 0x5F9f9173B405C6CEAfa7f98d09e4B8447e9797E6;
+  address irm = 0x8b7d334d243b74D63C4b963893267A0F5240F990;
+  address fixedRateIRM = 0x9A7cA2CfB886132B6024789163e770979E4222e1;
 
   uint256 lltv86 = 0.86 ether;
   uint256 lltv915 = 0.915 ether;
@@ -39,7 +40,7 @@ contract CreateMarketDeploy is Script {
     params[4] = MarketParams({
       loanToken: USD1,
       collateralToken: PTUSDe27NOV2025,
-      oracle: multiOracle,
+      oracle: PTUSDe27NOV2025USD1Oracle,
       irm: irm,
       lltv: lltv915
     });
