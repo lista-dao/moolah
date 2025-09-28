@@ -4,7 +4,7 @@ import "forge-std/Script.sol";
 
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-import { PTLinearDiscountOracle } from "../src/oracle/PTLinearDiscountOracle.sol";
+import { PTLinearDiscountOracle } from "../../src/oracle/PTLinearDiscountOracle.sol";
 
 contract PTLinearDiscountOracleDeploy is Script {
   address ptToken = 0x62C6E813b9589C3631Ba0Cdb013acdB8544038B7;
@@ -19,7 +19,7 @@ contract PTLinearDiscountOracleDeploy is Script {
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
 
-    deploy_PTOracle(admin, ptToken, USD1, ptOracle, multiOracle);
+    deploy_PTOracle(deployer, ptToken, USD1, ptOracle, multiOracle);
 
     vm.stopBroadcast();
   }
