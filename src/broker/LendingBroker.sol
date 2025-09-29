@@ -567,23 +567,18 @@ contract LendingBroker is
       }
 
       // then repay principal if there is any amount left
-      if (repayPrincipalAmt > 0) {
-        // ----- penalty
-        // check penalty if user is repaying before expiration
-        uint256 penalty = _getPenaltyForFixedPosition(p, repayPrincipalAmt);
-        // supply penalty into vault as revenue
-        if (penalty > 0) {
-          principalToDeduct -= penalty;
-        }
+      if (principalToDeduct > 0) {
+        // liquidation cannot source additional assets, so penalties are waived
+        uint256 repayPrincipalAmt = UtilsLib.min(principalToDeduct, remainingPrincipal);
 
-        // the rest will be used to repay partially
-        uint256 actualRepaidPrincipal = principalToDeduct > repayPrincipalAmt ? repayPrincipalAmt : principalToDeduct;
-        principalToDeduct -= actualRepaidPrincipal;
-        p.principalRepaid += actualRepaidPrincipal;
-        // reset repaid interest to zero (all accrued interest has been cleared)
-        p.interestRepaid = 0;
-        // reset repaid time to now
-        p.lastRepaidTime = block.timestamp;
+        if (repayPrincipalAmt > 0) {
+          principalToDeduct -= repayPrincipalAmt;
+          p.principalRepaid += repayPrincipalAmt;
+          // reset repaid interest to zero (all accrued interest has been cleared)
+          p.interestRepaid = 0;
+          // reset repaid time to now
+          p.lastRepaidTime = block.timestamp;
+        }
       }
 
       // post repayment

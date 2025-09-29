@@ -774,6 +774,48 @@ contract LendingBrokerTest is Test {
     assertLt(post.borrowShares, pre.borrowShares, "moolah shares not reduced");
   }
 
+  function test_liquidation_fullClear_removesBrokerDebt() public {
+    vm.startPrank(MANAGER);
+    broker.setFixedTermAndRate(1, 10 days, 1.05e27);
+    broker.setFixedTermAndRate(2, 30 days, 1.06e27);
+    vm.stopPrank();
+
+    uint256 dynamicBorrow = 200 ether;
+    uint256 fixedBorrowShort = 300 ether;
+    uint256 fixedBorrowLong = 400 ether;
+
+    vm.startPrank(borrower);
+    broker.borrow(dynamicBorrow);
+    broker.borrow(fixedBorrowShort, 1);
+    broker.borrow(fixedBorrowLong, 2);
+    vm.stopPrank();
+
+    oracle.setPrice(address(BTCB), 5e7);
+
+    address liquidator2 = address(0xB0B);
+    uint256 liquidatorBudget = 1_000 ether;
+    LISUSD.setBalance(liquidator2, liquidatorBudget);
+
+    vm.startPrank(liquidator2);
+    IERC20(address(LISUSD)).approve(address(moolah), type(uint256).max);
+    moolah.liquidate(marketParams, borrower, COLLATERAL, 0, bytes(""));
+    vm.stopPrank();
+
+    vm.prank(address(moolah));
+    broker.liquidate(id, borrower);
+
+    DynamicLoanPosition memory dyn = broker.userDynamicPosition(borrower);
+    assertEq(dyn.principal, 0, "dynamic principal not cleared");
+    assertEq(dyn.normalizedDebt, 0, "dynamic normalized debt not cleared");
+
+    FixedLoanPosition[] memory fixedAfter = broker.userFixedPositions(borrower);
+    assertEq(fixedAfter.length, 0, "fixed positions remain after full liquidation");
+
+    Position memory post = moolah.position(id, borrower);
+    assertEq(post.borrowShares, 0, "moolah borrow shares not zeroed");
+    assertEq(post.collateral, 0, "moolah collateral not seized");
+  }
+
   function test_liquidation_dynamicInterestOnlyLeavesPrincipalIntact() public {
     uint256 borrowAmt = 800 ether;
     vm.prank(borrower);
