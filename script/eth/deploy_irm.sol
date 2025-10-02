@@ -31,41 +31,4 @@ contract InterestRateModelDeploy is Script {
     vm.stopBroadcast();
     // simulate_upgrade();
   }
-
-  function simulate_upgrade() public {
-    vm.startPrank(0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253);
-    InterestRateModel irmProxy = InterestRateModel(0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c);
-
-    address newImpl = 0xBdB2CFa2B6c5f79dF6660Bf1291C124CEc443D33;
-
-    irmProxy.upgradeToAndCall(newImpl, "");
-    bytes memory data = abi.encodeWithSignature("upgradeToAndCall(address,bytes)", newImpl, "");
-    console.logBytes(data);
-
-    irmProxy.grantRole(irmProxy.BOT(), 0x3995852eb0C4E8b1aA4cB31dDAC254ff199111ff);
-    data = abi.encodeWithSelector(
-      irmProxy.grantRole.selector,
-      irmProxy.BOT(),
-      0x3995852eb0C4E8b1aA4cB31dDAC254ff199111ff
-    );
-    console.logBytes(data);
-
-    irmProxy.grantRole(irmProxy.BOT(), 0x85CE862C5BB61938FFcc97DA4A80C8aaE43C6A27);
-    data = abi.encodeWithSelector(
-      irmProxy.grantRole.selector,
-      irmProxy.BOT(),
-      0x85CE862C5BB61938FFcc97DA4A80C8aaE43C6A27
-    );
-    console.logBytes(data);
-
-    irmProxy.grantRole(irmProxy.MANAGER(), 0x8d388136d578dCD791D081c6042284CED6d9B0c6);
-    data = abi.encodeWithSelector(
-      irmProxy.grantRole.selector,
-      irmProxy.MANAGER(),
-      0x8d388136d578dCD791D081c6042284CED6d9B0c6
-    );
-    console.logBytes(data);
-
-    vm.stopPrank();
-  }
 }
