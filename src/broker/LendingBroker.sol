@@ -321,10 +321,9 @@ contract LendingBroker is
       }
 
       // the rest will be used to repay partially
-      if (repayPrincipalAmt > 0) {
-        // even if user transferred more than needed, we only repay what is needed
-        // this allows user to fully repay, tokens unused will be returned to user
-        uint256 principalRepaid = _repayToMoolah(user, onBehalf, repayPrincipalAmt);
+      uint256 repayablePrincipal = UtilsLib.min(repayPrincipalAmt, remainingPrincipal);
+      if (repayablePrincipal > 0) {
+        uint256 principalRepaid = _repayToMoolah(user, onBehalf, repayablePrincipal);
         position.principalRepaid += principalRepaid;
         // reset repaid interest to zero (all accrued interest has been cleared)
         position.interestRepaid = 0;

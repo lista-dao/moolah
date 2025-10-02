@@ -647,6 +647,52 @@ contract LendingBrokerTest is Test {
     }
   }
 
+  function test_fixedRepayOverpayDoesNotTouchDynamicPosition() public {
+    uint256 termId = 77;
+    vm.prank(MANAGER);
+    broker.setFixedTermAndRate(termId, 45 days, RATE_SCALE);
+
+    uint256 dynamicBorrow = 10 ether;
+    vm.prank(borrower);
+    broker.borrow(dynamicBorrow);
+
+    uint256 fixedBorrow = 60 ether;
+    vm.prank(borrower);
+    broker.borrow(fixedBorrow, termId);
+
+    (uint256 dynPrincipalBefore, uint256 dynNormalizedBefore) = broker.dynamicLoanPositions(borrower);
+    (Market memory marketBefore, Position memory posBefore) = _snapshot(borrower);
+    FixedLoanPosition[] memory fixedBefore = broker.userFixedPositions(borrower);
+    assertEq(fixedBefore.length, 1, "expected one fixed position");
+    uint256 posId = fixedBefore[0].posId;
+
+    uint256 borrowerBalanceBefore = loanToken.balanceOf(borrower);
+    uint256 overpayAmount = fixedBorrow + 10 ether;
+
+    vm.prank(borrower);
+    broker.repay(overpayAmount, posId, borrower);
+
+    FixedLoanPosition[] memory fixedAfter = broker.userFixedPositions(borrower);
+    assertEq(fixedAfter.length, 0, "fixed position should be cleared");
+
+    (uint256 dynPrincipalAfter, uint256 dynNormalizedAfter) = broker.dynamicLoanPositions(borrower);
+    (Market memory marketAfter, Position memory posAfter) = _snapshot(borrower);
+
+    assertEq(dynPrincipalAfter, dynPrincipalBefore, "dynamic principal changed unexpectedly");
+    assertEq(dynNormalizedAfter, dynNormalizedBefore, "dynamic normalized debt changed unexpectedly");
+
+    uint256 principalRepaid = _principalRepaid(marketBefore, marketAfter);
+    assertEq(principalRepaid, fixedBorrow, "repaid principal should match fixed borrow");
+    uint256 borrowAssetsAfter = uint256(posAfter.borrowShares).toAssetsUp(
+      marketAfter.totalBorrowAssets,
+      marketAfter.totalBorrowShares
+    );
+    assertApproxEqAbs(borrowAssetsAfter, dynamicBorrow, 1, "unexpected borrow assets after overpay");
+
+    uint256 borrowerBalanceAfter = loanToken.balanceOf(borrower);
+    assertEq(borrowerBalanceBefore - borrowerBalanceAfter, fixedBorrow, "incorrect token spend");
+  }
+
   // -----------------------------
   // Liquidation path: dynamic first, then fixed (sorted by maturity)
   // -----------------------------
