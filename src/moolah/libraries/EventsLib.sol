@@ -181,4 +181,10 @@ library EventsLib {
   /// @notice Emitted when setting the default market fee.
   /// @param fee The new default market fee.
   event SetDefaultMarketFee(uint256 fee);
+
+  /// @notice Emitted when setting the market broker.
+  /// @param id The market id.
+  /// @param broker The broker address.
+  /// @param isAddition Whether the broker is being added or removed.
+  event SetMarketBroker(Id indexed id, address indexed broker, bool isAddition);
 }

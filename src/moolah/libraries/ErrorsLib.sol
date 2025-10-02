@@ -86,9 +86,18 @@ library ErrorsLib {
   /// @notice Thrown when account is not in the liquidation whitelist.
   string internal constant NOT_LIQUIDATION_WHITELIST = "not liquidation whitelist";
 
+  /// @notice Thrown when the caller is not in the whitelist.
   string internal constant NOT_WHITELIST = "not whitelist";
 
+  /// @notice Thrown when the remaining supply is too low.
   string internal constant REMAIN_SUPPLY_TOO_LOW = "remain supply too low";
 
+  /// @notice Thrown when the remaining borrow is too low.
   string internal constant REMAIN_BORROW_TOO_LOW = "remain borrow too low";
+
+  /// @notice Thrown when broker's loan token or collateral token is invalid.
+  string internal constant INVALID_BROKER = "invalid broker";
+
+  /// @notice Thrown when the caller is not a broker.
+  string internal constant NOT_BROKER = "not broker";
 }
