@@ -522,4 +522,29 @@ contract StableSwapPoolERC20Test is Test {
     pool.changeOracle(newOracle);
     assertEq(pool.oracle(), newOracle);
   }
+
+  function test_checkPriceDiff_with_large_price() public {
+    test_seeding();
+
+    // mock oracle calls; token0 price = $1_000_000; token1 price = $1_000_000
+    vm.mockCall(oracle, abi.encodeWithSelector(IOracle.peek.selector, address(token0)), abi.encode(1000000e8));
+    vm.mockCall(oracle, abi.encodeWithSelector(IOracle.peek.selector, address(token1)), abi.encode(1000000e8));
+
+    // UserB tries to swap 100 token0 to token1; should revert because of price diff check
+    uint amountIn = 1000 ether; // Amount of token0 to swap
+    vm.startPrank(userB);
+    token0.approve(address(pool), amountIn);
+    vm.expectRevert("Price difference for token0 exceeds threshold");
+    pool.exchange(0, 1, amountIn, 0);
+
+    // add liquidity proportionally should work
+    deal(address(token0), userB, 100 ether);
+    deal(address(token1), userB, 100 ether);
+    token0.approve(address(pool), 100 ether);
+    token1.approve(address(pool), 100 ether);
+    uint256[2] memory amounts = [uint256(100 ether), uint256(100 ether)];
+    pool.add_liquidity(amounts, 0);
+
+    vm.stopPrank();
+  }
 }
