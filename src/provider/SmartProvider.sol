@@ -445,11 +445,10 @@ contract SmartProvider is
   function peek(address _token) external view returns (uint256) {
     if (_token == TOKEN || _token == dexLP) {
       // if token is dexLP, return the price of the LP token
-      uint256[2] memory amounts = IStableSwapPoolInfo(dexInfo).calc_coins_amount(dex, 1 ether);
-      uint256 price0 = _peek(token(0));
-      uint256 price1 = _peek(token(1));
-
-      return (amounts[0] * price0 + amounts[1] * price1) / 1 ether; // 1 ether is the LP token amount
+      // LP value = min(token0_price, token1_price) * virtual_price
+      uint256 minPrice = UtilsLib.min(_peek(token(0)), _peek(token(1)));
+      uint256 virtualPrice = IStableSwap(dex).get_virtual_price(); // 1e18
+      return (minPrice * virtualPrice) / 1e18;
     }
 
     return _peek(_token);

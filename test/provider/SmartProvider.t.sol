@@ -523,4 +523,65 @@ contract SmartProviderTest is Test {
     assertEq(token0.balanceOf(user2), token0Balance);
     assertEq(user2.balance - bnbBalance, expectBnbAmt);
   }
+
+  function test_peek() public {
+    // supply more liquidity to market
+    vm.startPrank(userA);
+    uint256 usdtAmt = 100_000_000 ether;
+    deal(USDT, userA, usdtAmt);
+    IERC20(USDT).approve(address(moolah), usdtAmt);
+    moolah.supply(marketParams, usdtAmt, 0, userA, bytes(""));
+    vm.stopPrank();
+
+    uint256 lpPrice = smartProvider.peek(address(lp));
+
+    // user2 deposit 1000 LP tokens as collateral
+    uint256 supplyAmount = 1000 ether;
+    uint256[2] memory amounts = dexInfo.calc_coins_amount(address(dex), supplyAmount);
+    deal(address(token0), user2, amounts[0]);
+    deal(user2, amounts[1]);
+    vm.startPrank(user2);
+    token0.approve(address(smartProvider), amounts[0]);
+    smartProvider.supplyCollateral{ value: amounts[1] }(
+      marketParams,
+      user2,
+      amounts[0],
+      amounts[1],
+      supplyAmount - 10, // minus 10 wei to avoid rounding issue
+      bytes("")
+    );
+    // check user2 borrow limit
+    (, , uint256 user2Collateral) = moolah.position(marketParams.id(), user2);
+    uint256 borrowLimit = (user2Collateral * lpPrice * lltv70) / 1e18 / 1e8;
+    moolah.borrow(marketParams, borrowLimit - 100, 0, user2, user2);
+
+    // manipulate lp price by swapping on dex
+    uint256 amount0 = 50_000 ether;
+    deal(address(token0), user2, amount0);
+    token0.approve(address(dex), amount0);
+    uint256 amount1BalBefore = user2.balance;
+    dex.exchange(0, 1, amount0, 0);
+    uint256 amount1BalAfter = user2.balance;
+
+    uint256 lpPrice2 = smartProvider.peek(address(lp));
+    // User2 can borrow more
+    (, , user2Collateral) = moolah.position(marketParams.id(), user2);
+    uint256 newBorrowLimit = (user2Collateral * lpPrice2 * lltv70) / 1e18 / 1e8;
+    moolah.borrow(marketParams, newBorrowLimit - borrowLimit, 0, user2, user2);
+
+    // User2 restore pool reserve by swapping back
+    uint256 amount1 = amount1BalAfter - amount1BalBefore;
+    deal(user2, amount1);
+    dex.exchange{ value: amount1 }(1, 0, amount1, 0);
+    uint256 lpPrice3 = smartProvider.peek(address(lp));
+
+    // check user2 borrow limit after restore
+    (uint256 borrowedAssets, uint256 borrowedShares, ) = moolah.position(marketParams.id(), user2);
+    uint256 borrowLimitAfter = (user2Collateral * lpPrice3 * lltv70) / 1e18 / 1e8;
+    (, , uint128 totalBorrowAssets, uint128 totalBorrowShares, , ) = moolah.market(marketParams.id());
+
+    uint256 debt = borrowedShares.toAssetsUp(totalBorrowAssets, totalBorrowShares);
+    assertLe(debt, borrowLimitAfter);
+    vm.stopPrank();
+  }
 }
