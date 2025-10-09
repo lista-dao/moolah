@@ -6,7 +6,7 @@ import { Liquidator } from "liquidator/Liquidator.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 
 contract LiquidatorTransferRoleDeploy is Script {
-  using MarketParamsLib for MarketParams;
+  // using MarketParamsLib for MarketParams;
   Liquidator liquidator = Liquidator(payable(0x5Bf5c3B5f5c29dBC647d2557Cc22B00ED29f301C));
 
   address admin = 0xa18ae79AEDA3e711E0CD64cfe1Cd06402d400D61;

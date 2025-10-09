@@ -2,7 +2,7 @@ pragma solidity 0.8.28;
 
 import "forge-std/Script.sol";
 
-import { PTLinearDiscountOracle } from "../src/oracle/PTLinearDiscountOracle.sol";
+import { PTLinearDiscountOracle } from "../../src/oracle/PTLinearDiscountOracle.sol";
 
 contract PTLinearDiscountOracleTransferRoleDeploy is Script {
   PTLinearDiscountOracle irm = PTLinearDiscountOracle(0xb169d2459F51d02d7fC8A39498ec2801652b594c);
