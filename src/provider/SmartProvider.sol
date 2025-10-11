@@ -5,6 +5,7 @@ import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgr
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 
 import { MarketParamsLib } from "../moolah/libraries/MarketParamsLib.sol";
 import { SharesMathLib } from "../moolah/libraries/SharesMathLib.sol";
@@ -23,7 +24,13 @@ import { IOracle, TokenConfig } from "../moolah/interfaces/IOracle.sol";
  * @author Lista DAO
  * @notice SmartProvider is a contract that allows users to supply collaterals to Lista Lending while simultaneously earning swap fees.
  */
-contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IOracle, ISmartProvider {
+contract SmartProvider is
+  ReentrancyGuardUpgradeable,
+  UUPSUpgradeable,
+  AccessControlEnumerableUpgradeable,
+  IOracle,
+  ISmartProvider
+{
   using SafeERC20 for IERC20;
   using MarketParamsLib for MarketParams;
   using SharesMathLib for uint256;
@@ -142,7 +149,7 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     uint256 amount1,
     uint256 minLpAmount,
     bytes calldata data
-  ) external payable {
+  ) external payable nonReentrant {
     require(marketParams.collateralToken == TOKEN, "invalid collateral token");
     address token0 = token(0);
     address token1 = token(1);
@@ -209,7 +216,7 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     uint256 minToken1Amount,
     address onBehalf,
     address payable receiver
-  ) external {
+  ) external nonReentrant {
     require(collateralAmount > 0, "zero withdrawal amount");
     require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
     require(isSenderAuthorized(msg.sender, onBehalf), "unauthorized sender");
@@ -246,7 +253,7 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     uint256 maxCollateralAmount,
     address onBehalf,
     address payable receiver
-  ) external {
+  ) external nonReentrant {
     require(token0Amount > 0 || token1Amount > 0, "zero withdrawal amount");
     require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
     require(isSenderAuthorized(msg.sender, onBehalf), "unauthorized sender");
@@ -294,7 +301,7 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     uint256 minTokenAmount,
     address onBehalf,
     address payable receiver
-  ) external {
+  ) external nonReentrant {
     require(collateralAmount > 0, "zero withdrawal amount");
     require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
     require(isSenderAuthorized(msg.sender, onBehalf), "unauthorized sender");
