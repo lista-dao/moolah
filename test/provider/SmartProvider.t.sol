@@ -64,7 +64,7 @@ contract SmartProviderTest is Test {
   address deployer2 = makeAddr("deployer2");
 
   function setUp() public {
-    vm.createSelectFork("https://bsc-dataseed.bnbchain.org");
+    vm.createSelectFork(vm.envString("BSC_RPC"), 60541406);
 
     // Upgrade Moolah
     address newImlp = address(new Moolah());
