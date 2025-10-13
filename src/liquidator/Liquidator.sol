@@ -9,6 +9,8 @@ import "./ILiquidator.sol";
 
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
+import { Id } from "moolah/interfaces/IMoolah.sol";
+import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
 
 contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   using MarketParamsLib for IMoolah.MarketParams;
@@ -34,6 +36,13 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   event MarketWhitelistChanged(bytes32 id, bool added);
   event PairWhitelistChanged(address pair, bool added);
   event SellToken(address pair, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin);
+  event SmartLiquidation(
+    bytes32 indexed id,
+    address indexed lpToken,
+    uint256 lpAmount,
+    uint256 amount0,
+    uint256 amount1
+  );
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   /// @param moolah The address of the Moolah contract.
@@ -195,6 +204,41 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
       repaidShares,
       abi.encode(MoolahLiquidateData(params.collateralToken, params.loanToken, seizedAssets, address(0), "", false))
     );
+  }
+
+  function liquidateSmartCollateral(
+    bytes32 id,
+    address borrower,
+    address smartProvider,
+    uint256 seizedAssets,
+    uint256 repaidShares,
+    bytes memory payload //min amounts for SmartProvider liquidation
+  ) external payable onlyRole(BOT) {
+    address lpToken = ISmartProvider(smartProvider).dexLP();
+    require(tokenWhitelist[lpToken], NotWhitelisted());
+    require(marketWhitelist[id], NotWhitelisted());
+    IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
+
+    uint256 lpBalanceBefore = IERC20(params.collateralToken).balanceOf(address(this));
+    IMoolah(MOOLAH).liquidate(
+      params,
+      borrower,
+      seizedAssets,
+      repaidShares,
+      abi.encode(MoolahLiquidateData(params.collateralToken, params.loanToken, seizedAssets, address(0), "", false))
+    );
+    uint256 lpAmount = IERC20(params.collateralToken).balanceOf(address(this)) - lpBalanceBefore;
+
+    (uint256 minAmount0, uint256 minAmount1) = abi.decode(payload, (uint256, uint256));
+    ISmartProvider(smartProvider).redeemLpCollateral(
+      Id.wrap(id),
+      payable(address(this)),
+      lpAmount,
+      minAmount0,
+      minAmount1
+    );
+
+    emit SmartLiquidation(id, lpToken, lpAmount, minAmount0, minAmount1);
   }
 
   /// @dev the function will be called by the Moolah contract when liquidate.

@@ -256,30 +256,6 @@ interface IMoolahBase {
     bytes memory data
   ) external returns (uint256, uint256);
 
-  /// @notice Liquidates the given `repaidShares` of debt asset or seize the given `seizedAssets` of collateral on the
-  /// given market `marketParams` of the given `borrower`'s position, optionally calling back the caller's
-  /// `onMoolahLiquidate` function with the given `data`.
-  /// @dev Either `seizedAssets` or `repaidShares` should be zero.
-  /// @dev Seizing more than the collateral balance will underflow and revert without any error message.
-  /// @dev Repaying more than the borrow balance will underflow and revert without any error message.
-  /// @dev An attacker can front-run a liquidation with a small repay making the transaction revert for underflow.
-  /// @param marketParams The market of the position.
-  /// @param borrower The owner of the position.
-  /// @param seizedAssets The amount of collateral to seize.
-  /// @param repaidShares The amount of shares to repay.
-  /// @param payload The encoded minimum amount0 and minimum amount1 pass to `SmartProvider`. Pass empty data if not needed.
-  /// @param data Arbitrary data to pass to the `onMoolahLiquidate` callback. Pass empty data if not needed.
-  /// @return The amount of assets seized.
-  /// @return The amount of assets repaid.
-  function liquidate(
-    MarketParams memory marketParams,
-    address borrower,
-    uint256 seizedAssets,
-    uint256 repaidShares,
-    bytes memory payload,
-    bytes memory data
-  ) external returns (uint256, uint256);
-
   /// @notice Executes a flash loan.
   /// @dev Flash loans have access to the whole balance of the contract (the liquidity and deposited collateral of all
   /// markets combined, plus donations).
