@@ -84,18 +84,19 @@ contract ETHProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPr
   /// @param vault The address of the Moolah vault to deposit into.
   /// @param shares The amount of shares to mint.
   /// @param receiver The address to receive the shares.
-  function mint(address vault, uint256 shares, address receiver) public payable returns (uint256 assets) {
+  /// @return previewAssets The amount of assets equivalent to the minted shares.
+  function mint(address vault, uint256 shares, address receiver) public payable returns (uint256 previewAssets) {
     require(vaults[vault], "vault not added");
     require(shares > 0, ErrorsLib.ZERO_ASSETS);
-    uint256 previewAssets = IMoolahVault(vault).previewMint(shares); // ceiling rounding
+    previewAssets = IMoolahVault(vault).previewMint(shares); // ceiling rounding
     require(msg.value >= previewAssets, "invalid ETH amount");
 
     IWETH(TOKEN).deposit{ value: previewAssets }();
     require(IWETH(TOKEN).approve(vault, previewAssets));
-    assets = IMoolahVault(vault).mint(shares, receiver);
+    IMoolahVault(vault).mint(shares, receiver);
 
-    if (msg.value > assets) {
-      (bool success, ) = msg.sender.call{ value: msg.value - assets }("");
+    if (msg.value > previewAssets) {
+      (bool success, ) = msg.sender.call{ value: msg.value - previewAssets }("");
       require(success, "transfer failed");
     }
   }
