@@ -10,10 +10,13 @@ interface IProvider {
 }
 
 interface ISmartProvider is IProvider {
-  function liquidate(
+  function dexLP() external view returns (address);
+
+  function redeemLpCollateral(
     Id id,
     address payable liquidator,
-    uint256 seizedAssets,
-    bytes calldata payload // abi encoded data of minAmounts
+    uint256 lpAmount,
+    uint256 minToken0Out,
+    uint256 minToken1Out
   ) external;
 }

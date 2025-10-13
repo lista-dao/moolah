@@ -19,6 +19,7 @@ import { StableSwapLPCollateral } from "../../src/dex/StableSwapLPCollateral.sol
 import { ERC20Mock } from "../../src/moolah/mocks/ERC20Mock.sol";
 import { IOracle } from "../../src/moolah/interfaces/IOracle.sol";
 import { StableSwapFactory } from "../../src/dex/StableSwapFactory.sol";
+import { Liquidator } from "../../src/liquidator/Liquidator.sol";
 
 contract SmartProviderTest is Test {
   address constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
@@ -33,6 +34,8 @@ contract SmartProviderTest is Test {
   StableSwapPoolInfo dexInfo;
   StableSwapLP lp; // ss-lp
   StableSwapLPCollateral lpCollateral; // ss-lp collateral
+
+  Liquidator liquidator;
 
   ERC20Mock token0;
   address token1 = BNB_ADDRESS; // BNB
@@ -94,6 +97,14 @@ contract SmartProviderTest is Test {
     );
     smartProvider = SmartProvider(payable(address(smartProviderProxy)));
 
+    // Deploy Liquidator
+    Liquidator liquidatorImpl = new Liquidator(address(moolahProxy));
+    ERC1967Proxy liquidatorProxy = new ERC1967Proxy(
+      address(liquidatorImpl),
+      abi.encodeWithSelector(liquidatorImpl.initialize.selector, admin, manager, bot)
+    );
+    liquidator = Liquidator(payable(address(liquidatorProxy)));
+
     // set minter for lp collateral
     vm.prank(admin);
     lpCollateral.setMinter(address(smartProvider));
@@ -102,6 +113,13 @@ contract SmartProviderTest is Test {
 
     // create market
     createMarket();
+
+    // set liquidator
+    vm.startPrank(manager);
+    moolah.addLiquidationWhitelist(marketParams.id(), address(liquidator));
+    liquidator.setTokenWhitelist(address(lp), true);
+    liquidator.setMarketWhitelist(Id.unwrap(marketParams.id()), true);
+    vm.stopPrank();
   }
 
   function deployDexBnb() public {
@@ -334,7 +352,7 @@ contract SmartProviderTest is Test {
     assertEq(totalBorrowAssets * 1e6, user2Debt);
   }
 
-  function test_liquidate() public {
+  function test_liquidate_via_liquidator() public {
     test_borrow_usdt();
     uint256 borrowAmount = 560000 ether;
     vm.prank(user2);
@@ -346,11 +364,11 @@ contract SmartProviderTest is Test {
 
     bool isHealthy = moolah.isHealthy(marketParams, marketParams.id(), user2);
     assertTrue(!isHealthy);
-    //uint256 supplyShares, uint128 borrowShares, uint128 collateral
     (uint256 supplyShares, uint256 user2Debt, uint256 user2Collateral) = moolah.position(marketParams.id(), user2);
 
     vm.startPrank(bot);
     deal(USDT, bot, user2Debt + 1000 ether);
+    deal(USDT, address(liquidator), user2Debt + 1000 ether);
     IERC20(USDT).approve(address(moolah), user2Debt + 1000 ether);
 
     uint256[2] memory amounts = dexInfo.calc_coins_amount(address(dex), user2Collateral);
@@ -358,25 +376,29 @@ contract SmartProviderTest is Test {
     uint256 minAmount1 = (amounts[1] * 99) / 100; // slippage 1%
     bytes memory payload = abi.encode(minAmount0, minAmount1);
 
-    vm.expectRevert("not set");
-    moolah.liquidate(marketParams, user2, user2Collateral, 0, payload, bytes(""));
     vm.stopPrank();
 
     vm.prank(manager);
     moolah.addProvider(marketParams.id(), address(smartProvider));
     assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
 
-    uint256 bnbReceive = bot.balance;
     vm.startPrank(bot);
-    moolah.liquidate(marketParams, user2, user2Collateral, 0, payload, bytes(""));
+    liquidator.liquidateSmartCollateral(
+      Id.unwrap(marketParams.id()),
+      user2,
+      address(smartProvider),
+      user2Collateral,
+      0,
+      payload
+    );
 
     assertEq(lpCollateral.balanceOf(address(moolah)), 0);
     (, user2Debt, user2Collateral) = moolah.position(marketParams.id(), user2);
     assertEq(user2Debt, 0);
     assertEq(user2Collateral, 0);
     assertEq(lp.balanceOf(address(smartProvider)), 0); // all lp redeemed
-    assertApproxEqAbs(token0.balanceOf(bot), amounts[0], 2); // allow 2 wei difference due to rounding
-    assertApproxEqAbs(bot.balance - bnbReceive, amounts[1], 2); // allow 2 wei difference due to rounding
+    assertApproxEqAbs(token0.balanceOf(address(liquidator)), amounts[0], 2); // allow 2 wei difference due to rounding
+    assertApproxEqAbs(address(liquidator).balance, amounts[1], 2); // allow 2 wei difference due to rounding
   }
 
   function test_repay_usdt() public {
