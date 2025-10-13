@@ -197,6 +197,7 @@ contract ETHProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPr
     require(UtilsLib.exactlyOneZero(assets, shares), ErrorsLib.INCONSISTENT_INPUT);
     require(marketParams.loanToken == TOKEN, "invalid loan token");
     require(msg.value >= assets, "invalid ETH amount");
+    require(data.length == 0, "callback not supported");
 
     // accrue interest on the market and then calculate `wrapAmount`
     MOOLAH.accrueInterest(marketParams);
@@ -236,6 +237,7 @@ contract ETHProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPr
     uint256 assets = msg.value;
     require(assets > 0, ErrorsLib.ZERO_ASSETS);
     require(marketParams.collateralToken == TOKEN, "invalid collateral token");
+    require(data.length == 0, "callback not supported");
 
     // 1. deposit WETH
     IWETH(TOKEN).deposit{ value: assets }();

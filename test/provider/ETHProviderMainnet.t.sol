@@ -203,6 +203,8 @@ contract ETHProviderTest is Test {
 
     uint256 ethBalanceBefore = user.balance;
     vm.startPrank(user);
+    vm.expectRevert("callback not supported");
+    ethProvider.supplyCollateral{ value: 1 ether }(param, user, bytes("foo"));
     ethProvider.supplyCollateral{ value: 1 ether }(param, user, "");
 
     (uint256 supplyShares, uint128 borrowShares, uint128 collateral) = moolah.position(param.id(), user);
