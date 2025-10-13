@@ -535,4 +535,16 @@ contract StableSwapPoolBNBTest is Test {
     pool.changeOracle(newOracle);
     assertEq(pool.oracle(), newOracle);
   }
+
+  function test_get_dy_without_fee() public {
+    test_seeding();
+
+    uint amountIn = 1 ether; // Amount of token0 to swap
+
+    uint256 amountOutWithFee = pool.get_dy(0, 1, amountIn); // expect token1 amount out with fee
+    (uint256 exFee, ) = poolInfo.get_exchange_fee(address(pool), 0, 1, amountIn);
+    uint256 amountOutWithoutFee = pool.get_dy_without_fee(0, 1, amountIn);
+
+    assertEq(amountOutWithFee + exFee, amountOutWithoutFee);
+  }
 }

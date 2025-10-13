@@ -399,7 +399,7 @@ contract StableSwapPool is
     return y;
   }
 
-  function get_dy(uint256 i, uint256 j, uint256 dx) public view returns (uint256) {
+  function get_dy_without_fee(uint256 i, uint256 j, uint256 dx) public view returns (uint256) {
     // dx and dy in c-units
     uint256[N_COINS] memory rates = RATES;
     uint256[N_COINS] memory xp = _xp();
@@ -407,6 +407,11 @@ contract StableSwapPool is
     uint256 x = xp[i] + ((dx * rates[i]) / PRECISION);
     uint256 y = get_y(i, j, x, xp);
     uint256 dy = ((xp[j] - y - 1) * PRECISION) / rates[j];
+    return dy;
+  }
+
+  function get_dy(uint256 i, uint256 j, uint256 dx) public view returns (uint256) {
+    uint256 dy = get_dy_without_fee(i, j, dx);
     uint256 _fee = (fee * dy) / FEE_DENOMINATOR;
     return dy - _fee;
   }
@@ -429,8 +434,8 @@ contract StableSwapPool is
     uint256 dx0 = 10 ** (dps0); // 1 token0
     uint256 dx1 = 10 ** (dps1); // 1 token1
 
-    uint256 dy1 = get_dy(0, 1, dx0); // token1Amount for 1 token0, in original precision
-    uint256 dy0 = get_dy(1, 0, dx1); // token0Amount for 1 token1, in original precision
+    uint256 dy1 = get_dy_without_fee(0, 1, dx0); // token1Amount for 1 token0, in original precision
+    uint256 dy0 = get_dy_without_fee(1, 0, dx1); // token0Amount for 1 token1, in original precision
 
     // normalize dy to 1e18 dps
     uint256 token1Amount = dy1 * PRECISION_MUL[1];
