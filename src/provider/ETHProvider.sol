@@ -121,7 +121,7 @@ contract ETHProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPr
     // 2. unwrap WETH
     IWETH(TOKEN).withdraw(assets);
 
-    // 3. transfer WETH to receiver
+    // 3. transfer ether to receiver
     (bool success, ) = receiver.call{ value: assets }("");
     require(success, "transfer failed");
   }
