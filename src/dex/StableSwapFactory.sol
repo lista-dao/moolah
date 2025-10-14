@@ -84,8 +84,8 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
   }
 
   function _createSwapPair(
-    address _tokenA,
-    address _tokenB,
+    address t0,
+    address t1,
     uint256 _A,
     uint256 _fee,
     uint256 _admin_fee,
@@ -96,9 +96,6 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
     address _oracle
   ) internal returns (address) {
     require(swapImpl != address(0), "Swap implementation not set");
-    require(_tokenA != address(0) && _tokenB != address(0) && _tokenA != _tokenB, "Illegal token");
-
-    (address t0, address t1) = sortTokens(_tokenA, _tokenB);
     address[N_COINS] memory coins = [t0, t1];
 
     // create swap contract
