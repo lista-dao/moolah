@@ -53,7 +53,6 @@ contract SmartProvider is
   address public resilientOracle;
 
   address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
-  bytes32 public constant MANAGER = keccak256("MANAGER");
 
   /* ------------------ Events ------------------ */
   event SupplyCollateral(
@@ -103,17 +102,11 @@ contract SmartProvider is
   }
 
   /// @param _admin The admin of the contract.
-  /// @param _manager The manager of the contract.
   /// @param _dex The address of the stableswap pool.
-  function initialize(
-    address _admin,
-    address _manager,
-    address _dex,
-    address _dexInfo,
-    address _resilientOracle
-  ) public initializer {
+  /// @param _dexInfo The address of the stableswap pool info contract.
+  /// @param _resilientOracle The address of the resilient oracle.
+  function initialize(address _admin, address _dex, address _dexInfo, address _resilientOracle) public initializer {
     require(_admin != address(0), ErrorsLib.ZERO_ADDRESS);
-    require(_manager != address(0), ErrorsLib.ZERO_ADDRESS);
     require(_dex != address(0), ErrorsLib.ZERO_ADDRESS);
     require(_dexInfo != address(0), ErrorsLib.ZERO_ADDRESS);
     require(_resilientOracle != address(0), ErrorsLib.ZERO_ADDRESS);
@@ -130,7 +123,6 @@ contract SmartProvider is
     __AccessControl_init();
 
     _grantRole(DEFAULT_ADMIN_ROLE, _admin);
-    _grantRole(MANAGER, _manager);
   }
 
   /**

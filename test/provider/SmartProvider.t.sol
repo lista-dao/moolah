@@ -90,14 +90,7 @@ contract SmartProviderTest is Test {
     smartProvider = new SmartProvider(address(moolahProxy), address(lpCollateral));
     ERC1967Proxy smartProviderProxy = new ERC1967Proxy(
       address(smartProvider),
-      abi.encodeWithSelector(
-        smartProvider.initialize.selector,
-        admin,
-        manager,
-        address(dex),
-        address(dexInfo),
-        multiOracle
-      )
+      abi.encodeWithSelector(smartProvider.initialize.selector, admin, address(dex), address(dexInfo), multiOracle)
     );
     smartProvider = SmartProvider(payable(address(smartProviderProxy)));
 
