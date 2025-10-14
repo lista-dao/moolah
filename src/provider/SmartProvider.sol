@@ -266,8 +266,6 @@ contract SmartProvider is
     require(expectBurnAmount <= maxCollateralAmount, "slippage too high");
 
     // remove liquidity from the stableswap pool
-    IERC20(dexLP).safeIncreaseAllowance(dex, maxCollateralAmount);
-
     uint256 actualBurnAmount = IERC20(dexLP).balanceOf(address(this));
     IStableSwap(dex).remove_liquidity_imbalance(amounts, maxCollateralAmount);
     actualBurnAmount = actualBurnAmount - IERC20(dexLP).balanceOf(address(this));
@@ -313,8 +311,6 @@ contract SmartProvider is
     require(expectAmount >= minTokenAmount, "slippage too high");
 
     uint256 actualAmount = getTokenBalance(i);
-
-    IERC20(dexLP).safeIncreaseAllowance(dex, collateralAmount);
     IStableSwap(dex).remove_liquidity_one_coin(collateralAmount, i, minTokenAmount);
 
     actualAmount = getTokenBalance(i) - actualAmount;
