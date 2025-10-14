@@ -18,6 +18,9 @@ interface IInterestRateModel is IIrm {
   /// @notice Rate cap for the given market.
   function rateCap(Id id) external view returns (uint256);
 
+  /// @notice Minimum borrow rate for the given market.
+  function rateFloor(Id id) external view returns (uint256);
+
   /// @notice Minimum borrow rate cap for all markets.
   function minCap() external view returns (uint256);
 

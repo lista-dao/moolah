@@ -365,12 +365,19 @@ contract InterestRateModelTest is Test {
     assertEq(irm.rateCap(id), newCap);
   }
 
-  function testUpateMinCap(uint256 newMinCap) public {
+  function testUpdateMinCap(uint256 newMinCap) public {
     // minCap = uint256(0.05 ether) / 365 days; // 5%
     newMinCap = bound(newMinCap, 1, uint256(0.05 ether) / 365 days);
     vm.prank(makeAddr("manager"));
     irm.updateMinCap(newMinCap);
     assertEq(irm.minCap(), newMinCap);
+  }
+
+  function testUpdateRateFloor(Id id, uint256 newFloor) public {
+    newFloor = bound(newFloor, 1, uint256(ConstantsLib.INITIAL_RATE_AT_TARGET));
+    vm.prank(makeAddr("bot"));
+    irm.updateRateFloor(id, newFloor);
+    assertEq(irm.rateFloor(id), newFloor);
   }
 
   /* HANDLERS */
