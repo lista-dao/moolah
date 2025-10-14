@@ -20,7 +20,7 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
   mapping(uint256 => address) public swapPairContract;
   uint256 public pairLength;
 
-  bytes32 public DEPLOYER = keccak256("DEPLOYER");
+  bytes32 public constant DEPLOYER = keccak256("DEPLOYER");
 
   struct StableSwapPairInfo {
     address swapContract;
