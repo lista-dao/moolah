@@ -39,6 +39,8 @@ contract StableSwapPoolBNBTest is Test {
   address userB = makeAddr("userB");
   address userC = makeAddr("userC");
 
+  bytes32 constant DEPLOYER = keccak256("DEPLOYER");
+
   function setUp() public {
     poolInfo = new StableSwapPoolInfo();
     address[] memory deployers = new address[](2);
@@ -54,6 +56,7 @@ contract StableSwapPoolBNBTest is Test {
     assertTrue(factory.hasRole(factory.DEFAULT_ADMIN_ROLE(), admin));
     assertTrue(factory.hasRole(factory.DEPLOYER(), deployer1));
     assertTrue(factory.hasRole(factory.DEPLOYER(), deployer2));
+    assertEq(factory.DEPLOYER(), DEPLOYER);
 
     token0 = new ERC20Mock();
 
