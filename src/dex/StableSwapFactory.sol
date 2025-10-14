@@ -60,12 +60,12 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
    * @param _name: name of LP token
    * @param _symbol: symbol of LP token
    */
-  function createSwapLP(
+  function _createSwapLP(
     address _tokenA,
     address _tokenB,
     string memory _name,
     string memory _symbol
-  ) public onlyRole(DEPLOYER) returns (address) {
+  ) internal onlyRole(DEPLOYER) returns (address) {
     require(lpImpl != address(0), "LP implementation not set");
 
     // create LP token
@@ -147,7 +147,7 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
     (address t0, address t1) = sortTokens(_tokenA, _tokenB);
 
     // 1. create LP token; tranfer admin role after set minter
-    lp = createSwapLP(t0, t1, _name, _symbol);
+    lp = _createSwapLP(t0, t1, _name, _symbol);
 
     // 2. create stable swap pool
     swapContract = _createSwapPair(t0, t1, _A, _fee, _admin_fee, _admin, _manager, _pauser, lp, _oracle);
