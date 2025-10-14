@@ -167,7 +167,6 @@ contract InterestRateModel is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
 
     // Adjust rate to make sure the rate >= floor
     uint256 floor = rateFloor[id];
-    require(floor <= _cap, "invalid floor");
     if (avgRate < floor) avgRate = floor;
 
     return (avgRate, endRateAtTarget);
@@ -199,6 +198,8 @@ contract InterestRateModel is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
   function updateRateCap(Id id, uint256 newRateCap) external onlyRole(BOT) {
     uint256 oldCap = rateCap[id];
     require(newRateCap >= minCap && newRateCap != oldCap, "invalid rate cap");
+    require(rateFloor[id] <= newRateCap, "invalid new cap vs floor");
+
     rateCap[id] = newRateCap;
 
     emit BorrowRateCapUpdate(id, oldCap, newRateCap);
