@@ -140,15 +140,13 @@ contract SmartProvider is
    * @param amount0 The amount of token0 to add as liquidity.
    * @param amount1 The amount of token1 to add as liquidity.
    * @param minLpAmount The minimum amount of LP tokens to receive (slippage tolerance).
-   * @param data Additional data to pass to the Moolah contract.
    */
   function supplyCollateral(
     MarketParams calldata marketParams,
     address onBehalf,
     uint256 amount0,
     uint256 amount1,
-    uint256 minLpAmount,
-    bytes calldata data
+    uint256 minLpAmount
   ) external payable nonReentrant {
     require(marketParams.collateralToken == TOKEN, "invalid collateral token");
     address token0 = token(0);
@@ -195,7 +193,7 @@ contract SmartProvider is
 
     // supply collateral to moolah
     IERC20(TOKEN).safeIncreaseAllowance(address(MOOLAH), actualLpAmount);
-    MOOLAH.supplyCollateral(marketParams, actualLpAmount, onBehalf, data);
+    MOOLAH.supplyCollateral(marketParams, actualLpAmount, onBehalf, "");
 
     emit SupplyCollateral(onBehalf, TOKEN, actualLpAmount, amount0, amount1);
   }

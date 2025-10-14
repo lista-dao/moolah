@@ -228,15 +228,14 @@ contract SmartProviderTest is Test {
     vm.startPrank(user2);
     token0.approve(address(smartProvider), amounts[0]);
     vm.expectRevert("amount1 should equal msg.value");
-    smartProvider.supplyCollateral(marketParams, user2, amounts[0], amounts[1], supplyAmount, bytes(""));
+    smartProvider.supplyCollateral(marketParams, user2, amounts[0], amounts[1], supplyAmount);
     vm.expectRevert("amount1 should equal msg.value");
     smartProvider.supplyCollateral{ value: amounts[1] }(
       marketParams,
       user2,
       amounts[0],
       0, // invalid amount
-      supplyAmount,
-      bytes("")
+      supplyAmount
     );
 
     vm.expectRevert("slippage too high");
@@ -245,8 +244,7 @@ contract SmartProviderTest is Test {
       user2,
       amounts[0],
       amounts[1],
-      supplyAmount, // revert on exact amount due to rounding issue
-      bytes("")
+      supplyAmount // revert on exact amount due to rounding issue
     );
 
     // succeed
@@ -255,8 +253,7 @@ contract SmartProviderTest is Test {
       user2,
       amounts[0],
       amounts[1],
-      supplyAmount - 10, // minus 10 wei to avoid rounding issue
-      bytes("")
+      supplyAmount - 10 // minus 10 wei to avoid rounding issue
     );
 
     // Check lp balance and collateral minting
