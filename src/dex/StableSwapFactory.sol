@@ -121,8 +121,8 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
 
   /**
    * @notice createSwapPair
-   * @param _tokenA: Addresses of ERC20 conracts .
-   * @param _tokenB: Addresses of ERC20 conracts .
+   * @param _tokenA: Addresses of ERC20 contracts
+   * @param _tokenB: Addresses of ERC20 contracts
    * @param _name: name of LP token
    * @param _symbol: symbol of LP token
    * @param _A: Amplification coefficient multiplied by n * (n - 1)
