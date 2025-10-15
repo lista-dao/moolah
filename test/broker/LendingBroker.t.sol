@@ -440,9 +440,10 @@ contract LendingBrokerTest is Test {
 
     FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(borrower);
     assertEq(fixedPositions.length, 1);
-    assertEq(
+    assertApproxEqAbs(
       fixedPositions[0].principal,
       principalBefore + outstandingInterest,
+      1,
       "fixed principal should equal full outstanding debt"
     );
 

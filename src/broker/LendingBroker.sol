@@ -369,27 +369,26 @@ contract LendingBroker is
     require(amount > 0, "broker/zero-amount");
     address user = msg.sender;
     DynamicLoanPosition storage position = dynamicLoanPositions[user];
-    require(position.principal >= amount, "broker/insufficient-dynamic-principal");
+    require(position.principal >= amount, "broker/amount-exceed-principal");
     require(fixedLoanPositions[user].length < maxFixedLoanPositions, "broker/exceed-max-fixed-positions");
 
     // accrue current rate so normalized debt reflects the latest interest
     uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
     uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate);
-    uint256 outstandingInterest = actualDebt > position.principal ? actualDebt - position.principal : 0;
+    uint256 totalInterest = actualDebt.zeroFloorSub(position.principal);
 
-    // allocate proportional share of accrued interest to the amount being converted
-    uint256 interestShare = 0;
-    if (outstandingInterest > 0) {
-      interestShare = BrokerMath.mulDivFlooring(outstandingInterest, amount, position.principal);
+    // force user to repay interest portion when converting to fixed
+    uint256 interestToRepay = BrokerMath.mulDivCeiling(amount, totalInterest, position.principal);
+    if (interestToRepay > 0) {
+      // borrow from Moolah to increase user's actual debt at moolah
+      _borrowFromMoolah(user, interestToRepay);
+      // supply interest to moolah vault as revenue
+      _supplyToMoolahVault(interestToRepay);
     }
 
-    uint256 convertedDebt = amount + interestShare;
-    if (convertedDebt > 0) {
-      uint256 normalizedDebtDelta = BrokerMath.normalizeBorrowAmount(convertedDebt, rate);
-      position.normalizedDebt = position.normalizedDebt.zeroFloorSub(normalizedDebtDelta);
-    }
-
+    position.normalizedDebt = position.normalizedDebt.zeroFloorSub(BrokerMath.normalizeBorrowAmount(amount, rate));
     position.principal -= amount;
+
     if (position.principal == 0 && position.normalizedDebt == 0) {
       delete dynamicLoanPositions[user];
     }
@@ -403,7 +402,7 @@ contract LendingBroker is
     fixedLoanPositions[user].push(
       FixedLoanPosition({
         posId: fixedPosUuid,
-        principal: convertedDebt,
+        principal: amount,
         apr: term.apr,
         start: start,
         end: end,
@@ -413,7 +412,7 @@ contract LendingBroker is
       })
     );
 
-    emit FixedLoanPositionCreated(user, convertedDebt, start, end, term.apr, termId);
+    emit FixedLoanPositionCreated(user, amount, start, end, term.apr, termId);
   }
 
   ///////////////////////////////////////
