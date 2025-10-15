@@ -59,6 +59,7 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
    * @param _tokenB: Addresses of ERC20 conracts
    * @param _name: name of LP token
    * @param _symbol: symbol of LP token
+   * @return lpToken: Address of LP tokena
    */
   function _createSwapLP(
     address _tokenA,
@@ -122,9 +123,17 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
    * @notice createSwapPair
    * @param _tokenA: Addresses of ERC20 conracts .
    * @param _tokenB: Addresses of ERC20 conracts .
+   * @param _name: name of LP token
+   * @param _symbol: symbol of LP token
    * @param _A: Amplification coefficient multiplied by n * (n - 1)
    * @param _fee: Fee to charge for exchanges
    * @param _admin_fee: Admin fee
+   * @param _admin: Admin address
+   * @param _manager: Manager address
+   * @param _pauser: Pauser address
+   * @param _oracle: Price oracle address
+   * @return lp: Address of LP token
+   * @return swapContract: Address of swap contract
    */
   function createSwapPair(
     address _tokenA,
