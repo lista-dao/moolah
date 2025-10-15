@@ -32,6 +32,8 @@ interface IBrokerBase {
   function LOAN_TOKEN() external view returns (address);
   /// @dev user will deposit this token as collateral
   function COLLATERAL_TOKEN() external view returns (address);
+  /// @dev the market id of the broker
+  function MARKET_ID() external view returns (Id);
 
   /// @dev peek the price of the token per user
   ///      decreasing according to the accruing interest for collateral token

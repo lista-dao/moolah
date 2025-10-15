@@ -268,8 +268,12 @@ contract Moolah is
     require(broker != address(0), ErrorsLib.ZERO_ADDRESS);
     if (isAddition) {
       require(brokers[id] != broker, ErrorsLib.ALREADY_SET);
-      require(IBrokerBase(broker).LOAN_TOKEN() == idToMarketParams[id].loanToken, ErrorsLib.INVALID_BROKER);
-      require(IBrokerBase(broker).COLLATERAL_TOKEN() == idToMarketParams[id].collateralToken, ErrorsLib.INVALID_BROKER);
+      require(
+        IBrokerBase(broker).LOAN_TOKEN() == idToMarketParams[id].loanToken &&
+          IBrokerBase(broker).COLLATERAL_TOKEN() == idToMarketParams[id].collateralToken &&
+          Id.unwrap(IBrokerBase(broker).MARKET_ID()) == Id.unwrap(id),
+        ErrorsLib.INVALID_BROKER
+      );
       brokers[id] = broker;
     } else {
       require(brokers[id] == broker, ErrorsLib.NOT_SET);
