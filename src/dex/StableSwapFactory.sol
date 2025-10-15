@@ -159,7 +159,7 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
     // 2. create stable swap pool
     swapContract = _createSwapPair(t0, t1, _A, _fee, _admin_fee, _admin, _manager, _pauser, lp, _oracle);
 
-    // 3. transfer minter to swap contract; TODO tranfer admin role of lp to _admin
+    // 3. transfer minter to swap contract
     IStableSwapLP(lp).setMinter(swapContract);
     IAccessControlEnumerable(lp).grantRole(DEFAULT_ADMIN_ROLE, _admin);
     IAccessControlEnumerable(lp).revokeRole(DEFAULT_ADMIN_ROLE, address(this));
