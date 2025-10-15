@@ -92,6 +92,7 @@ contract StableSwapPool is
    * @param _manager: Manager
    * @param _pauser: Pauser
    * @param _LP: LP address
+   * @param _oracle: Resilient oracle address
    */
   function initialize(
     address[N_COINS] memory _coins,

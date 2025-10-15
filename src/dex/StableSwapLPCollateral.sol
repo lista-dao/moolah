@@ -69,6 +69,9 @@ contract StableSwapLPCollateral is ERC20Upgradeable, UUPSUpgradeable, AccessCont
   }
 
   /// @dev only Moolah can transfer
+  /// @param to The address of the recipient.
+  /// @param value The amount to be transferred.
+  /// @return bool Returns true on success, false otherwise.
   function transfer(address to, uint256 value) public override onlyMoolah returns (bool) {
     address owner = _msgSender();
     _transfer(owner, to, value);
