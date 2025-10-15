@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
-import { IBroker, FixedLoanPosition, DynamicLoanPosition, FixedTermAndRate } from "../interfaces/IBroker.sol";
+import { FixedLoanPosition, DynamicLoanPosition } from "../interfaces/IBroker.sol";
 
 uint256 constant RATE_SCALE = 10 ** 27;
 
