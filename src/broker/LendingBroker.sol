@@ -512,7 +512,7 @@ contract LendingBroker is
     uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate);
     if (actualDebt == 0) return principalToDeduct;
 
-    uint256 outstandingInterest = actualDebt > position.principal ? actualDebt - position.principal : 0;
+    uint256 outstandingInterest = actualDebt.zeroFloorSub(position.principal);
 
     // clear as much accrued interest as possible
     uint256 interestPaid = UtilsLib.min(outstandingInterest, principalToDeduct);
