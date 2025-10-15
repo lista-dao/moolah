@@ -76,8 +76,10 @@ contract StableSwapPoolERC20Test is Test {
 
     address lpImpl = address(new StableSwapLP());
     address poolImpl = address(new StableSwapPool(address(factory)));
-    vm.prank(admin);
-    factory.setImpls(lpImpl, poolImpl);
+    vm.startPrank(admin);
+    factory.setLpImpl(lpImpl);
+    factory.setSwapImpl(poolImpl);
+    vm.stopPrank();
     assertEq(factory.lpImpl(), lpImpl);
     assertEq(factory.swapImpl(), poolImpl);
 
