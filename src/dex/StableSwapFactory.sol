@@ -180,7 +180,11 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
     IStableSwap swap = IStableSwap(_swapContract);
     uint256 n_coins = swap.N_COINS();
     require(n_coins == 2, "Only support 2 coins pool");
-    addPairInfoInternal(_swapContract, swap.coins(0), swap.coins(1), swap.token());
+    address coin0 = swap.coins(0);
+    address coin1 = swap.coins(1);
+    (address t0, address t1) = sortTokens(coin0, coin1);
+    require(coin0 == t0 && coin1 == t1, "Unsorted coins");
+    addPairInfoInternal(_swapContract, coin0, coin1, swap.token());
   }
 
   function setLpImpl(address _newLpImpl) external onlyRole(DEFAULT_ADMIN_ROLE) {
