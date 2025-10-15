@@ -3,8 +3,8 @@ pragma solidity 0.8.28;
 
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
-import { SafeERC20, IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import { IStableSwap, StableSwapType } from "./interfaces/IStableSwap.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { IStableSwap } from "./interfaces/IStableSwap.sol";
 
 contract StableSwapPoolInfo is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   uint256 public constant N_COINS = 2;
