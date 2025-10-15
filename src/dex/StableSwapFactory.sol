@@ -129,8 +129,8 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
   function createSwapPair(
     address _tokenA,
     address _tokenB,
-    string memory _name,
-    string memory _symbol,
+    string calldata _name,
+    string calldata _symbol,
     uint256 _A,
     uint256 _fee,
     uint256 _admin_fee,

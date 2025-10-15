@@ -22,7 +22,12 @@ contract StableSwapLP is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumera
     _disableInitializers();
   }
 
-  function initialize(address _admin, address _minter, string memory name, string memory symbol) external initializer {
+  function initialize(
+    address _admin,
+    address _minter,
+    string calldata name,
+    string calldata symbol
+  ) external initializer {
     require(_admin != address(0) && _minter != address(0), "Zero address");
 
     __ERC20_init(name, symbol);

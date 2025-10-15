@@ -240,7 +240,7 @@ contract StableSwapPool is
     return (D * PRECISION) / token_supply;
   }
 
-  function calc_token_amount(uint256[N_COINS] memory amounts, bool deposit) external view returns (uint256) {
+  function calc_token_amount(uint256[N_COINS] calldata amounts, bool deposit) external view returns (uint256) {
     /**
      * Simplified method to calculate addition or reduction in token supply at
      *     deposit or withdrawal without taking fees into account (but looking at
@@ -269,7 +269,7 @@ contract StableSwapPool is
   }
 
   function add_liquidity(
-    uint256[N_COINS] memory amounts,
+    uint256[N_COINS] calldata amounts,
     uint256 min_mint_amount
   ) external payable whenNotPaused nonReentrant {
     //Amounts is amounts of c-tokens
@@ -504,7 +504,7 @@ contract StableSwapPool is
     emit TokenExchange(msg.sender, i, dx, j, dy, dy_fee, dy_admin_fee);
   }
 
-  function remove_liquidity(uint256 _amount, uint256[N_COINS] memory min_amounts) external nonReentrant {
+  function remove_liquidity(uint256 _amount, uint256[N_COINS] calldata min_amounts) external nonReentrant {
     uint256 total_supply = IStableSwapLP(token).totalSupply();
     uint256[N_COINS] memory amounts;
     uint256[N_COINS] memory fees; //Fees are unused but we've got them historically in event
@@ -525,7 +525,7 @@ contract StableSwapPool is
   }
 
   function remove_liquidity_imbalance(
-    uint256[N_COINS] memory amounts,
+    uint256[N_COINS] calldata amounts,
     uint256 max_burn_amount
   ) external whenNotPaused nonReentrant {
     uint256 token_supply = IStableSwapLP(token).totalSupply();
