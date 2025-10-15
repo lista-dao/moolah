@@ -58,6 +58,20 @@ contract StableSwapFactoryTest is Test {
 
     vm.startPrank(deployer1);
     // create 1st pool
+    vm.expectRevert("New admin cannot be factory");
+    factory.createSwapPair(
+      address(token0),
+      token1,
+      "LPToken",
+      "LPT",
+      30,
+      1000000,
+      500000,
+      address(factory),
+      admin,
+      admin,
+      oracle
+    );
     factory.createSwapPair(address(token0), token1, "LPToken", "LPT", 30, 1000000, 500000, admin, admin, admin, oracle);
 
     (address t0, address t1) = factory.sortTokens(address(token0), token1);

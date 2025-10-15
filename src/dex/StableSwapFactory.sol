@@ -150,6 +150,7 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
   ) external onlyRole(DEPLOYER) returns (address lp, address swapContract) {
     require(swapImpl != address(0) && lpImpl != address(0), "Implementation not set");
     require(_tokenA != address(0) && _tokenB != address(0) && _tokenA != _tokenB, "Illegal token");
+    require(_admin != address(this), "New admin cannot be factory");
     (address t0, address t1) = sortTokens(_tokenA, _tokenB);
 
     // 1. create LP token; tranfer admin role after set minter
