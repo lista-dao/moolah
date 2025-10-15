@@ -16,7 +16,7 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
   /// @notice check swap contract before deploy
   address public swapImpl;
 
-  mapping(address => mapping(address => StableSwapPairInfo)) public stableSwapPairInfo;
+  mapping(address => mapping(address => StableSwapPairInfo[])) public stableSwapPairInfo;
   mapping(uint256 => address) public swapPairContract;
   uint256 public pairLength;
 
@@ -166,11 +166,9 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
   }
 
   function addPairInfoInternal(address _swapContract, address _t0, address _t1, address _lp) internal {
-    StableSwapPairInfo storage info = stableSwapPairInfo[_t0][_t1];
-    info.swapContract = _swapContract;
-    info.token0 = _t0;
-    info.token1 = _t1;
-    info.LPContract = _lp;
+    StableSwapPairInfo[] storage info = stableSwapPairInfo[_t0][_t1];
+    info.push(StableSwapPairInfo({ swapContract: _swapContract, token0: _t0, token1: _t1, LPContract: _lp }));
+
     swapPairContract[pairLength] = _swapContract;
     pairLength += 1;
 
@@ -198,13 +196,10 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
     }
   }
 
-  function getPairInfo(address _tokenA, address _tokenB) external view returns (StableSwapPairInfo memory info) {
+  function getPairInfo(address _tokenA, address _tokenB) external view returns (StableSwapPairInfo[] memory) {
     (address t0, address t1) = sortTokens(_tokenA, _tokenB);
-    StableSwapPairInfo memory pairInfo = stableSwapPairInfo[t0][t1];
-    info.swapContract = pairInfo.swapContract;
-    info.token0 = pairInfo.token0;
-    info.token1 = pairInfo.token1;
-    info.LPContract = pairInfo.LPContract;
+    StableSwapPairInfo[] memory pairInfo = stableSwapPairInfo[t0][t1];
+    return pairInfo;
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
