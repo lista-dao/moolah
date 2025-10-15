@@ -35,8 +35,8 @@ contract StableSwapLPCollateral is ERC20Upgradeable, UUPSUpgradeable, AccessCont
   function initialize(
     address _admin,
     address _minter,
-    string memory _name,
-    string memory _symbol
+    string calldata _name,
+    string calldata _symbol
   ) external initializer {
     require(_admin != address(0) && _minter != address(0), "Zero address");
 

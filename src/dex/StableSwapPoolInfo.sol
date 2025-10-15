@@ -147,7 +147,7 @@ contract StableSwapPoolInfo is UUPSUpgradeable, AccessControlEnumerableUpgradeab
 
   function get_add_liquidity_fee(
     address _swap,
-    uint256[N_COINS] memory amounts
+    uint256[N_COINS] calldata amounts
   ) external view returns (uint256[N_COINS] memory swapFee, uint256[N_COINS] memory adminFee) {
     IStableSwap swap = IStableSwap(_swap);
     uint256 _fee = (swap.fee() * N_COINS) / (4 * (N_COINS - 1));
@@ -194,7 +194,7 @@ contract StableSwapPoolInfo is UUPSUpgradeable, AccessControlEnumerableUpgradeab
 
   function get_remove_liquidity_imbalance_fee(
     address _swap,
-    uint256[N_COINS] memory amounts
+    uint256[N_COINS] calldata amounts
   ) external view returns (uint256[N_COINS] memory swapFee, uint256[N_COINS] memory adminFee) {
     IStableSwap swap = IStableSwap(_swap);
     uint256 _fee = (swap.fee() * N_COINS) / (4 * (N_COINS - 1));
