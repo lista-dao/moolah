@@ -233,7 +233,9 @@ contract LendingBroker is
     // get updated rate
     uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
     // get net accrued interest
-    uint256 accruedInterest = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate) - position.principal;
+    uint256 accruedInterest = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate).zeroFloorSub(
+      position.principal
+    );
     // calculate the amount we need to repay for interest and principal
     uint256 repayInterestAmt = amount < accruedInterest ? amount : accruedInterest;
     uint256 amountLeft = amount - repayInterestAmt;
@@ -247,7 +249,9 @@ contract LendingBroker is
     // (1) Repay interest first
     IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), repayInterestAmt);
     // update position
-    position.normalizedDebt -= BrokerMath.normalizeBorrowAmount(repayInterestAmt, rate);
+    position.normalizedDebt = position.normalizedDebt.zeroFloorSub(
+      BrokerMath.normalizeBorrowAmount(repayInterestAmt, rate)
+    );
     // supply interest to moolah vault
     _supplyToMoolahVault(repayInterestAmt);
     totalRepaid += repayInterestAmt;
@@ -816,19 +820,10 @@ contract LendingBroker is
     IERC20(LOAN_TOKEN).safeIncreaseAllowance(address(MOOLAH), amount);
 
     Market memory market = MOOLAH.market(MARKET_ID);
-    Position memory pos = MOOLAH.position(MARKET_ID, onBehalf);
     // convert amount to shares
     uint256 amountShares = amount.toSharesDown(market.totalBorrowAssets, market.totalBorrowShares);
-    bool repayByShares = amountShares >= pos.borrowShares;
-    // for the last bit of repayment
     // using `shares` to ensure full repayment
-    (assetsRepaid /* sharesRepaid */, ) = MOOLAH.repay(
-      _getMarketParams(MARKET_ID),
-      repayByShares ? 0 : amount,
-      repayByShares ? pos.borrowShares : 0,
-      onBehalf,
-      ""
-    );
+    (assetsRepaid /* sharesRepaid */, ) = MOOLAH.repay(_getMarketParams(MARKET_ID), 0, amountShares, onBehalf, "");
     // refund any excess amount to payer
     if (amount > assetsRepaid) {
       IERC20(LOAN_TOKEN).safeTransfer(payer, amount - assetsRepaid);
