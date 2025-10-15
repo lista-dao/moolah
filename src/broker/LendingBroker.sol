@@ -146,8 +146,6 @@ contract LendingBroker is
     // init state variables
     rateCalculator = _rateCalculator;
     maxFixedLoanPositions = _maxFixedLoanPositions;
-    fixedPosUuid = 0;
-    borrowPaused = false;
   }
 
   ///////////////////////////////////////
