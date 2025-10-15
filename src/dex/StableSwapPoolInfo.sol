@@ -64,6 +64,9 @@ contract StableSwapPoolInfo is UUPSUpgradeable, AccessControlEnumerableUpgradeab
   function calc_coins_amount(address _swap, uint256 _amount) public view returns (uint256[N_COINS] memory) {
     uint256 total_supply = token(_swap).totalSupply();
     uint256[N_COINS] memory amounts;
+    if (total_supply == 0 || _amount == 0) {
+      return amounts;
+    }
 
     for (uint256 i = 0; i < N_COINS; i++) {
       uint256 value = (IStableSwap(_swap).balances(i) * _amount) / total_supply;
