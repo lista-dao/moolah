@@ -236,6 +236,7 @@ contract StableSwapPool is
      *     When balanced, D = n * x_u - total virtual value of the portfolio
      */
     uint256 token_supply = IStableSwapLP(token).totalSupply();
+    if (token_supply == 0) return 0;
     return (D * PRECISION) / token_supply;
   }
 

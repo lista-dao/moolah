@@ -136,9 +136,10 @@ contract StableSwapPoolBNBTest is Test {
 
   function test_seeding() public {
     vm.startPrank(userA);
+    assertEq(pool.get_virtual_price(), 0); // virtual price should be 0 before seeding
 
     // Add liquidity
-    uint ratio = (8466 * 10 ** 17) / 830; // slisBnb price ratio to BNB
+    uint256 ratio = (8466 * 10 ** 17) / 830; // slisBnb price ratio to BNB
     uint256 amount0 = 100_000 * ratio; // slisBnb amount, based on the price ratio
     uint256 amount1 = 100_000 ether; // Bnb
 
