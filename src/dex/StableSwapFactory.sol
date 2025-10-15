@@ -183,18 +183,20 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
     addPairInfoInternal(_swapContract, swap.coins(0), swap.coins(1), swap.token());
   }
 
-  function setImpls(address _newLpImpl, address _newSwapImpl) external onlyRole(DEFAULT_ADMIN_ROLE) {
-    require(_newLpImpl != address(0) && _newSwapImpl != address(0), "Zero address");
+  function setLpImpl(address _newLpImpl) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    require(_newLpImpl != address(0), "Zero address");
+    require(_newLpImpl != lpImpl, "Same implementation");
 
-    if (_newLpImpl != lpImpl) {
-      lpImpl = _newLpImpl;
-      emit SetLpImplementation(_newLpImpl);
-    }
+    lpImpl = _newLpImpl;
+    emit SetLpImplementation(_newLpImpl);
+  }
 
-    if (_newSwapImpl != swapImpl) {
-      swapImpl = _newSwapImpl;
-      emit SetSwapImplementation(_newSwapImpl);
-    }
+  function setSwapImpl(address _newSwapImpl) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    require(_newSwapImpl != address(0), "Zero address");
+    require(_newSwapImpl != swapImpl, "Same implementation");
+
+    swapImpl = _newSwapImpl;
+    emit SetSwapImplementation(_newSwapImpl);
   }
 
   function getPairInfo(address _tokenA, address _tokenB) external view returns (StableSwapPairInfo[] memory) {

@@ -53,7 +53,8 @@ contract StableSwapFactoryTest is Test {
     vm.startPrank(admin);
     address lpImpl = address(new StableSwapLP());
     address swapImpl = address(new StableSwapPool(address(factory)));
-    factory.setImpls(lpImpl, swapImpl);
+    factory.setLpImpl(lpImpl);
+    factory.setSwapImpl(swapImpl);
     vm.stopPrank();
 
     vm.startPrank(deployer1);
