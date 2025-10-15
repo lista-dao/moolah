@@ -18,6 +18,7 @@ contract StableSwapPoolInfo is UUPSUpgradeable, AccessControlEnumerableUpgradeab
   }
 
   function initialize(address admin) public initializer {
+    require(admin != address(0), "Zero address");
     __AccessControlEnumerable_init();
 
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
