@@ -22,7 +22,6 @@ import { MathLib, WAD } from "./libraries/MathLib.sol";
 import { SharesMathLib } from "./libraries/SharesMathLib.sol";
 import { MarketParamsLib } from "./libraries/MarketParamsLib.sol";
 import { SafeTransferLib } from "./libraries/SafeTransferLib.sol";
-import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import { IProvider, ISmartProvider } from "../provider/interfaces/IProvider.sol";
 
 /// @title Moolah
