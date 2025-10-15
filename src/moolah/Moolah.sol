@@ -637,7 +637,7 @@ contract Moolah is
     require(authorization.nonce == nonce[authorization.authorizer]++, ErrorsLib.INVALID_NONCE);
 
     bytes32 hashStruct = keccak256(abi.encode(AUTHORIZATION_TYPEHASH, authorization));
-    bytes32 digest = keccak256(bytes.concat("\x19\x01", DOMAIN_SEPARATOR, hashStruct));
+    bytes32 digest = keccak256(bytes.concat("\x19\x01", _buildDomainSeparator(), hashStruct));
     address signatory = ecrecover(digest, signature.v, signature.r, signature.s);
 
     require(signatory != address(0) && authorization.authorizer == signatory, ErrorsLib.INVALID_SIGNATURE);
@@ -696,6 +696,15 @@ contract Moolah is
 
     // Safe "unchecked" cast.
     market[id].lastUpdate = uint128(block.timestamp);
+  }
+
+  function _buildDomainSeparator() private view returns (bytes32) {
+    return keccak256(abi.encode(DOMAIN_TYPEHASH, block.chainid, address(this)));
+  }
+
+  /// @dev Returns the domain separator for the current chain.
+  function domainSeparator() external view returns (bytes32) {
+    return _buildDomainSeparator();
   }
 
   /* HEALTH CHECK */
