@@ -92,25 +92,20 @@ contract CreateMarketDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams[] memory params = new MarketParams[](9);
-    params[0] = MarketParams({ loanToken: Aster, collateralToken: USDT, oracle: multiOracle, irm: irm, lltv: lltv50 });
-    params[1] = MarketParams({ loanToken: Aster, collateralToken: USD1, oracle: multiOracle, irm: irm, lltv: lltv50 });
-    params[2] = MarketParams({ loanToken: Aster, collateralToken: WBNB, oracle: multiOracle, irm: irm, lltv: lltv50 });
-    params[3] = MarketParams({ loanToken: asBNB, collateralToken: USDT, oracle: multiOracle, irm: irm, lltv: lltv965 });
-    params[4] = MarketParams({ loanToken: BTCB, collateralToken: Aster, oracle: multiOracle, irm: irm, lltv: lltv50 });
-    params[5] = MarketParams({ loanToken: WBNB, collateralToken: Aster, oracle: multiOracle, irm: irm, lltv: lltv50 });
-    params[6] = MarketParams({
-      loanToken: slisBNB,
-      collateralToken: Aster,
+    MarketParams[] memory params = new MarketParams[](3);
+    params[0] = MarketParams({ loanToken: Aster, collateralToken: BTCB, oracle: multiOracle, irm: irm, lltv: lltv50 });
+    params[1] = MarketParams({
+      loanToken: Aster,
+      collateralToken: slisBNB,
       oracle: multiOracle,
       irm: irm,
       lltv: lltv50
     });
-    params[7] = MarketParams({ loanToken: USD1, collateralToken: Aster, oracle: multiOracle, irm: irm, lltv: lltv50 });
-    params[8] = MarketParams({ loanToken: USDT, collateralToken: Aster, oracle: multiOracle, irm: irm, lltv: lltv50 });
+    params[2] = MarketParams({ loanToken: WBNB, collateralToken: asBNB, oracle: multiOracle, irm: irm, lltv: lltv965 });
+
     // create market
     vm.startBroadcast(deployerPrivateKey);
-    for (uint256 i = 0; i < 9; i++) {
+    for (uint256 i = 0; i < 3; i++) {
       Id id = params[i].id();
       console.log("market id:");
       console.logBytes32(Id.unwrap(id));

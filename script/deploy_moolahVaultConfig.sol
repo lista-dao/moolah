@@ -50,48 +50,48 @@ contract MoolahVaultConfigDeploy is Script {
     console.log("Deployer: ", deployer);
 
     MarketParams memory BTCBParams = MarketParams({
-      loanToken: BTCB,
-      collateralToken: Aster,
+      loanToken: Aster,
+      collateralToken: BTCB,
       oracle: multiOracle,
       irm: irm,
       lltv: lltv50
     });
     MarketParams memory WBNBParams = MarketParams({
-      loanToken: WBNB,
-      collateralToken: Aster,
+      loanToken: Aster,
+      collateralToken: WBNB,
       oracle: multiOracle,
       irm: irm,
       lltv: lltv50
     });
     MarketParams memory slisBNBParams = MarketParams({
-      loanToken: slisBNB,
-      collateralToken: Aster,
+      loanToken: Aster,
+      collateralToken: slisBNB,
       oracle: multiOracle,
       irm: irm,
       lltv: lltv50
     });
     MarketParams memory USD1Params = MarketParams({
-      loanToken: USD1,
-      collateralToken: Aster,
+      loanToken: Aster,
+      collateralToken: USD1,
       oracle: multiOracle,
       irm: irm,
       lltv: lltv50
     });
     MarketParams memory USDTParams = MarketParams({
-      loanToken: USDT,
-      collateralToken: Aster,
+      loanToken: Aster,
+      collateralToken: USDT,
       oracle: multiOracle,
       irm: irm,
       lltv: lltv50
     });
 
     vm.startBroadcast(deployerPrivateKey);
-    vault.setFeeRecipient(feeRecipient);
-    vault.setSkimRecipient(skimRecipient);
-
-    vault.grantRole(CURATOR, deployer);
-    vault.grantRole(ALLOCATOR, deployer);
-    vault.setBotRole(bot);
+    //    vault.setFeeRecipient(feeRecipient);
+    //    vault.setSkimRecipient(skimRecipient);
+    //
+    //    vault.grantRole(CURATOR, deployer);
+    //    vault.grantRole(ALLOCATOR, deployer);
+    //    vault.setBotRole(bot);
 
     // config vault
 
@@ -116,7 +116,6 @@ contract MoolahVaultConfigDeploy is Script {
     supplyQueue[4] = USDTId;
 
     vault.setSupplyQueue(supplyQueue);
-
     vm.stopBroadcast();
 
     console.log("vault config done!");
