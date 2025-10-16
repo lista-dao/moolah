@@ -17,6 +17,7 @@ contract CreateMarketDeploy is Script {
   address wBETH = 0xa2E3356610840701BDf5611a53974510Ae27E2e1;
   address PTUSDe27NOV2025 = 0x62C6E813b9589C3631Ba0Cdb013acdB8544038B7;
   address cbBTC = 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf;
+  address USDT = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
 
   address multiOracle = 0xA64FE284EB8279B9b63946DD51813b0116099301;
   address PTUSDe27NOV2025USD1Oracle = 0xb169d2459F51d02d7fC8A39498ec2801652b594c;
@@ -32,22 +33,11 @@ contract CreateMarketDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams[] memory params = new MarketParams[](6);
-    params[0] = MarketParams({ loanToken: USD1, collateralToken: WETH, oracle: multiOracle, irm: irm, lltv: lltv86 });
-    params[1] = MarketParams({ loanToken: USD1, collateralToken: WBTC, oracle: multiOracle, irm: irm, lltv: lltv86 });
-    params[2] = MarketParams({ loanToken: USD1, collateralToken: wstETH, oracle: multiOracle, irm: irm, lltv: lltv86 });
-    params[3] = MarketParams({ loanToken: USD1, collateralToken: wBETH, oracle: multiOracle, irm: irm, lltv: lltv86 });
-    params[4] = MarketParams({
-      loanToken: USD1,
-      collateralToken: PTUSDe27NOV2025,
-      oracle: PTUSDe27NOV2025USD1Oracle,
-      irm: irm,
-      lltv: lltv915
-    });
-    params[5] = MarketParams({ loanToken: USD1, collateralToken: cbBTC, oracle: multiOracle, irm: irm, lltv: lltv86 });
+    MarketParams[] memory params = new MarketParams[](1);
+    params[0] = MarketParams({ loanToken: USD1, collateralToken: USDT, oracle: multiOracle, irm: irm, lltv: lltv915 });
 
     vm.startBroadcast(deployerPrivateKey);
-    for (uint256 i = 0; i < 6; i++) {
+    for (uint256 i = 0; i < 1; i++) {
       Id id = params[i].id();
       console.log("market id:");
       console.logBytes32(Id.unwrap(id));
