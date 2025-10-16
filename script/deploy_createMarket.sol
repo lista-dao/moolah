@@ -51,6 +51,8 @@ contract CreateMarketDeploy is Script {
   address ptUSR27NOV2025 = 0x4a3846d069B800343D53e72B80a644Bb496D9aB2;
   address ptSatUSD18DEC2025 = 0x31E88bF4AC49EEf6711756D141F1A63E78F9F665;
   address WLFI = 0x47474747477b199288bF72a1D702f7Fe0Fb1DEeA;
+  address Aster = 0x000Ae314E2A2172a039B26378814C252734f556A;
+  address asBNB = 0x77734e70b6E88b4d82fE632a168EDf6e700912b6;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
@@ -90,26 +92,25 @@ contract CreateMarketDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams[] memory params = new MarketParams[](4);
-    params[0] = MarketParams({ loanToken: USD1, collateralToken: WLFI, oracle: multiOracle, irm: irm, lltv: lltv50 });
-    params[1] = MarketParams({ loanToken: USDT, collateralToken: WLFI, oracle: multiOracle, irm: irm, lltv: lltv50 });
-    params[2] = MarketParams({
-      loanToken: USD1,
-      collateralToken: ptSatUSD18DEC2025,
-      oracle: ptSatUSD18DEC2025USD1Oracle,
+    MarketParams[] memory params = new MarketParams[](9);
+    params[0] = MarketParams({ loanToken: Aster, collateralToken: USDT, oracle: multiOracle, irm: irm, lltv: lltv50 });
+    params[1] = MarketParams({ loanToken: Aster, collateralToken: USD1, oracle: multiOracle, irm: irm, lltv: lltv50 });
+    params[2] = MarketParams({ loanToken: Aster, collateralToken: WBNB, oracle: multiOracle, irm: irm, lltv: lltv50 });
+    params[3] = MarketParams({ loanToken: asBNB, collateralToken: USDT, oracle: multiOracle, irm: irm, lltv: lltv965 });
+    params[4] = MarketParams({ loanToken: BTCB, collateralToken: Aster, oracle: multiOracle, irm: irm, lltv: lltv50 });
+    params[5] = MarketParams({ loanToken: WBNB, collateralToken: Aster, oracle: multiOracle, irm: irm, lltv: lltv50 });
+    params[6] = MarketParams({
+      loanToken: slisBNB,
+      collateralToken: Aster,
+      oracle: multiOracle,
       irm: irm,
-      lltv: lltv915
+      lltv: lltv50
     });
-    params[3] = MarketParams({
-      loanToken: USDT,
-      collateralToken: ptSatUSD18DEC2025,
-      oracle: ptSatUSD18DEC2025USDTOracle,
-      irm: irm,
-      lltv: lltv915
-    });
-    //
+    params[7] = MarketParams({ loanToken: USD1, collateralToken: Aster, oracle: multiOracle, irm: irm, lltv: lltv50 });
+    params[8] = MarketParams({ loanToken: USDT, collateralToken: Aster, oracle: multiOracle, irm: irm, lltv: lltv50 });
+    // create market
     vm.startBroadcast(deployerPrivateKey);
-    for (uint256 i = 0; i < 4; i++) {
+    for (uint256 i = 0; i < 9; i++) {
       Id id = params[i].id();
       console.log("market id:");
       console.logBytes32(Id.unwrap(id));
