@@ -9,7 +9,7 @@ import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 contract MoolahVaultConfigDeploy is Script {
   using MarketParamsLib for MarketParams;
   // todo update vault
-  MoolahVault vault = MoolahVault(0x6d6783C146F2B0B2774C1725297f1845dc502525);
+  MoolahVault vault = MoolahVault(0xf21308b903F96592B6d6988c646dC2A3028F39fd);
   uint256 fee = 10 * 1e16;
   address feeRecipient = 0x2E2Eed557FAb1d2E11fEA1E1a23FF8f1b23551f3;
   address skimRecipient = 0x1d60bBBEF79Fb9540D271Dbb01925380323A8f66;
@@ -86,12 +86,12 @@ contract MoolahVaultConfigDeploy is Script {
     });
 
     vm.startBroadcast(deployerPrivateKey);
-    //    vault.setFeeRecipient(feeRecipient);
-    //    vault.setSkimRecipient(skimRecipient);
-    //
-    //    vault.grantRole(CURATOR, deployer);
-    //    vault.grantRole(ALLOCATOR, deployer);
-    //    vault.setBotRole(bot);
+    vault.setFeeRecipient(feeRecipient);
+    vault.setSkimRecipient(skimRecipient);
+
+    vault.grantRole(CURATOR, deployer);
+    vault.grantRole(ALLOCATOR, deployer);
+    vault.setBotRole(bot);
 
     // config vault
 
