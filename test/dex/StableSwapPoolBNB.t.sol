@@ -113,6 +113,7 @@ contract StableSwapPoolBNBTest is Test {
     assertEq(pool.future_A(), _A);
     assertEq(pool.A(), _A);
     assertEq(pool.fee(), _fee);
+    assertEq(pool.bnb_gas(), 4029);
     assertEq(pool.admin_fee(), _adminFee);
     assertTrue(pool.support_BNB());
     assertEq(pool.oracle(), oracle);

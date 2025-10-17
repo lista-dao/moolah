@@ -46,7 +46,7 @@ contract StableSwapPool is
   /// @dev the percentage of the swap fee that is taken as an admin fee. admin_fee * 1e10.
   uint256 public admin_fee;
   /// @dev transfer bnb gas.
-  uint256 public bnb_gas = 4029;
+  uint256 public bnb_gas;
 
   address public token;
 
@@ -146,6 +146,7 @@ contract StableSwapPool is
     IOracle(oracle).peek(_coins[1]); // BNB_ADDR should be config to multi-oracle before deploy
     price0DiffThreshold = 3e16; // 3% threshold for token0 price diff
     price1DiffThreshold = 3e16; // 3% threshold for token1 price diff
+    bnb_gas = 4029;
 
     _grantRole(DEFAULT_ADMIN_ROLE, _owner);
     _grantRole(MANAGER, _manager);
