@@ -78,5 +78,13 @@ contract StableSwapLPCollateral is ERC20Upgradeable, UUPSUpgradeable, AccessCont
     return true;
   }
 
+  /// @dev only Moolah can call transferFrom
+  function transferFrom(address from, address to, uint256 value) public override onlyMoolah returns (bool) {
+    address spender = _msgSender();
+    _spendAllowance(from, spender, value);
+    _transfer(from, to, value);
+    return true;
+  }
+
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 }
