@@ -12,11 +12,12 @@ interface IProvider {
 interface ISmartProvider is IProvider {
   function dexLP() external view returns (address);
 
+  function token(uint256 id) external view returns (address);
+
   function redeemLpCollateral(
-    Id id,
     address payable liquidator,
     uint256 lpAmount,
     uint256 minToken0Out,
     uint256 minToken1Out
-  ) external;
+  ) external returns (uint256 token0Out, uint256 token1Out);
 }
