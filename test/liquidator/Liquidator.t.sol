@@ -15,6 +15,7 @@ contract LiquidatorTest is BaseTest {
   ILiquidator liquidator;
   address BOT;
   MockOneInch oneInch;
+  address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
   function setUp() public override {
     super.setUp();
@@ -31,6 +32,7 @@ contract LiquidatorTest is BaseTest {
     vm.startPrank(OWNER);
     liquidator.setTokenWhitelist(address(collateralToken), true);
     liquidator.setTokenWhitelist(address(loanToken), true);
+    liquidator.setTokenWhitelist(BNB_ADDRESS, true);
 
     liquidator.setMarketWhitelist(Id.unwrap(marketParams.id()), true);
     liquidator.setPairWhitelist(address(oneInch), true);
@@ -123,6 +125,25 @@ contract LiquidatorTest is BaseTest {
 
     assertEq(loanToken.balanceOf(address(liquidator)), loanAmount, "loanToken balance");
     assertEq(collateralToken.balanceOf(address(liquidator)), 0, "collateralToken balance");
+  }
+
+  function testSellBNB() public {
+    uint256 collateralAmount = 1e18;
+    uint256 loanAmount = 1e18;
+    deal(address(liquidator), collateralAmount);
+
+    vm.startPrank(BOT);
+    liquidator.sellBNB(
+      address(oneInch),
+      address(loanToken),
+      collateralAmount,
+      loanAmount,
+      abi.encodeWithSelector(oneInch.swap.selector, BNB_ADDRESS, address(loanToken), collateralAmount, loanAmount)
+    );
+    vm.stopPrank();
+
+    assertEq(loanToken.balanceOf(address(liquidator)), loanAmount, "loanToken balance");
+    assertEq(address(liquidator).balance, 0, "BNB balance");
   }
 
   function testBatchSetMarketWhitelist() public {
