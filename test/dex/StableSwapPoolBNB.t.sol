@@ -523,4 +523,13 @@ contract StableSwapPoolBNBTest is Test {
     pool.remove_liquidity(1 ether, min_amounts);
     vm.stopPrank();
   }
+
+  function test_changeOracle() public {
+    address newOracle = makeAddr("newOracle");
+    vm.mockCall(newOracle, abi.encodeWithSelector(IOracle.peek.selector, address(token0)), abi.encode(8466e7));
+    vm.mockCall(newOracle, abi.encodeWithSelector(IOracle.peek.selector, token1), abi.encode(830e8));
+    vm.prank(manager);
+    pool.changeOracle(newOracle);
+    assertEq(pool.oracle(), newOracle);
+  }
 }
