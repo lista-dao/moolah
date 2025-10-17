@@ -49,9 +49,6 @@ struct Signature {
 /// @dev This interface is used for factorizing IMoolahStaticTyping and IMoolah.
 /// @dev Consider using the IMoolah interface instead of this one.
 interface IMoolahBase {
-  /// @notice Deprecated value. upgradeable version of Moolah does not use an immutable cache and recomputes the domain separator each time
-  function DOMAIN_SEPARATOR() external view returns (bytes32);
-
   /// @notice The EIP-712 domain separator used in the encoding of the signatures for `setAuthorizationWithSig`.
   function domainSeparator() external view returns (bytes32);
 
