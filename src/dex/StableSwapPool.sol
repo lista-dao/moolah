@@ -152,6 +152,9 @@ contract StableSwapPool is
     _grantRole(DEFAULT_ADMIN_ROLE, _owner);
     _grantRole(MANAGER, _manager);
     _grantRole(PAUSER, _pauser);
+
+    emit ChangeOracle(_oracle);
+    emit ChangePriceDiffThreshold(price0DiffThreshold, price1DiffThreshold);
   }
 
   function get_A() internal view returns (uint256) {
@@ -818,6 +821,19 @@ contract StableSwapPool is
     price0DiffThreshold = _price0DiffThreshold;
     price1DiffThreshold = _price1DiffThreshold;
     emit ChangePriceDiffThreshold(_price0DiffThreshold, _price1DiffThreshold);
+  }
+
+  /// @dev change oracle address
+  /// @param _oracle new oracle address
+  function changeOracle(address _oracle) external onlyRole(MANAGER) {
+    require(_oracle != address(0), "ZERO Address for oracle");
+    require(_oracle != oracle, "No change in oracle");
+
+    IOracle(oracle).peek(coins[0]);
+    IOracle(oracle).peek(coins[1]);
+    oracle = _oracle;
+
+    emit ChangeOracle(_oracle);
   }
 
   /// @dev Pause the contract. Only `remove_liquidity` is allowed.
