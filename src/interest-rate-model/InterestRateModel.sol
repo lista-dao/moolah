@@ -35,6 +35,9 @@ contract InterestRateModel is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
   /// @notice Emitted when the borrow rate cap for a market is updated.
   event BorrowRateCapUpdate(Id indexed id, uint256 oldRateCap, uint256 newRateCap);
 
+  /// @notice Emitted when the borrow rate floor for a market is updated.
+  event BorrowRateFloorUpdate(Id indexed id, uint256 oldRateFloor, uint256 newRateFloor);
+
   /* IMMUTABLES */
 
   /// @inheritdoc IInterestRateModel
@@ -50,6 +53,9 @@ contract InterestRateModel is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
 
   /// @inheritdoc IInterestRateModel
   uint256 public minCap;
+
+  /// @inheritdoc IInterestRateModel
+  mapping(Id => uint256) public rateFloor;
 
   bytes32 public constant MANAGER = keccak256("MANAGER");
   bytes32 public constant BOT = keccak256("BOT");
@@ -159,6 +165,10 @@ contract InterestRateModel is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
     uint256 avgRate = uint256(_curve(avgRateAtTarget, err));
     if (avgRate > _cap) avgRate = _cap;
 
+    // Adjust rate to make sure the rate >= floor
+    uint256 floor = rateFloor[id];
+    if (avgRate < floor) avgRate = floor;
+
     return (avgRate, endRateAtTarget);
   }
 
@@ -188,9 +198,26 @@ contract InterestRateModel is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
   function updateRateCap(Id id, uint256 newRateCap) external onlyRole(BOT) {
     uint256 oldCap = rateCap[id];
     require(newRateCap >= minCap && newRateCap != oldCap, "invalid rate cap");
+    require(rateFloor[id] <= newRateCap, "invalid new cap vs floor");
+
     rateCap[id] = newRateCap;
 
     emit BorrowRateCapUpdate(id, oldCap, newRateCap);
+  }
+
+  /// @dev Updates the minimum borrow rate for a market.
+  function updateRateFloor(Id id, uint256 newRateFloor) external onlyRole(BOT) {
+    uint256 oldFloor = rateFloor[id];
+    require(newRateFloor != oldFloor, "invalid rate floor");
+
+    // rate floor must be <= rate cap
+    uint256 _cap = rateCap[id] != 0 ? rateCap[id] : ConstantsLib.DEFAULT_RATE_CAP;
+    if (_cap < minCap) _cap = minCap;
+    require(newRateFloor <= _cap, "invalid rate floor vs cap");
+
+    rateFloor[id] = newRateFloor;
+
+    emit BorrowRateFloorUpdate(id, oldFloor, newRateFloor);
   }
 
   /// @dev Updates the minimum borrow rate cap for all markets.
