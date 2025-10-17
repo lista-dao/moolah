@@ -509,6 +509,10 @@ contract StableSwapPool is
     }
     address jAddress = coins[j];
     transfer_out(jAddress, dy);
+
+    // un-normalizing the dy_fee before emitted
+    dy_fee = (dy_fee * PRECISION) / RATES[j];
+
     emit TokenExchange(msg.sender, i, dx, j, dy, dy_fee, dy_admin_fee);
   }
 
