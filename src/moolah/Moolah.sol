@@ -42,11 +42,6 @@ contract Moolah is
   using MarketParamsLib for MarketParams;
   using EnumerableSet for EnumerableSet.AddressSet;
 
-  /* IMMUTABLES */
-
-  /// @inheritdoc IMoolahBase
-  bytes32 public immutable DOMAIN_SEPARATOR;
-
   /* STORAGE */
 
   /// @inheritdoc IMoolahBase
@@ -87,7 +82,6 @@ contract Moolah is
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor() {
     _disableInitializers();
-    DOMAIN_SEPARATOR = keccak256(abi.encode(DOMAIN_TYPEHASH, block.chainid, address(this)));
   }
 
   /// @param admin The new admin of the contract.
