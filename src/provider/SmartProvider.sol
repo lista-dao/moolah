@@ -126,6 +126,29 @@ contract SmartProvider is
   }
 
   /**
+   * @dev Supplies existing stableswap LP tokens as collateral in Moolah.
+   * @param marketParams The market parameters.
+   * @param onBehalf The address of the position owner.
+   * @param lpAmount The amount of LP tokens to supply.
+   */
+  function supplyDexLp(MarketParams calldata marketParams, address onBehalf, uint256 lpAmount) external nonReentrant {
+    require(lpAmount > 0, "zero lp amount");
+    require(marketParams.collateralToken == TOKEN, "invalid collateral token");
+
+    // transfer lp from the user
+    IERC20(dexLP).safeTransferFrom(msg.sender, address(this), lpAmount);
+
+    // 1:1 mint collateral token
+    IStableSwapLPCollateral(TOKEN).mint(address(this), lpAmount);
+
+    // supply collateral to moolah
+    IERC20(TOKEN).safeIncreaseAllowance(address(MOOLAH), lpAmount);
+    MOOLAH.supplyCollateral(marketParams, lpAmount, onBehalf, "");
+
+    emit SupplyCollateral(onBehalf, TOKEN, lpAmount, 0, 0);
+  }
+
+  /**
    * @dev Supplies liquidity to the stableswap pool and uses the resulting LP tokens as collateral in Moolah.
    * @param marketParams The market parameters.
    * @param onBehalf The address of the position owner.
