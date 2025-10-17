@@ -106,8 +106,9 @@ contract StableSwapPoolERC20Test is Test {
     assertEq(pool.coins(1), address(token1));
     assertEq(address(pool.token()), address(lp));
 
-    assertEq(pool.initial_A(), _A);
-    assertEq(pool.future_A(), _A);
+    assertEq(pool.A_PRECISION(), 100);
+    assertEq(pool.initial_A(), _A * pool.A_PRECISION());
+    assertEq(pool.future_A(), _A * pool.A_PRECISION());
     assertEq(pool.fee(), _fee);
     assertEq(pool.admin_fee(), _adminFee);
     assertEq(pool.bnb_gas(), 4029);

@@ -38,6 +38,7 @@ contract StableSwapPool is
 
   uint256 public constant ADMIN_ACTIONS_DELAY = 3 days;
   uint256 public constant MIN_RAMP_TIME = 1 days;
+  uint256 public constant A_PRECISION = 100;
 
   address[N_COINS] public coins;
   uint256[N_COINS] public balances;
@@ -135,8 +136,8 @@ contract StableSwapPool is
       RATES[i] = PRECISION * PRECISION_MUL[i];
     }
     coins = _coins;
-    initial_A = _A;
-    future_A = _A;
+    initial_A = _A * A_PRECISION;
+    future_A = _A * A_PRECISION;
     fee = _fee;
     admin_fee = _admin_fee;
     token = _LP;
@@ -173,7 +174,7 @@ contract StableSwapPool is
   }
 
   function A() external view returns (uint256) {
-    return get_A();
+    return get_A() / A_PRECISION;
   }
 
   function _xp() internal view returns (uint256[N_COINS] memory result) {
@@ -208,7 +209,9 @@ contract StableSwapPool is
         D_P = (D_P * D) / (xp[k] * N_COINS); // If division by 0, this will be borked: only withdrawal will work. And that is good
       }
       Dprev = D;
-      D = ((Ann * S + D_P * N_COINS) * D) / ((Ann - 1) * D + (N_COINS + 1) * D_P);
+      D =
+        (((Ann * S) / A_PRECISION + D_P * N_COINS) * D) /
+        (((Ann - A_PRECISION) * D) / A_PRECISION + (N_COINS + 1) * D_P);
       // Equality with the precision of 1
       if (D > Dprev) {
         if (D - Dprev <= 1) {
@@ -372,8 +375,8 @@ contract StableSwapPool is
       S_ += _x;
       c = (c * D) / (_x * N_COINS);
     }
-    c = (c * D) / (Ann * N_COINS);
-    uint256 b = S_ + D / Ann; // - D
+    c = (c * D * A_PRECISION) / (Ann * N_COINS);
+    uint256 b = S_ + (D * A_PRECISION) / Ann; // - D
     uint256 y_prev;
     uint256 y = D;
 
@@ -602,8 +605,8 @@ contract StableSwapPool is
       S_ += _x;
       c = (c * D) / (_x * N_COINS);
     }
-    c = (c * D) / (Ann * N_COINS);
-    uint256 b = S_ + D / Ann;
+    c = (c * D * A_PRECISION) / (Ann * N_COINS);
+    uint256 b = S_ + (D * A_PRECISION) / Ann;
     uint256 y_prev;
     uint256 y = D;
 
@@ -715,6 +718,8 @@ contract StableSwapPool is
     require(_future_time >= block.timestamp + MIN_RAMP_TIME, "dev: insufficient time");
 
     uint256 _initial_A = get_A();
+    _future_A = _future_A * A_PRECISION;
+
     require(_future_A > 0 && _future_A < MAX_A, "_future_A must be between 0 and MAX_A");
     require(
       (_future_A >= _initial_A && _future_A <= _initial_A * MAX_A_CHANGE) ||
