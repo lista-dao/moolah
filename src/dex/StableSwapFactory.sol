@@ -55,8 +55,8 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
   }
   /**
    * @dev createSwapLP
-   * @param _tokenA: Addresses of ERC20 conracts
-   * @param _tokenB: Addresses of ERC20 conracts
+   * @param _tokenA: Addresses of ERC20 contracts
+   * @param _tokenB: Addresses of ERC20 contracts
    * @param _name: name of LP token
    * @param _symbol: symbol of LP token
    * @return lpToken: Address of LP tokena
@@ -66,7 +66,7 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
     address _tokenB,
     string memory _name,
     string memory _symbol
-  ) internal onlyRole(DEPLOYER) returns (address) {
+  ) internal returns (address) {
     require(lpImpl != address(0), "LP implementation not set");
 
     // create LP token
