@@ -14,7 +14,7 @@ import "../../src/dex/interfaces/IStableSwap.sol";
 
 import { StableSwapFactory } from "../../src/dex/StableSwapFactory.sol";
 
-contract StableSwapPoolERC20Test is Test {
+contract StableSwapPoolDpsTest is Test {
   uint256 constant FEE_DENOMINATOR = 1e10;
   StableSwapFactory factory;
 
@@ -52,14 +52,15 @@ contract StableSwapPoolERC20Test is Test {
     assertTrue(factory.hasRole(factory.DEPLOYER(), deployer1));
     assertTrue(factory.hasRole(factory.DEPLOYER(), deployer2));
 
-    token0 = new ERC20Mock();
+    token0 = new ERC20Mock(); // token0 has 18 decimals
     token1 = new ERC20Mock();
+    token1.setDecimals(6); // token1 has 6 decimals
 
     token0.setBalance(userA, 10000 ether);
-    token1.setBalance(userA, 10000 ether);
+    token1.setBalance(userA, 10000 ether / 1e12); // token1 has 6 decimals
 
     token0.setBalance(userB, 10000 ether);
-    token1.setBalance(userC, 10000 ether);
+    token1.setBalance(userC, 10000 ether / 1e12); // token1 has 6 decimals
 
     // initialize parameters
     address[2] memory tokens;
@@ -76,10 +77,8 @@ contract StableSwapPoolERC20Test is Test {
 
     address lpImpl = address(new StableSwapLP());
     address poolImpl = address(new StableSwapPool(address(factory)));
-    vm.startPrank(admin);
-    factory.setLpImpl(lpImpl);
-    factory.setSwapImpl(poolImpl);
-    vm.stopPrank();
+    vm.prank(admin);
+    factory.setImpls(lpImpl, poolImpl);
     assertEq(factory.lpImpl(), lpImpl);
     assertEq(factory.swapImpl(), poolImpl);
 
@@ -126,10 +125,10 @@ contract StableSwapPoolERC20Test is Test {
     assertEq(oraclePrices[1], 100000e18); // adjust to 18 decimals
 
     // check precision nomalizers and rates
-    assertEq(pool.PRECISION_MUL(0), 1); // slisBnb has 18 decimals
-    assertEq(pool.PRECISION_MUL(1), 1); // Bnb has 18 decimals
+    assertEq(pool.PRECISION_MUL(0), 1); // token0 has 18 decimals
+    assertEq(pool.PRECISION_MUL(1), 1e12); // token1 has 6 decimals, so 10^(18-6) = 1e12, but rate adjusts it back to 1e18
     assertEq(pool.RATES(0), 1e18);
-    assertEq(pool.RATES(1), 1e18);
+    assertEq(pool.RATES(1), (1e18 * 1e18) / 1e6); // token1 has 6 decimals
   }
 
   function test_seeding() public {
@@ -137,11 +136,11 @@ contract StableSwapPoolERC20Test is Test {
 
     // Approve tokens for the pool
     token0.approve(address(pool), 1000 ether);
-    token1.approve(address(pool), 1000 ether);
+    token1.approve(address(pool), 1000 ether / 1e12); // token1 has 6 decimals
 
     // Add liquidity
     uint256 amount0 = 1000 ether;
-    uint256 amount1 = 1000 ether;
+    uint256 amount1 = 1000 ether / 1e12; // token1 has 6 decimals
 
     uint min_mint_amount = 0;
     pool.add_liquidity([amount0, amount1], min_mint_amount);
@@ -179,8 +178,8 @@ contract StableSwapPoolERC20Test is Test {
     // validate the price after swap
     uint256 oraclePrice0 = IOracle(oracle).peek(address(token0));
     uint256 oraclePrice1 = IOracle(oracle).peek(address(token1));
-    uint256 token1PriceAfter = (100 ether * oraclePrice0) / pool.get_dy(0, 1, 100 ether);
-    uint256 token0PriceAfter = (100 ether * oraclePrice1) / pool.get_dy(1, 0, 100 ether);
+    uint256 token1PriceAfter = (100 ether * oraclePrice0) / 1e12 / pool.get_dy(0, 1, 100 ether);
+    uint256 token0PriceAfter = (100 ether * oraclePrice1) / pool.get_dy(1, 0, 100 ether / 1e12); // token1 has 6 decimals
 
     assertGe(token1PriceAfter, (oraclePrice1 * 97) / 100); // 3% price diff tolerance
     assertLe(token1PriceAfter, (oraclePrice1 * 103) / 100); // 3% price diff tolerance
@@ -190,15 +189,15 @@ contract StableSwapPoolERC20Test is Test {
     uint256 userBBalance0After = token0.balanceOf(userB);
     uint256 userBBalance1After = token1.balanceOf(userB);
     assertEq(userBBalance0After, userBBalance0Before - amountIn);
-    assertEq(userBBalance1After, userBBalance1Before + amountOut);
+    assertApproxEqAbs(userBBalance1After, userBBalance1Before + amountOut, 1);
   }
 
   function test_swap_token1_to_token0_given_dy() public {
     test_seeding();
 
-    uint256 token0AmtOut = 1 ether; // amount out
+    uint256 minToken0AmtOut = 1 ether; // amount out
     uint256 max_dx = 1.2 ether; // max amount in
-    uint256 expect_dx = poolInfo.get_dx(address(pool), 1, 0, token0AmtOut, max_dx); // expect token1 amount in
+    uint256 expect_dx = poolInfo.get_dx(address(pool), 1, 0, minToken0AmtOut, max_dx); // expect token1 amount in
     assertGe(max_dx, expect_dx);
     (uint256 exFee, uint256 exAdminFee) = poolInfo.get_exchange_fee(address(pool), 1, 0, expect_dx);
     uint256 token0BalanceBefore = token0.balanceOf(userC);
@@ -211,16 +210,16 @@ contract StableSwapPoolERC20Test is Test {
     uint256 adminBalance1Before = pool.admin_balances(1);
 
     vm.startPrank(userC);
-    token1.approve(address(pool), 10 ether);
-    pool.exchange(1, 0, expect_dx, token0AmtOut); // 1: token1, 0: token0
+    token1.approve(address(pool), 10 ether / 1e12); // token1 has 6 decimals
+    pool.exchange(1, 0, expect_dx, minToken0AmtOut); // 1: token1, 0: token0
     vm.stopPrank();
 
-    assertEq(token0.balanceOf(userC), token0BalanceBefore + token0AmtOut);
-    assertEq(token1.balanceOf(userC), token1BalanceBefore - expect_dx);
-    assertEq(pool.balances(0), poolReserve0Before - token0AmtOut - exAdminFee);
-    assertEq(pool.balances(1), poolReserve1Before + expect_dx);
-    assertEq(token0.balanceOf(address(pool)), poolBalance0Before - token0AmtOut);
-    assertEq(token1.balanceOf(address(pool)), poolBalance1Before + expect_dx);
+    assertApproxEqAbs(token0.balanceOf(userC), token0BalanceBefore + minToken0AmtOut, 1e12); // allow 1e-6 slippage
+    assertEq(token1.balanceOf(userC), token1BalanceBefore - expect_dx); // expect_dx has 6 decimals
+    assertApproxEqAbs(pool.balances(0), poolReserve0Before - minToken0AmtOut - exAdminFee, 1e12); // allow 1e-6 slippage
+    assertEq(pool.balances(1), poolReserve1Before + expect_dx); // expect_dx has 6 decimals
+    assertApproxEqAbs(token0.balanceOf(address(pool)), poolBalance0Before - minToken0AmtOut, 1e12); // allow 1e-6 slippage
+    assertEq(token1.balanceOf(address(pool)), poolBalance1Before + expect_dx); // expect_dx has 6 decimals
     assertEq(pool.admin_balances(0), adminBalance0Before + exAdminFee);
     assertEq(pool.admin_balances(1), adminBalance1Before);
     assertGt(pool.get_virtual_price(), 1e18); // virtual price should increase after swap
@@ -229,10 +228,10 @@ contract StableSwapPoolERC20Test is Test {
     test_swap_token1_to_token0_given_dy();
 
     // UserB adds liquidity proportionally
-    deal(address(token1), userB, 10000 ether);
+    deal(address(token1), userB, 10000 ether / 1e12); // token1 has 6 decimals
     deal(address(token0), userB, 10000 ether);
 
-    uint256 token1Amount = 100 ether;
+    uint256 token1Amount = 100 ether / 1e12; // token1 amount with actual decimals
     uint256 token0Amount = poolInfo.calc_amount_i_perfect(address(pool), 1, token1Amount); // token0 amount based on the reserve ratio
 
     uint256 userBBalance0Before = token0.balanceOf(userB);
@@ -310,7 +309,7 @@ contract StableSwapPoolERC20Test is Test {
     assertGt(pool.get_virtual_price(), virtualPriceBefore); // virtual price should increase after liquidity addition with fee
 
     uint256[2] memory amountsAfter = poolInfo.get_coins_amount_of(address(pool), userB);
-    uint256 amountInToken0 = amountsAfter[0] + amountsAfter[1]; // token1 has same price as token0
+    uint256 amountInToken0 = amountsAfter[0] + amountsAfter[1] * 1e12; // token1 has 6 decimals
     assertGe(amountInToken0, (10 ether * 995) / 1000);
   }
   function test_add_liquidity_imbalance() public {
@@ -318,8 +317,8 @@ contract StableSwapPoolERC20Test is Test {
 
     // UserB adds liquidity imbalanced
     uint256 token0Amount = 10 ether;
-    uint256 token1Amount = 5 ether;
-    deal(address(token1), userB, 10000 ether);
+    uint256 token1Amount = 5 ether / 1e12; // token1 has 6 decimals
+    deal(address(token1), userB, 10000 ether / 1e12); // token1 has 6 decimals
 
     uint256 userBBalance0Before = token0.balanceOf(userB);
     uint256 userBBalance1Before = token1.balanceOf(userB);
@@ -356,7 +355,7 @@ contract StableSwapPoolERC20Test is Test {
     assertEq(pool.admin_balances(1), aminFee1 + adminFee[1]);
     assertGt(pool.get_virtual_price(), 1e18); // virtual price should increase after liquidity addition with fee
     uint256[2] memory amountsAfter = poolInfo.get_coins_amount_of(address(pool), userB);
-    uint256 amountInToken0 = amountsAfter[0] + (amountsAfter[1]); // token1 has same price as token0
+    uint256 amountInToken0 = amountsAfter[0] + amountsAfter[1] * 1e12; // token1 has 6 decimals
     assertGe(amountInToken0, (token0Amount * 995) / 1000);
   }
 
@@ -369,7 +368,7 @@ contract StableSwapPoolERC20Test is Test {
     uint256[2] memory min_amounts = poolInfo.calc_coins_amount(address(pool), 1 ether);
     lp.approve(address(pool), 1 ether);
 
-    uint256 spotPrice0 = pool.get_dy(1, 0, 1e12); // token0 per token1; use tiny dx
+    uint256 spotPrice0 = pool.get_dy(1, 0, 1); // token0 per token1; use tiny dx
     uint256 spotPrice1 = pool.get_dy(0, 1, 1e12); // token1 per token0
 
     uint256 userABalance0Before = token0.balanceOf(userA);
@@ -390,7 +389,7 @@ contract StableSwapPoolERC20Test is Test {
     assertEq(pool.balances(1), token1ReserveBefore - (userABalance1After - userABalance1Before));
     assertEq(lp.totalSupply(), totalSupply - 1 ether);
     // spot price should not move
-    uint256 spotPrice0After = pool.get_dy(1, 0, 1e12); // token0 per token1
+    uint256 spotPrice0After = pool.get_dy(1, 0, 1); // token0 per token1
     uint256 spotPrice1After = pool.get_dy(0, 1, 1e12); // token1 per token0
 
     assertApproxEqAbs(spotPrice0After, spotPrice0, 2); // allow 2 wei difference
@@ -406,8 +405,8 @@ contract StableSwapPoolERC20Test is Test {
     vm.startPrank(userA);
 
     // remove liquidity; recieving Bnb only, swap fee are in token1
-    (uint256 swapFee, uint256 adminFee) = poolInfo.get_remove_liquidity_one_coin_fee(address(pool), 1 ether, 1);
-    uint256 expectToken1Amt = pool.calc_withdraw_one_coin(1 ether, 1);
+    (uint256 swapFee, uint256 adminFee) = poolInfo.get_remove_liquidity_one_coin_fee(address(pool), 1 ether, 1); // 1 ether of lp amount
+    uint256 expectToken1Amt = pool.calc_withdraw_one_coin(1 ether, 1); // 1 ether of lp amount
 
     uint256 userABalance0Before = token0.balanceOf(userA);
     uint256 userABalance1Before = token1.balanceOf(userA);
@@ -440,7 +439,7 @@ contract StableSwapPoolERC20Test is Test {
     vm.startPrank(userA);
 
     // remove liquidity imbalanced
-    uint256[2] memory amounts = [uint256(10 ether), uint256(5 ether)]; // withdraw 10 slisBnb and 5 Bnb
+    uint256[2] memory amounts = [uint256(10 ether), uint256(5 ether) / 1e12]; // token1 has 6 decimals
     (uint256[2] memory swapFee, uint256[2] memory adminFee) = poolInfo.get_remove_liquidity_imbalance_fee(
       address(pool),
       amounts
