@@ -539,8 +539,7 @@ contract SmartProviderTest is Test {
       user2,
       amounts[0],
       amounts[1],
-      supplyAmount - 10, // minus 10 wei to avoid rounding issue
-      bytes("")
+      supplyAmount - 10 // minus 10 wei to avoid rounding issue
     );
     // check user2 borrow limit
     (, , uint256 user2Collateral) = moolah.position(marketParams.id(), user2);
