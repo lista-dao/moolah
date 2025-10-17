@@ -211,6 +211,33 @@ contract SmartProviderTest is Test {
     moolah.createMarket(marketParams);
   }
 
+  function test_supplyDexLp() public {
+    // user2 supply 1000 LP tokens as collateral
+    uint256 supplyAmount = 1000 ether;
+
+    deal(address(lp), user2, supplyAmount);
+
+    vm.startPrank(user2);
+    vm.expectRevert();
+    smartProvider.supplyDexLp(marketParams, user2, supplyAmount);
+    vm.expectRevert("zero lp amount");
+    smartProvider.supplyDexLp(marketParams, user2, 0);
+
+    lp.approve(address(smartProvider), supplyAmount);
+    smartProvider.supplyDexLp(marketParams, user2, supplyAmount);
+
+    // Check lp balance and collateral minting
+    uint256 mintedLp = lp.balanceOf(address(smartProvider));
+    assertEq(mintedLp, supplyAmount);
+    assertEq(lpCollateral.totalSupply(), mintedLp);
+    uint256 lpCollateralBalance = lpCollateral.balanceOf(address(moolah));
+    assertEq(lpCollateralBalance, mintedLp);
+    (, , uint256 user2Collateral) = moolah.position(marketParams.id(), user2);
+    assertEq(user2Collateral, mintedLp);
+
+    vm.stopPrank();
+  }
+
   function test_supplyCollateral_perfect() public {
     // user2 supply 1000 LP tokens as collateral
     uint256 supplyAmount = 1000 ether;
