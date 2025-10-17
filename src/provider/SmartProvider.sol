@@ -154,10 +154,6 @@ contract SmartProvider is
     }
     require(amount0 > 0 || amount1 > 0, "invalid amounts");
 
-    // validate slippage before adding liquidity
-    uint256 expectLpToMint = IStableSwapPoolInfo(dexInfo).get_add_liquidity_mint_amount(dex, [amount0, amount1]);
-    require(expectLpToMint >= minLpAmount, "slippage too high");
-
     // add liquidity to the stableswap pool
     uint256 actualLpAmount = IERC20(dexLP).balanceOf(address(this));
     if (token0 == BNB_ADDRESS) {
@@ -178,7 +174,6 @@ contract SmartProvider is
     // validate the actual LP amount minted
     actualLpAmount = IERC20(dexLP).balanceOf(address(this)) - actualLpAmount;
     require(actualLpAmount > 0, "no lp minted");
-    require(actualLpAmount >= minLpAmount, "actual slippage too high");
 
     // 1:1 mint collateral token
     IStableSwapLPCollateral(TOKEN).mint(address(this), actualLpAmount);
@@ -252,14 +247,11 @@ contract SmartProvider is
 
     // validate slippage before removing liquidity
     uint256[2] memory amounts = [token0Amount, token1Amount];
-    uint256 expectBurnAmount = IStableSwap(dex).calc_token_amount(amounts, false);
-    require(expectBurnAmount <= maxCollateralAmount, "slippage too high");
 
     // remove liquidity from the stableswap pool
     uint256 actualBurnAmount = IERC20(dexLP).balanceOf(address(this));
     IStableSwap(dex).remove_liquidity_imbalance(amounts, maxCollateralAmount);
     actualBurnAmount = actualBurnAmount - IERC20(dexLP).balanceOf(address(this));
-    require(actualBurnAmount <= maxCollateralAmount, "actual slippage too high");
 
     // withdraw collateral
     MOOLAH.withdrawCollateral(marketParams, actualBurnAmount, onBehalf, address(this));
@@ -296,15 +288,10 @@ contract SmartProvider is
     require(marketParams.collateralToken == TOKEN, "invalid collateral token");
     require(i == 0 || i == 1, "invalid token index");
 
-    // validate expectAmount of token i before removing liquidity
-    uint256 expectAmount = IStableSwap(dex).calc_withdraw_one_coin(collateralAmount, i);
-    require(expectAmount >= minTokenAmount, "slippage too high");
-
     uint256 actualAmount = getTokenBalance(i);
     IStableSwap(dex).remove_liquidity_one_coin(collateralAmount, i, minTokenAmount);
 
     actualAmount = getTokenBalance(i) - actualAmount;
-    require(actualAmount >= minTokenAmount, "slippage too high");
 
     // withdraw collateral
     MOOLAH.withdrawCollateral(marketParams, collateralAmount, onBehalf, address(this));
@@ -386,10 +373,6 @@ contract SmartProvider is
     uint256 minAmount0,
     uint256 minAmount1
   ) private returns (uint256 token0Amount, uint256 token1Amount) {
-    uint256[2] memory expectAmount = IStableSwapPoolInfo(dexInfo).calc_coins_amount(dex, lpAmount);
-    require(minAmount0 <= expectAmount[0], "Invalid token0 amount");
-    require(minAmount1 <= expectAmount[1], "Invalid token1 amount");
-
     token0Amount = getTokenBalance(0);
     token1Amount = getTokenBalance(1);
 
@@ -399,8 +382,6 @@ contract SmartProvider is
     // validate the actual token amounts after removing liquidity
     token0Amount = getTokenBalance(0) - token0Amount;
     token1Amount = getTokenBalance(1) - token1Amount;
-    require(token0Amount >= minAmount0, "slippage too high for token0");
-    require(token1Amount >= minAmount1, "slippage too high for token1");
   }
 
   /// @dev Returns whether the sender is authorized to manage `onBehalf`'s positions.

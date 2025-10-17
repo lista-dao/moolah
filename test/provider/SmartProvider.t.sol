@@ -233,7 +233,7 @@ contract SmartProviderTest is Test {
       supplyAmount
     );
 
-    vm.expectRevert("slippage too high");
+    vm.expectRevert("Slippage screwed you");
     smartProvider.supplyCollateral{ value: amounts[1] }(
       marketParams,
       user2,
