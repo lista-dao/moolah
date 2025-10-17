@@ -41,7 +41,7 @@ contract AuthorizationIntegrationTest is BaseTest {
     authorization.authorizer = vm.addr(privateKey);
 
     Signature memory sig;
-    bytes32 digest = SigUtils.getTypedDataHash(moolah.DOMAIN_SEPARATOR(), authorization);
+    bytes32 digest = SigUtils.getTypedDataHash(moolah.domainSeparator(), authorization);
     (sig.v, sig.r, sig.s) = vm.sign(privateKey, digest);
 
     _forward(blocks);
@@ -59,7 +59,7 @@ contract AuthorizationIntegrationTest is BaseTest {
     authorization.nonce = 0;
 
     Signature memory sig;
-    bytes32 digest = SigUtils.getTypedDataHash(moolah.DOMAIN_SEPARATOR(), authorization);
+    bytes32 digest = SigUtils.getTypedDataHash(moolah.domainSeparator(), authorization);
     (sig.v, sig.r, sig.s) = vm.sign(privateKey, digest);
 
     vm.expectRevert(bytes(ErrorsLib.INVALID_SIGNATURE));
@@ -76,7 +76,7 @@ contract AuthorizationIntegrationTest is BaseTest {
     authorization.authorizer = vm.addr(privateKey);
 
     Signature memory sig;
-    bytes32 digest = SigUtils.getTypedDataHash(moolah.DOMAIN_SEPARATOR(), authorization);
+    bytes32 digest = SigUtils.getTypedDataHash(moolah.domainSeparator(), authorization);
     (sig.v, sig.r, sig.s) = vm.sign(privateKey, digest);
 
     vm.expectRevert(bytes(ErrorsLib.INVALID_NONCE));
@@ -93,7 +93,7 @@ contract AuthorizationIntegrationTest is BaseTest {
     authorization.authorizer = vm.addr(privateKey);
 
     Signature memory sig;
-    bytes32 digest = SigUtils.getTypedDataHash(moolah.DOMAIN_SEPARATOR(), authorization);
+    bytes32 digest = SigUtils.getTypedDataHash(moolah.domainSeparator(), authorization);
     (sig.v, sig.r, sig.s) = vm.sign(privateKey, digest);
 
     moolah.setAuthorizationWithSig(authorization, sig);
@@ -112,7 +112,7 @@ contract AuthorizationIntegrationTest is BaseTest {
     authorization.authorizer = vm.addr(privateKey);
 
     Signature memory sig;
-    bytes32 digest = SigUtils.getTypedDataHash(moolah.DOMAIN_SEPARATOR(), authorization);
+    bytes32 digest = SigUtils.getTypedDataHash(moolah.domainSeparator(), authorization);
     (sig.v, sig.r, sig.s) = vm.sign(privateKey, digest);
 
     moolah.setAuthorizationWithSig(authorization, sig);
