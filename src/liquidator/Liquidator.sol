@@ -9,7 +9,6 @@ import "./ILiquidator.sol";
 
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
-import { Id } from "moolah/interfaces/IMoolah.sol";
 import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
 
 contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
@@ -145,6 +144,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     require(tokenWhitelist[tokenIn], NotWhitelisted());
     require(tokenWhitelist[tokenOut], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());
+    require(amountIn > 0, "amountIn zero");
 
     require(SafeTransferLib.balanceOf(tokenIn, address(this)) >= amountIn, ExceedAmount());
 
@@ -162,6 +162,41 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     require(actualAmountOut >= amountOutMin, NoProfit());
 
     emit SellToken(pair, tokenIn, tokenOut, actualAmountIn, actualAmountOut);
+  }
+
+  /// @dev sell BNB.
+  /// @param pair The address of the pair.
+  /// @param tokenOut The address of the output token.
+  /// @param amountIn The BNB amount to sell.
+  /// @param amountOutMin The minimum amount to receive.
+  /// @param swapData The swap data.
+  function sellBNB(
+    address pair,
+    address tokenOut,
+    uint256 amountIn,
+    uint256 amountOutMin,
+    bytes calldata swapData
+  ) external onlyRole(BOT) {
+    require(tokenWhitelist[BNB_ADDRESS], NotWhitelisted());
+    require(tokenWhitelist[tokenOut], NotWhitelisted());
+    require(pairWhitelist[pair], NotWhitelisted());
+    require(amountIn > 0, "amountIn zero");
+
+    require(address(this).balance >= amountIn, ExceedAmount());
+
+    uint256 beforeTokenIn = address(this).balance;
+    uint256 beforeTokenOut = SafeTransferLib.balanceOf(tokenOut, address(this));
+
+    (bool success, ) = pair.call{ value: amountIn }(swapData);
+    require(success, SwapFailed());
+
+    uint256 actualAmountIn = beforeTokenIn - address(this).balance;
+    uint256 actualAmountOut = SafeTransferLib.balanceOf(tokenOut, address(this)) - beforeTokenOut;
+
+    require(actualAmountIn <= amountIn, ExceedAmount());
+    require(actualAmountOut >= amountOutMin, NoProfit());
+
+    emit SellToken(pair, BNB_ADDRESS, tokenOut, amountIn, actualAmountOut);
   }
 
   /// @dev flash liquidates a position.
@@ -306,6 +341,17 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     return (_seizedAssets, _repaidAssets);
   }
 
+  /// @dev flash liquidates a position with smart collateral.
+  /// @param id The id of the market.
+  /// @param borrower The address of the borrower.
+  /// @param smartProvider The address of the smart collateral provider.
+  /// @param seizedAssets The amount of assets to seize.
+  /// @param token0Pair The address of the token0 pair.
+  /// @param token1Pair The address of the token1 pair.
+  /// @param swapToken0Data The swap data for token0.
+  /// @param swapToken1Data The swap data for token1.
+  /// @param payload The payload for the liquidation (min amounts for SmartProvider liquidation).
+  /// @return The actual seized assets and repaid assets.
   function flashLiquidateSmartCollateral(
     bytes32 id,
     address borrower,

@@ -39,6 +39,14 @@ interface ILiquidator {
     bytes calldata swapData
   ) external;
 
+  function sellBNB(
+    address pair,
+    address tokenOut,
+    uint256 amountIn,
+    uint256 amountOutMin,
+    bytes calldata swapData
+  ) external;
+
   function setTokenWhitelist(address token, bool status) external;
 
   function setMarketWhitelist(bytes32 id, bool status) external;
