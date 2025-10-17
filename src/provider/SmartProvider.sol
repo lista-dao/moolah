@@ -372,7 +372,7 @@ contract SmartProvider is
     uint256 lpAmount,
     uint256 minAmount0,
     uint256 minAmount1
-  ) external returns (uint256, uint256) {
+  ) external nonReentrant returns (uint256, uint256) {
     require(liquidator != address(0), ErrorsLib.ZERO_ADDRESS);
     require(lpAmount > 0, "zero seized assets");
     // burn collateral token sent to the liquidator before

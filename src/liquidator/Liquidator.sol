@@ -296,7 +296,6 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     bytes memory payload
   ) external onlyRole(BOT) returns (uint256, uint256) {
     address lpToken = ISmartProvider(smartProvider).dexLP();
-    require(tokenWhitelist[lpToken], NotWhitelisted());
     require(marketWhitelist[id], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
     require(ISmartProvider(smartProvider).TOKEN() == params.collateralToken, "Invalid smart provider");
