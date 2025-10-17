@@ -31,6 +31,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // manager role
+  address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
   event TokenWhitelistChanged(address indexed token, bool added);
   event MarketWhitelistChanged(bytes32 id, bool added);
@@ -39,7 +40,10 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   event SmartLiquidation(
     bytes32 indexed id,
     address indexed lpToken,
+    address indexed collateralToken,
     uint256 lpAmount,
+    uint256 minToken0Amt,
+    uint256 minToken1Amt,
     uint256 amount0,
     uint256 amount1
   );
@@ -165,13 +169,13 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   /// @param borrower The address of the borrower.
   /// @param seizedAssets The amount of assets to seize.
   /// @param pair The address of the pair.
-  /// @param swapData The swap data.
+  /// @param swapCollateralData The swap data to swap collateral to loan token.
   function flashLiquidate(
     bytes32 id,
     address borrower,
     uint256 seizedAssets,
     address pair,
-    bytes calldata swapData
+    bytes calldata swapCollateralData
   ) external onlyRole(BOT) {
     require(marketWhitelist[id], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());
@@ -181,7 +185,24 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
       borrower,
       seizedAssets,
       0,
-      abi.encode(MoolahLiquidateData(params.collateralToken, params.loanToken, seizedAssets, pair, swapData, true))
+      abi.encode(
+        MoolahLiquidateData(
+          params.collateralToken,
+          params.loanToken,
+          seizedAssets,
+          pair,
+          swapCollateralData,
+          true,
+          false,
+          address(0),
+          0,
+          0,
+          address(0),
+          address(0),
+          "",
+          ""
+        )
+      )
     );
   }
 
@@ -202,43 +223,125 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
       borrower,
       seizedAssets,
       repaidShares,
-      abi.encode(MoolahLiquidateData(params.collateralToken, params.loanToken, seizedAssets, address(0), "", false))
+      abi.encode(
+        MoolahLiquidateData(
+          params.collateralToken,
+          params.loanToken,
+          seizedAssets,
+          address(0),
+          "",
+          false,
+          false,
+          address(0),
+          0,
+          0,
+          address(0),
+          address(0),
+          "",
+          ""
+        )
+      )
     );
   }
 
+  /// @dev liquidates a position with smart collateral.
+  /// @param id The id of the market.
+  /// @param borrower The address of the borrower.
+  /// @param smartProvider The address of the smart collateral provider.
+  /// @param seizedAssets The amount of assets to seize.
+  /// @param repaidShares The amount of shares to repay.
+  /// @param payload The payload for the liquidation (min amounts for SmartProvider liquidation).
+  /// @return The actual seized assets and repaid assets.
   function liquidateSmartCollateral(
     bytes32 id,
     address borrower,
     address smartProvider,
     uint256 seizedAssets,
     uint256 repaidShares,
-    bytes memory payload //min amounts for SmartProvider liquidation
-  ) external payable onlyRole(BOT) {
+    bytes memory payload
+  ) external onlyRole(BOT) returns (uint256, uint256) {
     address lpToken = ISmartProvider(smartProvider).dexLP();
     require(tokenWhitelist[lpToken], NotWhitelisted());
     require(marketWhitelist[id], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
+    require(ISmartProvider(smartProvider).TOKEN() == params.collateralToken, "Invalid smart provider");
 
-    uint256 lpBalanceBefore = IERC20(params.collateralToken).balanceOf(address(this));
-    IMoolah(MOOLAH).liquidate(
+    uint256 collBalanceBefore = IERC20(params.collateralToken).balanceOf(address(this));
+    (uint256 minAmount0, uint256 minAmount1) = abi.decode(payload, (uint256, uint256));
+    (uint256 _seizedAssets, uint256 _repaidAssets) = IMoolah(MOOLAH).liquidate(
       params,
       borrower,
       seizedAssets,
       repaidShares,
-      abi.encode(MoolahLiquidateData(params.collateralToken, params.loanToken, seizedAssets, address(0), "", false))
+      abi.encode(
+        MoolahLiquidateData(
+          params.collateralToken,
+          params.loanToken,
+          seizedAssets,
+          address(0),
+          "",
+          false,
+          false,
+          smartProvider, // not used since `swapSmartCollateral` flag is false
+          minAmount0, // not used
+          minAmount1, // not used
+          address(0),
+          address(0),
+          "",
+          ""
+        )
+      )
     );
-    uint256 lpAmount = IERC20(params.collateralToken).balanceOf(address(this)) - lpBalanceBefore;
+    uint256 collAmount = IERC20(params.collateralToken).balanceOf(address(this)) - collBalanceBefore;
+    require(collAmount > 0, "No collateral seized");
 
-    (uint256 minAmount0, uint256 minAmount1) = abi.decode(payload, (uint256, uint256));
-    ISmartProvider(smartProvider).redeemLpCollateral(
-      Id.wrap(id),
+    (uint256 amount0, uint256 amount1) = ISmartProvider(smartProvider).redeemLpCollateral(
       payable(address(this)),
-      lpAmount,
+      collAmount,
       minAmount0,
       minAmount1
     );
 
-    emit SmartLiquidation(id, lpToken, lpAmount, minAmount0, minAmount1);
+    emit SmartLiquidation(id, lpToken, params.collateralToken, collAmount, minAmount0, minAmount1, amount0, amount1);
+    return (_seizedAssets, _repaidAssets);
+  }
+
+  function flashLiquidateSmartCollateral(
+    bytes32 id,
+    address borrower,
+    address smartProvider,
+    uint256 seizedAssets,
+    address token0Pair,
+    address token1Pair,
+    bytes calldata swapToken0Data,
+    bytes calldata swapToken1Data,
+    bytes memory payload
+  ) external onlyRole(BOT) returns (uint256, uint256) {
+    require(marketWhitelist[id], NotWhitelisted());
+    require(pairWhitelist[token0Pair], NotWhitelisted());
+    require(pairWhitelist[token1Pair], NotWhitelisted());
+    IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
+    require(ISmartProvider(smartProvider).TOKEN() == params.collateralToken, "Invalid smart provider");
+    (uint256 minAmount0, uint256 minAmount1) = abi.decode(payload, (uint256, uint256));
+
+    MoolahLiquidateData memory callback = MoolahLiquidateData(
+      params.collateralToken,
+      params.loanToken,
+      seizedAssets,
+      address(0),
+      "",
+      false,
+      true,
+      smartProvider,
+      minAmount0,
+      minAmount1,
+      token0Pair,
+      token1Pair,
+      swapToken0Data,
+      swapToken1Data
+    );
+
+    return IMoolah(MOOLAH).liquidate(params, borrower, seizedAssets, 0, abi.encode(callback));
   }
 
   /// @dev the function will be called by the Moolah contract when liquidate.
@@ -247,18 +350,51 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   function onMoolahLiquidate(uint256 repaidAssets, bytes calldata data) external {
     require(msg.sender == MOOLAH, OnlyMoolah());
     MoolahLiquidateData memory arb = abi.decode(data, (MoolahLiquidateData));
-    if (arb.swap) {
+    if (arb.swapCollateral) {
+      require(!arb.swapSmartCollateral, "only swap collateral or smart collateral");
       uint256 before = SafeTransferLib.balanceOf(arb.loanToken, address(this));
 
-      SafeTransferLib.safeApprove(arb.collateralToken, arb.pair, arb.seized);
-      (bool success, ) = arb.pair.call(arb.swapData);
+      SafeTransferLib.safeApprove(arb.collateralToken, arb.collateralPair, arb.seized);
+      (bool success, ) = arb.collateralPair.call(arb.swapCollateralData);
       require(success, SwapFailed());
 
       uint256 out = SafeTransferLib.balanceOf(arb.loanToken, address(this)) - before;
 
       if (out < repaidAssets) revert NoProfit();
 
-      SafeTransferLib.safeApprove(arb.collateralToken, arb.pair, 0);
+      SafeTransferLib.safeApprove(arb.collateralToken, arb.collateralPair, 0);
+    } else if (arb.swapSmartCollateral) {
+      // redeem lp
+      (uint256 amount0, uint256 amount1) = ISmartProvider(arb.smartProvider).redeemLpCollateral(
+        payable(address(this)),
+        arb.seized,
+        arb.minToken0Amt,
+        arb.minToken1Amt
+      );
+
+      address token0 = ISmartProvider(arb.smartProvider).token(0);
+      address token1 = ISmartProvider(arb.smartProvider).token(1);
+
+      // swap token0 and token1 to loanToken
+      uint256 before = SafeTransferLib.balanceOf(arb.loanToken, address(this));
+      if (amount0 > 0) {
+        if (token0 != BNB_ADDRESS) SafeTransferLib.safeApprove(token0, arb.token0Pair, amount0);
+        uint256 _value = token0 == BNB_ADDRESS ? amount0 : 0;
+        (bool success, ) = arb.token0Pair.call{ value: _value }(arb.swapToken0Data);
+        require(success, SwapFailed());
+      }
+
+      if (amount1 > 0) {
+        if (token1 != BNB_ADDRESS) SafeTransferLib.safeApprove(token1, arb.token1Pair, amount1);
+        uint256 _value = token1 == BNB_ADDRESS ? amount1 : 0;
+        (bool success, ) = arb.token1Pair.call{ value: _value }(arb.swapToken1Data);
+        require(success, SwapFailed());
+      }
+      uint256 out = SafeTransferLib.balanceOf(arb.loanToken, address(this)) - before;
+
+      if (out < repaidAssets) revert NoProfit();
+      if (token0 != BNB_ADDRESS) SafeTransferLib.safeApprove(token0, arb.token0Pair, 0);
+      if (token1 != BNB_ADDRESS) SafeTransferLib.safeApprove(token1, arb.token1Pair, 0);
     }
 
     SafeTransferLib.safeApprove(arb.loanToken, MOOLAH, repaidAssets);
