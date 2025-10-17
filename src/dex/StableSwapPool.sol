@@ -114,7 +114,6 @@ contract StableSwapPool is
     require(_manager != address(0), "ZERO Address");
     require(_pauser != address(0), "ZERO Address");
     require(_LP != address(0), "ZERO Address");
-    require(_coins.length == N_COINS, "Invalid number of coins");
     require(_oracle != address(0), "ZERO Address for oracle");
 
     __AccessControlEnumerable_init();
