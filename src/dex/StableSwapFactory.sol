@@ -132,8 +132,8 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
    * @param _manager: Manager address
    * @param _pauser: Pauser address
    * @param _oracle: Price oracle address
-   * @return lp: Address of LP token
-   * @return swapContract: Address of swap contract
+   * @return lp Address of LP token
+   * @return swapContract Address of swap contract
    */
   function createSwapPair(
     address _tokenA,
