@@ -41,7 +41,7 @@ contract BNBProviderTest is Test {
   address user2 = makeAddr("user2");
 
   function setUp() public {
-    vm.createSelectFork("https://bsc-dataseed.bnbchain.org");
+    vm.createSelectFork(vm.envString("BSC_RPC"), 60541406);
 
     // Upgrade MoolahVault
     address newImlp = address(new MoolahVault(moolahProxy, WBNB));

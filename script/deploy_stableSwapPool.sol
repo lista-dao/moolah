@@ -26,7 +26,8 @@ contract StableSwapFactoryDeploy is Script {
     //    address factory = deployFactory(deployer);
     //    (address lpImpl, address poolImpl) = deployImpls();
 
-    factory.setImpls(lpImpl, poolImpl);
+    factory.setLpImpl(lpImpl);
+    factory.setSwapImpl(poolImpl);
 
     console.log("Set impls in Factory");
 

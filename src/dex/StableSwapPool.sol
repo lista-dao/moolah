@@ -38,6 +38,7 @@ contract StableSwapPool is
 
   uint256 public constant ADMIN_ACTIONS_DELAY = 3 days;
   uint256 public constant MIN_RAMP_TIME = 1 days;
+  uint256 public constant A_PRECISION = 100;
 
   address[N_COINS] public coins;
   uint256[N_COINS] public balances;
@@ -46,7 +47,7 @@ contract StableSwapPool is
   /// @dev the percentage of the swap fee that is taken as an admin fee. admin_fee * 1e10.
   uint256 public admin_fee;
   /// @dev transfer bnb gas.
-  uint256 public bnb_gas = 4029;
+  uint256 public bnb_gas;
 
   address public token;
 
@@ -92,6 +93,7 @@ contract StableSwapPool is
    * @param _manager: Manager
    * @param _pauser: Pauser
    * @param _LP: LP address
+   * @param _oracle: Resilient oracle address
    */
   function initialize(
     address[N_COINS] memory _coins,
@@ -112,7 +114,6 @@ contract StableSwapPool is
     require(_manager != address(0), "ZERO Address");
     require(_pauser != address(0), "ZERO Address");
     require(_LP != address(0), "ZERO Address");
-    require(_coins.length == N_COINS, "Invalid number of coins");
     require(_oracle != address(0), "ZERO Address for oracle");
 
     __AccessControlEnumerable_init();
@@ -134,8 +135,8 @@ contract StableSwapPool is
       RATES[i] = PRECISION * PRECISION_MUL[i];
     }
     coins = _coins;
-    initial_A = _A;
-    future_A = _A;
+    initial_A = _A * A_PRECISION;
+    future_A = _A * A_PRECISION;
     fee = _fee;
     admin_fee = _admin_fee;
     token = _LP;
@@ -145,10 +146,14 @@ contract StableSwapPool is
     IOracle(oracle).peek(_coins[1]); // BNB_ADDR should be config to multi-oracle before deploy
     price0DiffThreshold = 3e16; // 3% threshold for token0 price diff
     price1DiffThreshold = 3e16; // 3% threshold for token1 price diff
+    bnb_gas = 4029;
 
     _grantRole(DEFAULT_ADMIN_ROLE, _owner);
     _grantRole(MANAGER, _manager);
     _grantRole(PAUSER, _pauser);
+
+    emit ChangeOracle(_oracle);
+    emit ChangePriceDiffThreshold(price0DiffThreshold, price1DiffThreshold);
   }
 
   function get_A() internal view returns (uint256) {
@@ -171,7 +176,7 @@ contract StableSwapPool is
   }
 
   function A() external view returns (uint256) {
-    return get_A();
+    return get_A() / A_PRECISION;
   }
 
   function _xp() internal view returns (uint256[N_COINS] memory result) {
@@ -206,7 +211,9 @@ contract StableSwapPool is
         D_P = (D_P * D) / (xp[k] * N_COINS); // If division by 0, this will be borked: only withdrawal will work. And that is good
       }
       Dprev = D;
-      D = ((Ann * S + D_P * N_COINS) * D) / ((Ann - 1) * D + (N_COINS + 1) * D_P);
+      D =
+        (((Ann * S) / A_PRECISION + D_P * N_COINS) * D) /
+        (((Ann - A_PRECISION) * D) / A_PRECISION + (N_COINS + 1) * D_P);
       // Equality with the precision of 1
       if (D > Dprev) {
         if (D - Dprev <= 1) {
@@ -236,10 +243,11 @@ contract StableSwapPool is
      *     When balanced, D = n * x_u - total virtual value of the portfolio
      */
     uint256 token_supply = IStableSwapLP(token).totalSupply();
+    if (token_supply == 0) return 0;
     return (D * PRECISION) / token_supply;
   }
 
-  function calc_token_amount(uint256[N_COINS] memory amounts, bool deposit) external view returns (uint256) {
+  function calc_token_amount(uint256[N_COINS] calldata amounts, bool deposit) external view returns (uint256) {
     /**
      * Simplified method to calculate addition or reduction in token supply at
      *     deposit or withdrawal without taking fees into account (but looking at
@@ -268,7 +276,7 @@ contract StableSwapPool is
   }
 
   function add_liquidity(
-    uint256[N_COINS] memory amounts,
+    uint256[N_COINS] calldata amounts,
     uint256 min_mint_amount
   ) external payable whenNotPaused nonReentrant {
     //Amounts is amounts of c-tokens
@@ -369,8 +377,8 @@ contract StableSwapPool is
       S_ += _x;
       c = (c * D) / (_x * N_COINS);
     }
-    c = (c * D) / (Ann * N_COINS);
-    uint256 b = S_ + D / Ann; // - D
+    c = (c * D * A_PRECISION) / (Ann * N_COINS);
+    uint256 b = S_ + (D * A_PRECISION) / Ann; // - D
     uint256 y_prev;
     uint256 y = D;
 
@@ -391,7 +399,7 @@ contract StableSwapPool is
     return y;
   }
 
-  function get_dy(uint256 i, uint256 j, uint256 dx) public view returns (uint256) {
+  function get_dy_without_fee(uint256 i, uint256 j, uint256 dx) public view returns (uint256) {
     // dx and dy in c-units
     uint256[N_COINS] memory rates = RATES;
     uint256[N_COINS] memory xp = _xp();
@@ -399,6 +407,11 @@ contract StableSwapPool is
     uint256 x = xp[i] + ((dx * rates[i]) / PRECISION);
     uint256 y = get_y(i, j, x, xp);
     uint256 dy = ((xp[j] - y - 1) * PRECISION) / rates[j];
+    return dy;
+  }
+
+  function get_dy(uint256 i, uint256 j, uint256 dx) public view returns (uint256) {
+    uint256 dy = get_dy_without_fee(i, j, dx);
     uint256 _fee = (fee * dy) / FEE_DENOMINATOR;
     return dy - _fee;
   }
@@ -415,23 +428,19 @@ contract StableSwapPool is
   /// @dev Check if the price difference between the pool and the oracle exceeds the threshold
   /// @notice This function reverts if the token0 or token1 price difference exceeds the threshold
   function checkPriceDiff() public view {
-    // use 1 token_i dx to get swap price
+    // use $100 token_i dx to get swap price
+    uint256 value = 100 * 1e18; // $100
     uint256 dps0 = (coins[0] == BNB_ADDRESS) ? 18 : IERC20Metadata(coins[0]).decimals();
     uint256 dps1 = (coins[1] == BNB_ADDRESS) ? 18 : IERC20Metadata(coins[1]).decimals();
-    uint256 dx0 = 10 ** (dps0); // 1 token0
-    uint256 dx1 = 10 ** (dps1); // 1 token1
-
-    uint256 dy1 = get_dy(0, 1, dx0); // token1Amount for 1 token0, in original precision
-    uint256 dy0 = get_dy(1, 0, dx1); // token0Amount for 1 token1, in original precision
-
-    // normalize dy to 1e18 dps
-    uint256 token1Amount = dy1 * PRECISION_MUL[1];
-    uint256 token0Amount = dy0 * PRECISION_MUL[0];
-
     uint256[N_COINS] memory oraclePrices = fetchOraclePrice();
+    uint256 dx0 = (value * (10 ** dps0)) / oraclePrices[0]; // token0 amount for $100, in original precision
+    uint256 dx1 = (value * (10 ** dps1)) / oraclePrices[1]; // token1 amount for $100, in original precision
 
-    uint256 price0 = (1e18 * oraclePrices[1]) / token0Amount;
-    uint256 price1 = (1e18 * oraclePrices[0]) / token1Amount;
+    uint256 dy1 = get_dy_without_fee(0, 1, dx0); // token1Amount for 1 token0, in original precision
+    uint256 dy0 = get_dy_without_fee(1, 0, dx1); // token0Amount for 1 token1, in original precision
+
+    uint256 price0 = (dx1 * PRECISION_MUL[1] * oraclePrices[1]) / (dy0 * PRECISION_MUL[0]);
+    uint256 price1 = (dx0 * PRECISION_MUL[0] * oraclePrices[0]) / (dy1 * PRECISION_MUL[1]);
 
     // Calculate price differences
     uint256 priceDiff0 = (price0 > oraclePrices[0]) ? price0 - oraclePrices[0] : oraclePrices[0] - price0;
@@ -500,10 +509,14 @@ contract StableSwapPool is
     }
     address jAddress = coins[j];
     transfer_out(jAddress, dy);
+
+    // un-normalizing the dy_fee before emitted
+    dy_fee = (dy_fee * PRECISION) / RATES[j];
+
     emit TokenExchange(msg.sender, i, dx, j, dy, dy_fee, dy_admin_fee);
   }
 
-  function remove_liquidity(uint256 _amount, uint256[N_COINS] memory min_amounts) external nonReentrant {
+  function remove_liquidity(uint256 _amount, uint256[N_COINS] calldata min_amounts) external nonReentrant {
     uint256 total_supply = IStableSwapLP(token).totalSupply();
     uint256[N_COINS] memory amounts;
     uint256[N_COINS] memory fees; //Fees are unused but we've got them historically in event
@@ -524,7 +537,7 @@ contract StableSwapPool is
   }
 
   function remove_liquidity_imbalance(
-    uint256[N_COINS] memory amounts,
+    uint256[N_COINS] calldata amounts,
     uint256 max_burn_amount
   ) external whenNotPaused nonReentrant {
     uint256 token_supply = IStableSwapLP(token).totalSupply();
@@ -599,8 +612,8 @@ contract StableSwapPool is
       S_ += _x;
       c = (c * D) / (_x * N_COINS);
     }
-    c = (c * D) / (Ann * N_COINS);
-    uint256 b = S_ + D / Ann;
+    c = (c * D * A_PRECISION) / (Ann * N_COINS);
+    uint256 b = S_ + (D * A_PRECISION) / Ann;
     uint256 y_prev;
     uint256 y = D;
 
@@ -712,6 +725,8 @@ contract StableSwapPool is
     require(_future_time >= block.timestamp + MIN_RAMP_TIME, "dev: insufficient time");
 
     uint256 _initial_A = get_A();
+    _future_A = _future_A * A_PRECISION;
+
     require(_future_A > 0 && _future_A < MAX_A, "_future_A must be between 0 and MAX_A");
     require(
       (_future_A >= _initial_A && _future_A <= _initial_A * MAX_A_CHANGE) ||
@@ -810,6 +825,19 @@ contract StableSwapPool is
     price0DiffThreshold = _price0DiffThreshold;
     price1DiffThreshold = _price1DiffThreshold;
     emit ChangePriceDiffThreshold(_price0DiffThreshold, _price1DiffThreshold);
+  }
+
+  /// @dev change oracle address
+  /// @param _oracle new oracle address
+  function changeOracle(address _oracle) external onlyRole(MANAGER) {
+    require(_oracle != address(0), "ZERO Address for oracle");
+    require(_oracle != oracle, "No change in oracle");
+
+    IOracle(oracle).peek(coins[0]);
+    IOracle(oracle).peek(coins[1]);
+    oracle = _oracle;
+
+    emit ChangeOracle(_oracle);
   }
 
   /// @dev Pause the contract. Only `remove_liquidity` is allowed.

@@ -5,6 +5,7 @@ import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgr
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 
 import { MarketParamsLib } from "../moolah/libraries/MarketParamsLib.sol";
 import { SharesMathLib } from "../moolah/libraries/SharesMathLib.sol";
@@ -23,7 +24,13 @@ import { IOracle, TokenConfig } from "../moolah/interfaces/IOracle.sol";
  * @author Lista DAO
  * @notice SmartProvider is a contract that allows users to supply collaterals to Lista Lending while simultaneously earning swap fees.
  */
-contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IOracle, ISmartProvider {
+contract SmartProvider is
+  ReentrancyGuardUpgradeable,
+  UUPSUpgradeable,
+  AccessControlEnumerableUpgradeable,
+  IOracle,
+  ISmartProvider
+{
   using SafeERC20 for IERC20;
   using MarketParamsLib for MarketParams;
   using SharesMathLib for uint256;
@@ -46,7 +53,6 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
   address public resilientOracle;
 
   address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
-  bytes32 public constant MANAGER = keccak256("MANAGER");
 
   /* ------------------ Events ------------------ */
   event SupplyCollateral(
@@ -75,6 +81,8 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     uint256 minAmount1
   );
 
+  event RedeemLpCollateral(address indexed liquidator, uint256 lpAmount, uint256 token0Amount, uint256 token1Amount);
+
   modifier onlyMoolah() {
     require(msg.sender == address(MOOLAH), "not moolah");
     _;
@@ -96,17 +104,11 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
   }
 
   /// @param _admin The admin of the contract.
-  /// @param _manager The manager of the contract.
   /// @param _dex The address of the stableswap pool.
-  function initialize(
-    address _admin,
-    address _manager,
-    address _dex,
-    address _dexInfo,
-    address _resilientOracle
-  ) public initializer {
+  /// @param _dexInfo The address of the stableswap pool info contract.
+  /// @param _resilientOracle The address of the resilient oracle.
+  function initialize(address _admin, address _dex, address _dexInfo, address _resilientOracle) public initializer {
     require(_admin != address(0), ErrorsLib.ZERO_ADDRESS);
-    require(_manager != address(0), ErrorsLib.ZERO_ADDRESS);
     require(_dex != address(0), ErrorsLib.ZERO_ADDRESS);
     require(_dexInfo != address(0), ErrorsLib.ZERO_ADDRESS);
     require(_resilientOracle != address(0), ErrorsLib.ZERO_ADDRESS);
@@ -123,7 +125,29 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     __AccessControl_init();
 
     _grantRole(DEFAULT_ADMIN_ROLE, _admin);
-    _grantRole(MANAGER, _manager);
+  }
+
+  /**
+   * @dev Supplies existing stableswap LP tokens as collateral in Moolah.
+   * @param marketParams The market parameters.
+   * @param onBehalf The address of the position owner.
+   * @param lpAmount The amount of LP tokens to supply.
+   */
+  function supplyDexLp(MarketParams calldata marketParams, address onBehalf, uint256 lpAmount) external nonReentrant {
+    require(lpAmount > 0, "zero lp amount");
+    require(marketParams.collateralToken == TOKEN, "invalid collateral token");
+
+    // transfer lp from the user
+    IERC20(dexLP).safeTransferFrom(msg.sender, address(this), lpAmount);
+
+    // 1:1 mint collateral token
+    IStableSwapLPCollateral(TOKEN).mint(address(this), lpAmount);
+
+    // supply collateral to moolah
+    IERC20(TOKEN).safeIncreaseAllowance(address(MOOLAH), lpAmount);
+    MOOLAH.supplyCollateral(marketParams, lpAmount, onBehalf, "");
+
+    emit SupplyCollateral(onBehalf, TOKEN, lpAmount, 0, 0);
   }
 
   /**
@@ -133,16 +157,14 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
    * @param amount0 The amount of token0 to add as liquidity.
    * @param amount1 The amount of token1 to add as liquidity.
    * @param minLpAmount The minimum amount of LP tokens to receive (slippage tolerance).
-   * @param data Additional data to pass to the Moolah contract.
    */
   function supplyCollateral(
     MarketParams calldata marketParams,
     address onBehalf,
     uint256 amount0,
     uint256 amount1,
-    uint256 minLpAmount,
-    bytes calldata data
-  ) external payable {
+    uint256 minLpAmount
+  ) external payable nonReentrant {
     require(marketParams.collateralToken == TOKEN, "invalid collateral token");
     address token0 = token(0);
     address token1 = token(1);
@@ -156,10 +178,6 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
       require(msg.value == 0, "msg.value must be 0");
     }
     require(amount0 > 0 || amount1 > 0, "invalid amounts");
-
-    // validate slippage before adding liquidity
-    uint256 expectLpToMint = IStableSwapPoolInfo(dexInfo).get_add_liquidity_mint_amount(dex, [amount0, amount1]);
-    require(expectLpToMint >= minLpAmount, "slippage too high");
 
     // add liquidity to the stableswap pool
     uint256 actualLpAmount = IERC20(dexLP).balanceOf(address(this));
@@ -181,14 +199,13 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     // validate the actual LP amount minted
     actualLpAmount = IERC20(dexLP).balanceOf(address(this)) - actualLpAmount;
     require(actualLpAmount > 0, "no lp minted");
-    require(actualLpAmount >= minLpAmount, "actual slippage too high");
 
     // 1:1 mint collateral token
     IStableSwapLPCollateral(TOKEN).mint(address(this), actualLpAmount);
 
     // supply collateral to moolah
     IERC20(TOKEN).safeIncreaseAllowance(address(MOOLAH), actualLpAmount);
-    MOOLAH.supplyCollateral(marketParams, actualLpAmount, onBehalf, data);
+    MOOLAH.supplyCollateral(marketParams, actualLpAmount, onBehalf, "");
 
     emit SupplyCollateral(onBehalf, TOKEN, actualLpAmount, amount0, amount1);
   }
@@ -209,7 +226,7 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     uint256 minToken1Amount,
     address onBehalf,
     address payable receiver
-  ) external {
+  ) external nonReentrant {
     require(collateralAmount > 0, "zero withdrawal amount");
     require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
     require(isSenderAuthorized(msg.sender, onBehalf), "unauthorized sender");
@@ -246,7 +263,7 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     uint256 maxCollateralAmount,
     address onBehalf,
     address payable receiver
-  ) external {
+  ) external nonReentrant {
     require(token0Amount > 0 || token1Amount > 0, "zero withdrawal amount");
     require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
     require(isSenderAuthorized(msg.sender, onBehalf), "unauthorized sender");
@@ -255,16 +272,11 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
 
     // validate slippage before removing liquidity
     uint256[2] memory amounts = [token0Amount, token1Amount];
-    uint256 expectBurnAmount = IStableSwap(dex).calc_token_amount(amounts, false);
-    require(expectBurnAmount <= maxCollateralAmount, "slippage too high");
 
     // remove liquidity from the stableswap pool
-    IERC20(dexLP).safeIncreaseAllowance(dex, maxCollateralAmount);
-
     uint256 actualBurnAmount = IERC20(dexLP).balanceOf(address(this));
     IStableSwap(dex).remove_liquidity_imbalance(amounts, maxCollateralAmount);
     actualBurnAmount = actualBurnAmount - IERC20(dexLP).balanceOf(address(this));
-    require(actualBurnAmount <= maxCollateralAmount, "actual slippage too high");
 
     // withdraw collateral
     MOOLAH.withdrawCollateral(marketParams, actualBurnAmount, onBehalf, address(this));
@@ -294,24 +306,17 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     uint256 minTokenAmount,
     address onBehalf,
     address payable receiver
-  ) external {
+  ) external nonReentrant {
     require(collateralAmount > 0, "zero withdrawal amount");
     require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
     require(isSenderAuthorized(msg.sender, onBehalf), "unauthorized sender");
     require(marketParams.collateralToken == TOKEN, "invalid collateral token");
     require(i == 0 || i == 1, "invalid token index");
 
-    // validate expectAmount of token i before removing liquidity
-    uint256 expectAmount = IStableSwap(dex).calc_withdraw_one_coin(collateralAmount, i);
-    require(expectAmount >= minTokenAmount, "slippage too high");
-
     uint256 actualAmount = getTokenBalance(i);
-
-    IERC20(dexLP).safeIncreaseAllowance(dex, collateralAmount);
     IStableSwap(dex).remove_liquidity_one_coin(collateralAmount, i, minTokenAmount);
 
     actualAmount = getTokenBalance(i) - actualAmount;
-    require(actualAmount >= minTokenAmount, "slippage too high");
 
     // withdraw collateral
     MOOLAH.withdrawCollateral(marketParams, collateralAmount, onBehalf, address(this));
@@ -350,42 +355,38 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     }
   }
 
-  function liquidate(Id id, address borrower) external onlyMoolah {
-    revert("Not implemented");
-  }
+  function liquidate(Id id, address borrower) external onlyMoolah {}
 
   /**
    * @notice Liquidates a position by burning the seized collateral token and removing liquidity from the stableswap pool.
    * @notice The seized tokens (token0 and token1) are then sent to the liquidator.
    * @notice This function assumes that the liquidator has already received the seized collateral token which will be burned.
-   * @param id The ID of the market to liquidate.
    * @param liquidator The address of the liquidator.
-   * @param seizedAssets The amount of collateral to be seized (in collateral token).
-   * @param payload The abi encoded data of minAmounts (minAmount0 and minAmount1) to validate slippage during removing liquidity.
+   * @param lpAmount The amount of collateral to be redeemed (in LP tokens).
+   * @param minAmount0 The minimum amount of token0 to receive (slippage tolerance).
+   * @param minAmount1 The minimum amount of token1 to receive (slippage tolerance).
+   * @return The amount of token0 and token1 redeemed.
    */
-  function liquidate(
-    Id id,
-    address payable liquidator,
-    uint256 seizedAssets,
-    bytes calldata payload
-  ) external onlyMoolah {
-    MarketParams memory marketParams = MOOLAH.idToMarketParams(id);
-    require(marketParams.collateralToken == TOKEN, "invalid collateral token");
-    require(seizedAssets > 0, "zero seized assets");
+  function redeemLpCollateral(
+    address payable liquidator, // liquidator contract
+    uint256 lpAmount,
+    uint256 minAmount0,
+    uint256 minAmount1
+  ) external nonReentrant returns (uint256, uint256) {
+    require(liquidator != address(0), ErrorsLib.ZERO_ADDRESS);
+    require(lpAmount > 0, "zero seized assets");
     // burn collateral token sent to the liquidator before
-    IStableSwapLPCollateral(TOKEN).burn(liquidator, seizedAssets);
-
-    // validate slippage before removing liquidity
-    (uint256 minAmount0, uint256 minAmount1) = abi.decode(payload, (uint256, uint256));
+    IStableSwapLPCollateral(TOKEN).burn(liquidator, lpAmount);
 
     // remove liquidity from the stableswap pool
-    (uint256 token0Amount, uint256 token1Amount) = _redeemLp(seizedAssets, minAmount0, minAmount1);
+    (uint256 token0Amount, uint256 token1Amount) = _redeemLp(lpAmount, minAmount0, minAmount1);
 
     // send token0 and token1 to the liquidator
     if (token0Amount > 0) transferOutTo(0, token0Amount, liquidator);
     if (token1Amount > 0) transferOutTo(1, token1Amount, liquidator);
 
-    emit SmartLiquidation(liquidator, TOKEN, dexLP, seizedAssets, minAmount0, minAmount1);
+    emit RedeemLpCollateral(liquidator, lpAmount, token0Amount, token1Amount);
+    return (token0Amount, token1Amount);
   }
 
   function _redeemLp(
@@ -393,10 +394,6 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     uint256 minAmount0,
     uint256 minAmount1
   ) private returns (uint256 token0Amount, uint256 token1Amount) {
-    uint256[2] memory expectAmount = IStableSwapPoolInfo(dexInfo).calc_coins_amount(dex, lpAmount);
-    require(minAmount0 <= expectAmount[0], "Invalid token0 amount");
-    require(minAmount1 <= expectAmount[1], "Invalid token1 amount");
-
     token0Amount = getTokenBalance(0);
     token1Amount = getTokenBalance(1);
 
@@ -406,8 +403,6 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
     // validate the actual token amounts after removing liquidity
     token0Amount = getTokenBalance(0) - token0Amount;
     token1Amount = getTokenBalance(1) - token1Amount;
-    require(token0Amount >= minAmount0, "slippage too high for token0");
-    require(token1Amount >= minAmount1, "slippage too high for token1");
   }
 
   /// @dev Returns whether the sender is authorized to manage `onBehalf`'s positions.
@@ -438,11 +433,10 @@ contract SmartProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable, I
   function peek(address _token) external view returns (uint256) {
     if (_token == TOKEN || _token == dexLP) {
       // if token is dexLP, return the price of the LP token
-      uint256[2] memory amounts = IStableSwapPoolInfo(dexInfo).calc_coins_amount(dex, 1 ether);
-      uint256 price0 = _peek(token(0));
-      uint256 price1 = _peek(token(1));
-
-      return (amounts[0] * price0 + amounts[1] * price1) / 1 ether; // 1 ether is the LP token amount
+      // LP value = min(token0_price, token1_price) * virtual_price
+      uint256 minPrice = UtilsLib.min(_peek(token(0)), _peek(token(1)));
+      uint256 virtualPrice = IStableSwap(dex).get_virtual_price(); // 1e18
+      return (minPrice * virtualPrice) / 1e18;
     }
 
     return _peek(_token);

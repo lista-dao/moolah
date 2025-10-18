@@ -3,8 +3,8 @@ pragma solidity 0.8.28;
 
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
-import { SafeERC20, IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import { IStableSwap, StableSwapType } from "./interfaces/IStableSwap.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { IStableSwap } from "./interfaces/IStableSwap.sol";
 
 contract StableSwapPoolInfo is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   uint256 public constant N_COINS = 2;
@@ -18,6 +18,7 @@ contract StableSwapPoolInfo is UUPSUpgradeable, AccessControlEnumerableUpgradeab
   }
 
   function initialize(address admin) public initializer {
+    require(admin != address(0), "Zero address");
     __AccessControlEnumerable_init();
 
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
@@ -64,6 +65,9 @@ contract StableSwapPoolInfo is UUPSUpgradeable, AccessControlEnumerableUpgradeab
   function calc_coins_amount(address _swap, uint256 _amount) public view returns (uint256[N_COINS] memory) {
     uint256 total_supply = token(_swap).totalSupply();
     uint256[N_COINS] memory amounts;
+    if (total_supply == 0 || _amount == 0) {
+      return amounts;
+    }
 
     for (uint256 i = 0; i < N_COINS; i++) {
       uint256 value = (IStableSwap(_swap).balances(i) * _amount) / total_supply;
@@ -143,7 +147,7 @@ contract StableSwapPoolInfo is UUPSUpgradeable, AccessControlEnumerableUpgradeab
 
   function get_add_liquidity_fee(
     address _swap,
-    uint256[N_COINS] memory amounts
+    uint256[N_COINS] calldata amounts
   ) external view returns (uint256[N_COINS] memory swapFee, uint256[N_COINS] memory adminFee) {
     IStableSwap swap = IStableSwap(_swap);
     uint256 _fee = (swap.fee() * N_COINS) / (4 * (N_COINS - 1));
@@ -190,7 +194,7 @@ contract StableSwapPoolInfo is UUPSUpgradeable, AccessControlEnumerableUpgradeab
 
   function get_remove_liquidity_imbalance_fee(
     address _swap,
-    uint256[N_COINS] memory amounts
+    uint256[N_COINS] calldata amounts
   ) external view returns (uint256[N_COINS] memory swapFee, uint256[N_COINS] memory adminFee) {
     IStableSwap swap = IStableSwap(_swap);
     uint256 _fee = (swap.fee() * N_COINS) / (4 * (N_COINS - 1));

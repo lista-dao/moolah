@@ -35,8 +35,8 @@ contract StableSwapLPCollateral is ERC20Upgradeable, UUPSUpgradeable, AccessCont
   function initialize(
     address _admin,
     address _minter,
-    string memory _name,
-    string memory _symbol
+    string calldata _name,
+    string calldata _symbol
   ) external initializer {
     require(_admin != address(0) && _minter != address(0), "Zero address");
 
@@ -69,9 +69,20 @@ contract StableSwapLPCollateral is ERC20Upgradeable, UUPSUpgradeable, AccessCont
   }
 
   /// @dev only Moolah can transfer
+  /// @param to The address of the recipient.
+  /// @param value The amount to be transferred.
+  /// @return bool Returns true on success, false otherwise.
   function transfer(address to, uint256 value) public override onlyMoolah returns (bool) {
     address owner = _msgSender();
     _transfer(owner, to, value);
+    return true;
+  }
+
+  /// @dev only Moolah can call transferFrom
+  function transferFrom(address from, address to, uint256 value) public override onlyMoolah returns (bool) {
+    address spender = _msgSender();
+    _spendAllowance(from, spender, value);
+    _transfer(from, to, value);
     return true;
   }
 

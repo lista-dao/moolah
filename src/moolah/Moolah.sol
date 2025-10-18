@@ -22,7 +22,6 @@ import { MathLib, WAD } from "./libraries/MathLib.sol";
 import { SharesMathLib } from "./libraries/SharesMathLib.sol";
 import { MarketParamsLib } from "./libraries/MarketParamsLib.sol";
 import { SafeTransferLib } from "./libraries/SafeTransferLib.sol";
-import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import { IProvider, ISmartProvider } from "../provider/interfaces/IProvider.sol";
 
 /// @title Moolah
@@ -42,11 +41,6 @@ contract Moolah is
   using SafeTransferLib for IERC20;
   using MarketParamsLib for MarketParams;
   using EnumerableSet for EnumerableSet.AddressSet;
-
-  /* IMMUTABLES */
-
-  /// @inheritdoc IMoolahBase
-  bytes32 public immutable DOMAIN_SEPARATOR;
 
   /* STORAGE */
 
@@ -85,7 +79,6 @@ contract Moolah is
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor() {
     _disableInitializers();
-    DOMAIN_SEPARATOR = keccak256(abi.encode(DOMAIN_TYPEHASH, block.chainid, address(this)));
   }
 
   /// @param admin The new admin of the contract.
@@ -480,37 +473,6 @@ contract Moolah is
     uint256 repaidShares,
     bytes calldata data
   ) external whenNotPaused nonReentrant returns (uint256, uint256) {
-    return
-      _liquidate(
-        marketParams,
-        borrower,
-        seizedAssets,
-        repaidShares,
-        bytes(""), // payload
-        data
-      );
-  }
-
-  /// @inheritdoc IMoolahBase
-  function liquidate(
-    MarketParams memory marketParams,
-    address borrower,
-    uint256 seizedAssets,
-    uint256 repaidShares,
-    bytes memory payload, //min amounts for SmartProvider liquidation
-    bytes calldata data
-  ) external whenNotPaused nonReentrant returns (uint256, uint256) {
-    return _liquidate(marketParams, borrower, seizedAssets, repaidShares, payload, data);
-  }
-
-  function _liquidate(
-    MarketParams memory marketParams,
-    address borrower,
-    uint256 seizedAssets,
-    uint256 repaidShares,
-    bytes memory payload, // min amounts for SmartProvider liquidation
-    bytes calldata data
-  ) private returns (uint256, uint256) {
     Id id = marketParams.id();
     require(_checkLiquidationWhiteList(id, msg.sender), ErrorsLib.NOT_LIQUIDATION_WHITELIST);
     require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
@@ -578,20 +540,12 @@ contract Moolah is
       badDebtShares
     );
 
-    require(payload.length == 0 || providers[id][marketParams.collateralToken] != address(0), ErrorsLib.NOT_SET);
     IERC20(marketParams.collateralToken).safeTransfer(msg.sender, seizedAssets);
 
     {
       address provider = providers[id][marketParams.collateralToken];
       if (provider != address(0)) {
-        if (payload.length == 0) {
-          // Non-SmartProvider liquidation
-          IProvider(provider).liquidate(id, borrower);
-        } else {
-          // SmartProvider liquidation
-          require(payload.length == 64, ErrorsLib.INCONSISTENT_INPUT); // 2 * 32 bytes
-          ISmartProvider(provider).liquidate(id, payable(msg.sender), seizedAssets, payload);
-        }
+        IProvider(provider).liquidate(id, borrower);
       }
     }
 
@@ -637,7 +591,7 @@ contract Moolah is
     require(authorization.nonce == nonce[authorization.authorizer]++, ErrorsLib.INVALID_NONCE);
 
     bytes32 hashStruct = keccak256(abi.encode(AUTHORIZATION_TYPEHASH, authorization));
-    bytes32 digest = keccak256(bytes.concat("\x19\x01", DOMAIN_SEPARATOR, hashStruct));
+    bytes32 digest = keccak256(bytes.concat("\x19\x01", _buildDomainSeparator(), hashStruct));
     address signatory = ecrecover(digest, signature.v, signature.r, signature.s);
 
     require(signatory != address(0) && authorization.authorizer == signatory, ErrorsLib.INVALID_SIGNATURE);
@@ -696,6 +650,15 @@ contract Moolah is
 
     // Safe "unchecked" cast.
     market[id].lastUpdate = uint128(block.timestamp);
+  }
+
+  function _buildDomainSeparator() private view returns (bytes32) {
+    return keccak256(abi.encode(DOMAIN_TYPEHASH, block.chainid, address(this)));
+  }
+
+  /// @dev Returns the domain separator for the current chain.
+  function domainSeparator() external view returns (bytes32) {
+    return _buildDomainSeparator();
   }
 
   /* HEALTH CHECK */

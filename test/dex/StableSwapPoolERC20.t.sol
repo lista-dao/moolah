@@ -76,8 +76,10 @@ contract StableSwapPoolERC20Test is Test {
 
     address lpImpl = address(new StableSwapLP());
     address poolImpl = address(new StableSwapPool(address(factory)));
-    vm.prank(admin);
-    factory.setImpls(lpImpl, poolImpl);
+    vm.startPrank(admin);
+    factory.setLpImpl(lpImpl);
+    factory.setSwapImpl(poolImpl);
+    vm.stopPrank();
     assertEq(factory.lpImpl(), lpImpl);
     assertEq(factory.swapImpl(), poolImpl);
 
@@ -104,10 +106,12 @@ contract StableSwapPoolERC20Test is Test {
     assertEq(pool.coins(1), address(token1));
     assertEq(address(pool.token()), address(lp));
 
-    assertEq(pool.initial_A(), _A);
-    assertEq(pool.future_A(), _A);
+    assertEq(pool.A_PRECISION(), 100);
+    assertEq(pool.initial_A(), _A * pool.A_PRECISION());
+    assertEq(pool.future_A(), _A * pool.A_PRECISION());
     assertEq(pool.fee(), _fee);
     assertEq(pool.admin_fee(), _adminFee);
+    assertEq(pool.bnb_gas(), 4029);
     assertTrue(!pool.support_BNB());
     assertEq(pool.oracle(), oracle);
     assertEq(pool.price0DiffThreshold(), 3e16); // 3% price diff threshold
@@ -507,6 +511,40 @@ contract StableSwapPoolERC20Test is Test {
     lp.approve(address(pool), 1 ether);
     uint256[2] memory min_amounts = [uint256(0), uint256(0)];
     pool.remove_liquidity(1 ether, min_amounts);
+    vm.stopPrank();
+  }
+
+  function test_changeOracle() public {
+    address newOracle = makeAddr("newOracle");
+    vm.mockCall(newOracle, abi.encodeWithSelector(IOracle.peek.selector, address(token0)), abi.encode(100000e8));
+    vm.mockCall(newOracle, abi.encodeWithSelector(IOracle.peek.selector, address(token1)), abi.encode(100000e8));
+    vm.prank(manager);
+    pool.changeOracle(newOracle);
+    assertEq(pool.oracle(), newOracle);
+  }
+
+  function test_checkPriceDiff_with_large_price() public {
+    test_seeding();
+
+    // mock oracle calls; token0 price = $1_000_000; token1 price = $1_000_000
+    vm.mockCall(oracle, abi.encodeWithSelector(IOracle.peek.selector, address(token0)), abi.encode(1000000e8));
+    vm.mockCall(oracle, abi.encodeWithSelector(IOracle.peek.selector, address(token1)), abi.encode(1000000e8));
+
+    // UserB tries to swap 100 token0 to token1; should revert because of price diff check
+    uint amountIn = 1000 ether; // Amount of token0 to swap
+    vm.startPrank(userB);
+    token0.approve(address(pool), amountIn);
+    vm.expectRevert("Price difference for token0 exceeds threshold");
+    pool.exchange(0, 1, amountIn, 0);
+
+    // add liquidity proportionally should work
+    deal(address(token0), userB, 100 ether);
+    deal(address(token1), userB, 100 ether);
+    token0.approve(address(pool), 100 ether);
+    token1.approve(address(pool), 100 ether);
+    uint256[2] memory amounts = [uint256(100 ether), uint256(100 ether)];
+    pool.add_liquidity(amounts, 0);
+
     vm.stopPrank();
   }
 }

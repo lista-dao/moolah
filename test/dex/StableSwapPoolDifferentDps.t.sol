@@ -14,10 +14,8 @@ import "../../src/dex/interfaces/IStableSwap.sol";
 
 import { StableSwapFactory } from "../../src/dex/StableSwapFactory.sol";
 
-contract StableSwapPoolBNBTest is Test {
-  address constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+contract StableSwapPoolDpsTest is Test {
   uint256 constant FEE_DENOMINATOR = 1e10;
-
   StableSwapFactory factory;
 
   StableSwapPool pool;
@@ -26,7 +24,7 @@ contract StableSwapPoolBNBTest is Test {
   StableSwapLP lp; // ss-lp
 
   ERC20Mock token0;
-  address token1 = BNB_ADDRESS;
+  ERC20Mock token1;
 
   address admin = makeAddr("admin");
   address manager = makeAddr("manager");
@@ -39,8 +37,6 @@ contract StableSwapPoolBNBTest is Test {
   address userB = makeAddr("userB");
   address userC = makeAddr("userC");
 
-  bytes32 constant DEPLOYER = keccak256("DEPLOYER");
-
   function setUp() public {
     poolInfo = new StableSwapPoolInfo();
     address[] memory deployers = new address[](2);
@@ -52,32 +48,32 @@ contract StableSwapPoolBNBTest is Test {
       abi.encodeWithSelector(factoryImpl.initialize.selector, admin, deployers)
     );
     factory = StableSwapFactory(address(factoryProxy));
-
     assertTrue(factory.hasRole(factory.DEFAULT_ADMIN_ROLE(), admin));
     assertTrue(factory.hasRole(factory.DEPLOYER(), deployer1));
     assertTrue(factory.hasRole(factory.DEPLOYER(), deployer2));
-    assertEq(factory.DEPLOYER(), DEPLOYER);
 
-    token0 = new ERC20Mock();
+    token0 = new ERC20Mock(); // token0 has 18 decimals
+    token1 = new ERC20Mock();
+    token1.setDecimals(6); // token1 has 6 decimals
 
-    token0.setBalance(userA, 10000000 ether);
-    deal(userA, 10000000 ether); // Give userA 10_000_000 BNB
+    token0.setBalance(userA, 10000 ether);
+    token1.setBalance(userA, 10000 ether / 1e12); // token1 has 6 decimals
 
-    token0.setBalance(userB, 10000000 ether);
-    deal(userC, 10000000 ether); // Give userC 10_000_000 BNB
+    token0.setBalance(userB, 10000 ether);
+    token1.setBalance(userC, 10000 ether / 1e12); // token1 has 6 decimals
 
     // initialize parameters
     address[2] memory tokens;
     tokens[0] = address(token0);
-    tokens[1] = token1; // BNB_ADDRESS
+    tokens[1] = address(token1);
 
     uint _A = 1000; // Amplification coefficient
-    uint _fee = 1000000; // 0.01%; swap fee
+    uint _fee = 1e8; // 1%; swap fee
     uint _adminFee = 5e9; // 50% swap fee goes to admin
 
-    // mock oracle calls; token0 (slisBnb) price = $846.6; token1 (BNB) price = $830, rate = 1.02
-    vm.mockCall(oracle, abi.encodeWithSelector(IOracle.peek.selector, address(token0)), abi.encode(8466e7));
-    vm.mockCall(oracle, abi.encodeWithSelector(IOracle.peek.selector, token1), abi.encode(830e8));
+    // mock oracle calls; token0 price = $100_000; token1 price = $100_000
+    vm.mockCall(oracle, abi.encodeWithSelector(IOracle.peek.selector, address(token0)), abi.encode(100000e8));
+    vm.mockCall(oracle, abi.encodeWithSelector(IOracle.peek.selector, address(token1)), abi.encode(100000e8));
 
     address lpImpl = address(new StableSwapLP());
     address poolImpl = address(new StableSwapPool(address(factory)));
@@ -92,7 +88,7 @@ contract StableSwapPoolBNBTest is Test {
     vm.startPrank(deployer1);
     (address _lp, address _pool) = factory.createSwapPair(
       address(token0),
-      token1,
+      address(token1),
       "StableSwap LP Token",
       "ss-LP",
       _A,
@@ -115,11 +111,10 @@ contract StableSwapPoolBNBTest is Test {
     assertEq(pool.A_PRECISION(), 100);
     assertEq(pool.initial_A(), _A * pool.A_PRECISION());
     assertEq(pool.future_A(), _A * pool.A_PRECISION());
-    assertEq(pool.A(), _A);
     assertEq(pool.fee(), _fee);
-    assertEq(pool.bnb_gas(), 4029);
     assertEq(pool.admin_fee(), _adminFee);
-    assertTrue(pool.support_BNB());
+    assertEq(pool.bnb_gas(), 4029);
+    assertTrue(!pool.support_BNB());
     assertEq(pool.oracle(), oracle);
     assertEq(pool.price0DiffThreshold(), 3e16); // 3% price diff threshold
     assertEq(pool.price1DiffThreshold(), 3e16); // 3% price diff threshold
@@ -129,68 +124,65 @@ contract StableSwapPoolBNBTest is Test {
     assertTrue(pool.hasRole(pool.PAUSER(), pauser));
 
     uint256[2] memory oraclePrices = pool.fetchOraclePrice();
-    assertEq(oraclePrices[0], 8466e7 * 1e10); // adjust to 18 decimals
-    assertEq(oraclePrices[1], 830e8 * 1e10); // adjust to 18 decimals
+    assertEq(oraclePrices[0], 100000e18); // adjust to 18 decimals
+    assertEq(oraclePrices[1], 100000e18); // adjust to 18 decimals
 
     // check precision nomalizers and rates
-    assertEq(pool.PRECISION_MUL(0), 1); // slisBnb has 18 decimals
-    assertEq(pool.PRECISION_MUL(1), 1); // Bnb has 18 decimals
+    assertEq(pool.PRECISION_MUL(0), 1); // token0 has 18 decimals
+    assertEq(pool.PRECISION_MUL(1), 1e12); // token1 has 6 decimals, so 10^(18-6) = 1e12, but rate adjusts it back to 1e18
     assertEq(pool.RATES(0), 1e18);
-    assertEq(pool.RATES(1), 1e18);
+    assertEq(pool.RATES(1), (1e18 * 1e18) / 1e6); // token1 has 6 decimals
   }
 
   function test_seeding() public {
     vm.startPrank(userA);
-    assertEq(pool.get_virtual_price(), 0); // virtual price should be 0 before seeding
-
-    // Add liquidity
-    uint256 ratio = (8466 * 10 ** 17) / 830; // slisBnb price ratio to BNB
-    uint256 amount0 = 100_000 * ratio; // slisBnb amount, based on the price ratio
-    uint256 amount1 = 100_000 ether; // Bnb
 
     // Approve tokens for the pool
-    token0.approve(address(pool), amount0);
+    token0.approve(address(pool), 1000 ether);
+    token1.approve(address(pool), 1000 ether / 1e12); // token1 has 6 decimals
+
+    // Add liquidity
+    uint256 amount0 = 1000 ether;
+    uint256 amount1 = 1000 ether / 1e12; // token1 has 6 decimals
 
     uint min_mint_amount = 0;
-    pool.add_liquidity{ value: amount1 }([amount0, amount1], min_mint_amount);
+    pool.add_liquidity([amount0, amount1], min_mint_amount);
+    console.log("User A added liquidity");
 
     // Check LP balance
     uint256 lpAmount = lp.balanceOf(userA);
-    assertEq(lpAmount, 201999990107932736938407);
+    assertEq(lpAmount, 2000 ether); // 2000 LP tokens minted
 
-    assertEq(lp.totalSupply(), 201999990107932736938407); // Total supply of LP tokens
+    assertEq(lp.totalSupply(), 2000 ether); // Total supply of LP tokens
 
     vm.stopPrank();
-    assertEq(pool.get_virtual_price(), 1e18); // virtual price should be 1e18 after seeding
+    assertEq(pool.get_virtual_price(), 1e18); // virtual price should be 1 at the beginning
   }
 
   function test_swap_token0_to_token1_given_dx() public {
     test_seeding();
 
     uint amountIn = 1 ether; // Amount of token0 to swap
-
     uint256 amountOut = pool.get_dy(0, 1, amountIn); // expect token1 amount out
 
     uint256 userBBalance0Before = token0.balanceOf(userB);
-    uint256 userBBalance1Before = userB.balance;
+    uint256 userBBalance1Before = token1.balanceOf(userB);
 
     vm.startPrank(userB);
-    token0.approve(address(pool), 10000 ether);
-
+    token0.approve(address(pool), 900 ether);
     // Should revert because of price diff check
     vm.expectRevert("Price difference for token0 exceeds threshold");
-    pool.exchange(0, 1, 100000 ether, 0); // 0: token0, 1: token1, amountIn: amount of token0 to swap, 0: min amount out
+    pool.exchange(0, 1, 900 ether, 0); // 0: token0, 1: token1, amountIn: amount of token0 to swap, 0: min amount out
 
     // Should succeed
-    pool.exchange(0, 1, 100 ether, 0);
+    pool.exchange(0, 1, amountIn, 0);
     vm.stopPrank();
 
     // validate the price after swap
     uint256 oraclePrice0 = IOracle(oracle).peek(address(token0));
     uint256 oraclePrice1 = IOracle(oracle).peek(address(token1));
-
-    uint256 token1PriceAfter = (100 ether * oraclePrice0) / pool.get_dy(0, 1, 100 ether);
-    uint256 token0PriceAfter = (100 ether * oraclePrice1) / pool.get_dy(1, 0, 100 ether);
+    uint256 token1PriceAfter = (100 ether * oraclePrice0) / 1e12 / pool.get_dy(0, 1, 100 ether);
+    uint256 token0PriceAfter = (100 ether * oraclePrice1) / pool.get_dy(1, 0, 100 ether / 1e12); // token1 has 6 decimals
 
     assertGe(token1PriceAfter, (oraclePrice1 * 97) / 100); // 3% price diff tolerance
     assertLe(token1PriceAfter, (oraclePrice1 * 103) / 100); // 3% price diff tolerance
@@ -198,60 +190,55 @@ contract StableSwapPoolBNBTest is Test {
     assertLe(token0PriceAfter, (oraclePrice0 * 103) / 100); // 3% price diff tolerance
 
     uint256 userBBalance0After = token0.balanceOf(userB);
-    uint256 userBBalance1After = userB.balance;
-    assertEq(userBBalance0After, userBBalance0Before - 100 ether);
-    assertGe(userBBalance1After, userBBalance1Before + amountOut);
-
-    assertGt(pool.get_virtual_price(), 1e18); // virtual price should increase after swap
+    uint256 userBBalance1After = token1.balanceOf(userB);
+    assertEq(userBBalance0After, userBBalance0Before - amountIn);
+    assertApproxEqAbs(userBBalance1After, userBBalance1Before + amountOut, 1);
   }
 
   function test_swap_token1_to_token0_given_dy() public {
     test_seeding();
 
-    uint256 token0AmtOut = 1 ether; // amount out
+    uint256 minToken0AmtOut = 1 ether; // amount out
     uint256 max_dx = 1.2 ether; // max amount in
-    uint256 expect_dx = poolInfo.get_dx(address(pool), 1, 0, token0AmtOut, max_dx); // expect token1 amount in
+    uint256 expect_dx = poolInfo.get_dx(address(pool), 1, 0, minToken0AmtOut, max_dx); // expect token1 amount in
     assertGe(max_dx, expect_dx);
     (uint256 exFee, uint256 exAdminFee) = poolInfo.get_exchange_fee(address(pool), 1, 0, expect_dx);
     uint256 token0BalanceBefore = token0.balanceOf(userC);
-    uint256 token1BalanceBefore = userC.balance;
+    uint256 token1BalanceBefore = token1.balanceOf(userC);
     uint256 poolReserve0Before = pool.balances(0);
     uint256 poolReserve1Before = pool.balances(1);
     uint256 poolBalance0Before = token0.balanceOf(address(pool));
-    uint256 poolBalance1Before = address(pool).balance;
+    uint256 poolBalance1Before = token1.balanceOf(address(pool));
     uint256 adminBalance0Before = pool.admin_balances(0);
     uint256 adminBalance1Before = pool.admin_balances(1);
 
     vm.startPrank(userC);
-    vm.expectRevert("Inconsistent quantity");
-    pool.exchange(1, 0, expect_dx, token0AmtOut); // 1: token1, 0: token0
-    pool.exchange{ value: expect_dx }(1, 0, expect_dx, token0AmtOut); // 1: token1, 0: token0
+    token1.approve(address(pool), 10 ether / 1e12); // token1 has 6 decimals
+    pool.exchange(1, 0, expect_dx, minToken0AmtOut); // 1: token1, 0: token0
     vm.stopPrank();
 
-    assertEq(token0.balanceOf(userC), token0BalanceBefore + token0AmtOut);
-    assertEq(userC.balance, token1BalanceBefore - expect_dx);
-    assertEq(pool.balances(0), poolReserve0Before - token0AmtOut - exAdminFee);
-    assertEq(pool.balances(1), poolReserve1Before + expect_dx);
-    assertEq(token0.balanceOf(address(pool)), poolBalance0Before - token0AmtOut);
-    assertEq(address(pool).balance, poolBalance1Before + expect_dx);
+    assertApproxEqAbs(token0.balanceOf(userC), token0BalanceBefore + minToken0AmtOut, 1e12); // allow 1e-6 slippage
+    assertEq(token1.balanceOf(userC), token1BalanceBefore - expect_dx); // expect_dx has 6 decimals
+    assertApproxEqAbs(pool.balances(0), poolReserve0Before - minToken0AmtOut - exAdminFee, 1e12); // allow 1e-6 slippage
+    assertEq(pool.balances(1), poolReserve1Before + expect_dx); // expect_dx has 6 decimals
+    assertApproxEqAbs(token0.balanceOf(address(pool)), poolBalance0Before - minToken0AmtOut, 1e12); // allow 1e-6 slippage
+    assertEq(token1.balanceOf(address(pool)), poolBalance1Before + expect_dx); // expect_dx has 6 decimals
     assertEq(pool.admin_balances(0), adminBalance0Before + exAdminFee);
     assertEq(pool.admin_balances(1), adminBalance1Before);
-
     assertGt(pool.get_virtual_price(), 1e18); // virtual price should increase after swap
   }
-
   function test_add_liquidity() public {
     test_swap_token1_to_token0_given_dy();
 
     // UserB adds liquidity proportionally
-    deal(userB, 10000 ether);
+    deal(address(token1), userB, 10000 ether / 1e12); // token1 has 6 decimals
     deal(address(token0), userB, 10000 ether);
 
-    uint256 bnbAmount = 100 ether;
-    uint256 token0Amount = poolInfo.calc_amount_i_perfect(address(pool), 1, bnbAmount); // token0 amount based on the reserve ratio
+    uint256 token1Amount = 100 ether / 1e12; // token1 amount with actual decimals
+    uint256 token0Amount = poolInfo.calc_amount_i_perfect(address(pool), 1, token1Amount); // token0 amount based on the reserve ratio
 
     uint256 userBBalance0Before = token0.balanceOf(userB);
-    uint256 userBBalance1Before = userB.balance;
+    uint256 userBBalance1Before = token1.balanceOf(userB);
     uint256 token0ReserveBefore = pool.balances(0);
     uint256 token1ReserveBefore = pool.balances(1);
     uint256 totalSupply = lp.totalSupply();
@@ -260,22 +247,23 @@ contract StableSwapPoolBNBTest is Test {
 
     vm.startPrank(userB);
     token0.approve(address(pool), token0Amount);
-    uint256[2] memory amounts = [token0Amount, bnbAmount];
+    token1.approve(address(pool), token1Amount);
+    uint256[2] memory amounts = [token0Amount, token1Amount];
     uint256 min_mint_amount = (poolInfo.get_add_liquidity_mint_amount(address(pool), amounts) * 99) / 100; // allow 1% slippage
     (uint256[2] memory swapFee, uint256[2] memory adminFee) = poolInfo.get_add_liquidity_fee(address(pool), amounts);
     assertEq(swapFee[0], 0); // no fee for adding liquidity proportionally
     assertEq(swapFee[1], 0); // no fee for adding liquidity proportionally
     assertEq(adminFee[0], 0);
     assertEq(adminFee[1], 0);
-    pool.add_liquidity{ value: bnbAmount }(amounts, min_mint_amount);
+    pool.add_liquidity(amounts, min_mint_amount);
     vm.stopPrank();
 
     uint256 userBBalance0After = token0.balanceOf(userB);
-    uint256 userBBalance1After = userB.balance;
+    uint256 userBBalance1After = token1.balanceOf(userB);
     assertEq(userBBalance0After, userBBalance0Before - token0Amount);
-    assertEq(userBBalance1After, userBBalance1Before - bnbAmount);
+    assertEq(userBBalance1After, userBBalance1Before - token1Amount);
     assertEq(pool.balances(0), token0ReserveBefore + token0Amount);
-    assertEq(pool.balances(1), token1ReserveBefore + bnbAmount);
+    assertEq(pool.balances(1), token1ReserveBefore + token1Amount);
     assertEq(lp.totalSupply(), totalSupply + (lp.balanceOf(userB)));
     assertEq(pool.admin_balances(0), aminFee0); // no admin fee for adding liquidity proportionally
     assertEq(pool.admin_balances(1), aminFee1); // no admin fee for adding liquidity proportionally
@@ -286,9 +274,9 @@ contract StableSwapPoolBNBTest is Test {
     test_swap_token1_to_token0_given_dy();
 
     // UserB adds liquidity with token0 only
-    uint256 token0Amount = 1000 ether;
+    uint256 token0Amount = 10 ether;
     uint256 userBBalance0Before = token0.balanceOf(userB);
-    uint256 userBBalance1Before = userB.balance;
+    uint256 userBBalance1Before = token1.balanceOf(userB);
     uint256 token0ReserveBefore = pool.balances(0);
     uint256 token1ReserveBefore = pool.balances(1);
     uint256 totalSupply = lp.totalSupply();
@@ -310,7 +298,7 @@ contract StableSwapPoolBNBTest is Test {
     vm.stopPrank();
 
     uint256 userBBalance0After = token0.balanceOf(userB);
-    uint256 userBBalance1After = userB.balance;
+    uint256 userBBalance1After = token1.balanceOf(userB);
     uint256 totalSupplyAfter = lp.totalSupply();
     uint256 lpBalanceMinted = lp.balanceOf(userB) - lpBalanceBefore;
     assertGe(lpBalanceMinted, min_mint_amount);
@@ -324,20 +312,19 @@ contract StableSwapPoolBNBTest is Test {
     assertGt(pool.get_virtual_price(), virtualPriceBefore); // virtual price should increase after liquidity addition with fee
 
     uint256[2] memory amountsAfter = poolInfo.get_coins_amount_of(address(pool), userB);
-    uint256 amountInToken0 = amountsAfter[0] + pool.get_dy(1, 0, amountsAfter[1]); // total value in token0
-    assertGe(amountInToken0, (1000 ether * 995) / 1000);
+    uint256 amountInToken0 = amountsAfter[0] + amountsAfter[1] * 1e12; // token1 has 6 decimals
+    assertGe(amountInToken0, (10 ether * 995) / 1000);
   }
-
   function test_add_liquidity_imbalance() public {
     test_swap_token1_to_token0_given_dy();
 
     // UserB adds liquidity imbalanced
-    uint256 token0Amount = 1000 ether;
-    uint256 token1Amount = 500 ether;
-    deal(userB, token1Amount);
+    uint256 token0Amount = 10 ether;
+    uint256 token1Amount = 5 ether / 1e12; // token1 has 6 decimals
+    deal(address(token1), userB, 10000 ether / 1e12); // token1 has 6 decimals
 
     uint256 userBBalance0Before = token0.balanceOf(userB);
-    uint256 userBBalance1Before = userB.balance;
+    uint256 userBBalance1Before = token1.balanceOf(userB);
     uint256 token0ReserveBefore = pool.balances(0);
     uint256 token1ReserveBefore = pool.balances(1);
     uint256 totalSupply = lp.totalSupply();
@@ -350,14 +337,15 @@ contract StableSwapPoolBNBTest is Test {
 
     vm.startPrank(userB);
     token0.approve(address(pool), token0Amount);
+    token1.approve(address(pool), token1Amount);
     uint256[2] memory amounts = [token0Amount, token1Amount];
     uint256 min_mint_amount = (poolInfo.get_add_liquidity_mint_amount(address(pool), amounts) * 995) / 1000; // allow 0.5% slippage
     (uint256[2] memory swapFee, uint256[2] memory adminFee) = poolInfo.get_add_liquidity_fee(address(pool), amounts);
-    pool.add_liquidity{ value: token1Amount }(amounts, min_mint_amount);
+    pool.add_liquidity(amounts, min_mint_amount);
     vm.stopPrank();
 
     uint256 userBBalance0After = token0.balanceOf(userB);
-    uint256 userBBalance1After = userB.balance;
+    uint256 userBBalance1After = token1.balanceOf(userB);
     uint256 totalSupplyAfter = lp.totalSupply();
     uint256 lpBalanceMinted = lp.balanceOf(userB) - lpBalanceBefore;
     assertGe(lpBalanceMinted, min_mint_amount);
@@ -370,7 +358,7 @@ contract StableSwapPoolBNBTest is Test {
     assertEq(pool.admin_balances(1), aminFee1 + adminFee[1]);
     assertGt(pool.get_virtual_price(), 1e18); // virtual price should increase after liquidity addition with fee
     uint256[2] memory amountsAfter = poolInfo.get_coins_amount_of(address(pool), userB);
-    uint256 amountInToken0 = amountsAfter[0] + pool.get_dy(1, 0, amountsAfter[1]); // total value in token0
+    uint256 amountInToken0 = amountsAfter[0] + amountsAfter[1] * 1e12; // token1 has 6 decimals
     assertGe(amountInToken0, (token0Amount * 995) / 1000);
   }
 
@@ -383,17 +371,17 @@ contract StableSwapPoolBNBTest is Test {
     uint256[2] memory min_amounts = poolInfo.calc_coins_amount(address(pool), 1 ether);
     lp.approve(address(pool), 1 ether);
 
-    uint256 spotPrice0 = pool.get_dy(1, 0, 1e12); // token0 per token1; use tiny dx
+    uint256 spotPrice0 = pool.get_dy(1, 0, 1); // token0 per token1; use tiny dx
     uint256 spotPrice1 = pool.get_dy(0, 1, 1e12); // token1 per token0
 
     uint256 userABalance0Before = token0.balanceOf(userA);
-    uint256 userABalance1Before = userA.balance;
+    uint256 userABalance1Before = token1.balanceOf(userA);
     uint256 token0ReserveBefore = pool.balances(0);
     uint256 token1ReserveBefore = pool.balances(1);
     uint256 totalSupply = lp.totalSupply();
     pool.remove_liquidity(1 ether, min_amounts);
     uint256 userABalance0After = token0.balanceOf(userA);
-    uint256 userABalance1After = userA.balance;
+    uint256 userABalance1After = token1.balanceOf(userA);
 
     assertGe(userABalance0After, userABalance0Before + min_amounts[0]);
     assertGe(userABalance1After, userABalance1Before + min_amounts[1]);
@@ -404,7 +392,7 @@ contract StableSwapPoolBNBTest is Test {
     assertEq(pool.balances(1), token1ReserveBefore - (userABalance1After - userABalance1Before));
     assertEq(lp.totalSupply(), totalSupply - 1 ether);
     // spot price should not move
-    uint256 spotPrice0After = pool.get_dy(1, 0, 1e12); // token0 per token1
+    uint256 spotPrice0After = pool.get_dy(1, 0, 1); // token0 per token1
     uint256 spotPrice1After = pool.get_dy(0, 1, 1e12); // token1 per token0
 
     assertApproxEqAbs(spotPrice0After, spotPrice0, 2); // allow 2 wei difference
@@ -420,28 +408,28 @@ contract StableSwapPoolBNBTest is Test {
     vm.startPrank(userA);
 
     // remove liquidity; recieving Bnb only, swap fee are in token1
-    (uint256 swapFee, uint256 adminFee) = poolInfo.get_remove_liquidity_one_coin_fee(address(pool), 1 ether, 1);
-    uint256 expectBnbAmt = pool.calc_withdraw_one_coin(1 ether, 1);
+    (uint256 swapFee, uint256 adminFee) = poolInfo.get_remove_liquidity_one_coin_fee(address(pool), 1 ether, 1); // 1 ether of lp amount
+    uint256 expectToken1Amt = pool.calc_withdraw_one_coin(1 ether, 1); // 1 ether of lp amount
 
     uint256 userABalance0Before = token0.balanceOf(userA);
-    uint256 userABalance1Before = userA.balance;
+    uint256 userABalance1Before = token1.balanceOf(userA);
     uint256 token0ReserveBefore = pool.balances(0);
     uint256 token1ReserveBefore = pool.balances(1);
     uint256 totalSupply = lp.totalSupply();
 
     lp.approve(address(pool), 1 ether);
-    pool.remove_liquidity_one_coin(1 ether, 1, expectBnbAmt);
+    pool.remove_liquidity_one_coin(1 ether, 1, expectToken1Amt);
     vm.stopPrank();
 
     uint256 userABalance0After = token0.balanceOf(userA);
-    uint256 userABalance1After = userA.balance;
+    uint256 userABalance1After = token1.balanceOf(userA);
     assertEq(userABalance0After, userABalance0Before); // users balance of token0 unchanged
-    assertEq(userABalance1After, userABalance1Before + expectBnbAmt);
+    assertEq(userABalance1After, userABalance1Before + expectToken1Amt);
 
     // check fee and reserves
     assertEq(pool.balances(0), token0ReserveBefore); // token0 reserve unchanged
     uint256 deductedBnb = token1ReserveBefore - pool.balances(1);
-    assertEq(deductedBnb, expectBnbAmt + adminFee); // admin fee deducted from the reserve
+    assertEq(deductedBnb, expectToken1Amt + adminFee); // admin fee deducted from the reserve
     assertEq(adminFee, (swapFee * pool.admin_fee()) / FEE_DENOMINATOR);
     assertEq(lp.totalSupply(), totalSupply - 1 ether);
 
@@ -454,7 +442,7 @@ contract StableSwapPoolBNBTest is Test {
     vm.startPrank(userA);
 
     // remove liquidity imbalanced
-    uint256[2] memory amounts = [uint256(10 ether), uint256(5 ether)]; // withdraw 10 slisBnb and 5 Bnb
+    uint256[2] memory amounts = [uint256(10 ether), uint256(5 ether) / 1e12]; // token1 has 6 decimals
     (uint256[2] memory swapFee, uint256[2] memory adminFee) = poolInfo.get_remove_liquidity_imbalance_fee(
       address(pool),
       amounts
@@ -463,7 +451,7 @@ contract StableSwapPoolBNBTest is Test {
     maxBurnAmount = maxBurnAmount + (maxBurnAmount * 5) / 1000; // add 0.5% slippage
 
     uint256 userABalance0Before = token0.balanceOf(userA);
-    uint256 userABalance1Before = userA.balance;
+    uint256 userABalance1Before = token1.balanceOf(userA);
     uint256 token0ReserveBefore = pool.balances(0);
     uint256 token1ReserveBefore = pool.balances(1);
     uint256 lpBalanceBefore = lp.balanceOf(userA);
@@ -474,7 +462,7 @@ contract StableSwapPoolBNBTest is Test {
     vm.stopPrank();
 
     uint256 userAReceivedToken0 = token0.balanceOf(userA) - userABalance0Before;
-    uint256 userAReceivedToken1 = userA.balance - userABalance1Before;
+    uint256 userAReceivedToken1 = token1.balanceOf(userA) - userABalance1Before;
 
     assertGe(userAReceivedToken0, amounts[0] - swapFee[0]);
     assertGe(userAReceivedToken1, amounts[1] - swapFee[1]);
@@ -502,6 +490,7 @@ contract StableSwapPoolBNBTest is Test {
 
     vm.startPrank(userB);
     token0.approve(address(pool), 10000 ether);
+    token1.approve(address(pool), 10000 ether);
 
     vm.expectRevert("EnforcedPause()");
     pool.exchange(0, 1, 100 ether, 0);
@@ -510,7 +499,7 @@ contract StableSwapPoolBNBTest is Test {
 
     vm.expectRevert("EnforcedPause()");
     uint256[2] memory amounts = [uint256(1 ether), uint256(1 ether)];
-    pool.add_liquidity{ value: 1 ether }(amounts, 0);
+    pool.add_liquidity(amounts, 0);
 
     vm.expectRevert("EnforcedPause()");
     pool.remove_liquidity_one_coin(1 ether, 0, 0);
@@ -529,22 +518,10 @@ contract StableSwapPoolBNBTest is Test {
 
   function test_changeOracle() public {
     address newOracle = makeAddr("newOracle");
-    vm.mockCall(newOracle, abi.encodeWithSelector(IOracle.peek.selector, address(token0)), abi.encode(8466e7));
-    vm.mockCall(newOracle, abi.encodeWithSelector(IOracle.peek.selector, token1), abi.encode(830e8));
+    vm.mockCall(newOracle, abi.encodeWithSelector(IOracle.peek.selector, address(token0)), abi.encode(100000e8));
+    vm.mockCall(newOracle, abi.encodeWithSelector(IOracle.peek.selector, address(token1)), abi.encode(100000e8));
     vm.prank(manager);
     pool.changeOracle(newOracle);
     assertEq(pool.oracle(), newOracle);
-  }
-
-  function test_get_dy_without_fee() public {
-    test_seeding();
-
-    uint amountIn = 1 ether; // Amount of token0 to swap
-
-    uint256 amountOutWithFee = pool.get_dy(0, 1, amountIn); // expect token1 amount out with fee
-    (uint256 exFee, ) = poolInfo.get_exchange_fee(address(pool), 0, 1, amountIn);
-    uint256 amountOutWithoutFee = pool.get_dy_without_fee(0, 1, amountIn);
-
-    assertEq(amountOutWithFee + exFee, amountOutWithoutFee);
   }
 }

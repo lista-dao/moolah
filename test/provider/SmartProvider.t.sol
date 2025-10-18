@@ -19,6 +19,9 @@ import { StableSwapLPCollateral } from "../../src/dex/StableSwapLPCollateral.sol
 import { ERC20Mock } from "../../src/moolah/mocks/ERC20Mock.sol";
 import { IOracle } from "../../src/moolah/interfaces/IOracle.sol";
 import { StableSwapFactory } from "../../src/dex/StableSwapFactory.sol";
+import { Liquidator } from "../../src/liquidator/Liquidator.sol";
+import { PublicLiquidator } from "../../src/liquidator/PublicLiquidator.sol";
+import { MockOneInch } from "../liquidator/mocks/MockOneInch.sol";
 
 contract SmartProviderTest is Test {
   address constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
@@ -33,6 +36,9 @@ contract SmartProviderTest is Test {
   StableSwapPoolInfo dexInfo;
   StableSwapLP lp; // ss-lp
   StableSwapLPCollateral lpCollateral; // ss-lp collateral
+
+  Liquidator liquidator;
+  PublicLiquidator publicLiquidator;
 
   ERC20Mock token0;
   address token1 = BNB_ADDRESS; // BNB
@@ -90,16 +96,25 @@ contract SmartProviderTest is Test {
     smartProvider = new SmartProvider(address(moolahProxy), address(lpCollateral));
     ERC1967Proxy smartProviderProxy = new ERC1967Proxy(
       address(smartProvider),
-      abi.encodeWithSelector(
-        smartProvider.initialize.selector,
-        admin,
-        manager,
-        address(dex),
-        address(dexInfo),
-        multiOracle
-      )
+      abi.encodeWithSelector(smartProvider.initialize.selector, admin, address(dex), address(dexInfo), multiOracle)
     );
     smartProvider = SmartProvider(payable(address(smartProviderProxy)));
+
+    // Deploy Liquidator
+    Liquidator liquidatorImpl = new Liquidator(address(moolahProxy));
+    ERC1967Proxy liquidatorProxy = new ERC1967Proxy(
+      address(liquidatorImpl),
+      abi.encodeWithSelector(liquidatorImpl.initialize.selector, admin, manager, bot)
+    );
+    liquidator = Liquidator(payable(address(liquidatorProxy)));
+
+    // Deploy Public Liquidator
+    PublicLiquidator publicLiquidatorImpl = new PublicLiquidator(address(moolahProxy));
+    ERC1967Proxy publicLiquidatorProxy = new ERC1967Proxy(
+      address(publicLiquidatorImpl),
+      abi.encodeWithSelector(publicLiquidatorImpl.initialize.selector, admin, manager, bot)
+    );
+    publicLiquidator = PublicLiquidator(payable(address(publicLiquidatorProxy)));
 
     // set minter for lp collateral
     vm.prank(admin);
@@ -109,6 +124,17 @@ contract SmartProviderTest is Test {
 
     // create market
     createMarket();
+
+    // set liquidator
+    vm.startPrank(manager);
+    moolah.addLiquidationWhitelist(marketParams.id(), address(liquidator));
+    moolah.addLiquidationWhitelist(marketParams.id(), address(publicLiquidator));
+    liquidator.setTokenWhitelist(address(lp), true);
+    liquidator.setMarketWhitelist(Id.unwrap(marketParams.id()), true);
+    vm.stopPrank();
+
+    vm.prank(bot);
+    publicLiquidator.setMarketWhitelist(Id.unwrap(marketParams.id()), true);
   }
 
   function deployDexBnb() public {
@@ -153,8 +179,10 @@ contract SmartProviderTest is Test {
 
     address lpImpl = address(new StableSwapLP());
     address poolImpl = address(new StableSwapPool(address(factory)));
-    vm.prank(admin);
-    factory.setImpls(lpImpl, poolImpl);
+    vm.startPrank(admin);
+    factory.setLpImpl(lpImpl);
+    factory.setSwapImpl(poolImpl);
+    vm.stopPrank();
     assertEq(factory.lpImpl(), lpImpl);
     assertEq(factory.swapImpl(), poolImpl);
 
@@ -216,6 +244,33 @@ contract SmartProviderTest is Test {
     moolah.createMarket(marketParams);
   }
 
+  function test_supplyDexLp() public {
+    // user2 supply 1000 LP tokens as collateral
+    uint256 supplyAmount = 1000 ether;
+
+    deal(address(lp), user2, supplyAmount);
+
+    vm.startPrank(user2);
+    vm.expectRevert();
+    smartProvider.supplyDexLp(marketParams, user2, supplyAmount);
+    vm.expectRevert("zero lp amount");
+    smartProvider.supplyDexLp(marketParams, user2, 0);
+
+    lp.approve(address(smartProvider), supplyAmount);
+    smartProvider.supplyDexLp(marketParams, user2, supplyAmount);
+
+    // Check lp balance and collateral minting
+    uint256 mintedLp = lp.balanceOf(address(smartProvider));
+    assertEq(mintedLp, supplyAmount);
+    assertEq(lpCollateral.totalSupply(), mintedLp);
+    uint256 lpCollateralBalance = lpCollateral.balanceOf(address(moolah));
+    assertEq(lpCollateralBalance, mintedLp);
+    (, , uint256 user2Collateral) = moolah.position(marketParams.id(), user2);
+    assertEq(user2Collateral, mintedLp);
+
+    vm.stopPrank();
+  }
+
   function test_supplyCollateral_perfect() public {
     // user2 supply 1000 LP tokens as collateral
     uint256 supplyAmount = 1000 ether;
@@ -228,25 +283,23 @@ contract SmartProviderTest is Test {
     vm.startPrank(user2);
     token0.approve(address(smartProvider), amounts[0]);
     vm.expectRevert("amount1 should equal msg.value");
-    smartProvider.supplyCollateral(marketParams, user2, amounts[0], amounts[1], supplyAmount, bytes(""));
+    smartProvider.supplyCollateral(marketParams, user2, amounts[0], amounts[1], supplyAmount);
     vm.expectRevert("amount1 should equal msg.value");
     smartProvider.supplyCollateral{ value: amounts[1] }(
       marketParams,
       user2,
       amounts[0],
       0, // invalid amount
-      supplyAmount,
-      bytes("")
+      supplyAmount
     );
 
-    vm.expectRevert("slippage too high");
+    vm.expectRevert("Slippage screwed you");
     smartProvider.supplyCollateral{ value: amounts[1] }(
       marketParams,
       user2,
       amounts[0],
       amounts[1],
-      supplyAmount, // revert on exact amount due to rounding issue
-      bytes("")
+      supplyAmount // revert on exact amount due to rounding issue
     );
 
     // succeed
@@ -255,8 +308,7 @@ contract SmartProviderTest is Test {
       user2,
       amounts[0],
       amounts[1],
-      supplyAmount - 10, // minus 10 wei to avoid rounding issue
-      bytes("")
+      supplyAmount - 10 // minus 10 wei to avoid rounding issue
     );
 
     // Check lp balance and collateral minting
@@ -315,7 +367,7 @@ contract SmartProviderTest is Test {
     assertEq(totalBorrowAssets * 1e6, user2Debt);
   }
 
-  function test_liquidate() public {
+  function test_liquidate_via_liquidator() public {
     test_borrow_usdt();
     uint256 borrowAmount = 560000 ether;
     vm.prank(user2);
@@ -327,11 +379,11 @@ contract SmartProviderTest is Test {
 
     bool isHealthy = moolah.isHealthy(marketParams, marketParams.id(), user2);
     assertTrue(!isHealthy);
-    //uint256 supplyShares, uint128 borrowShares, uint128 collateral
-    (uint256 supplyShares, uint256 user2Debt, uint256 user2Collateral) = moolah.position(marketParams.id(), user2);
+    (, uint256 user2Debt, uint256 user2Collateral) = moolah.position(marketParams.id(), user2);
 
     vm.startPrank(bot);
     deal(USDT, bot, user2Debt + 1000 ether);
+    deal(USDT, address(liquidator), user2Debt + 1000 ether);
     IERC20(USDT).approve(address(moolah), user2Debt + 1000 ether);
 
     uint256[2] memory amounts = dexInfo.calc_coins_amount(address(dex), user2Collateral);
@@ -339,25 +391,241 @@ contract SmartProviderTest is Test {
     uint256 minAmount1 = (amounts[1] * 99) / 100; // slippage 1%
     bytes memory payload = abi.encode(minAmount0, minAmount1);
 
-    vm.expectRevert("not set");
-    moolah.liquidate(marketParams, user2, user2Collateral, 0, payload, bytes(""));
     vm.stopPrank();
 
     vm.prank(manager);
     moolah.addProvider(marketParams.id(), address(smartProvider));
     assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
 
-    uint256 bnbReceive = bot.balance;
+    uint256 usdtBefore = IERC20(USDT).balanceOf(address(liquidator));
     vm.startPrank(bot);
-    moolah.liquidate(marketParams, user2, user2Collateral, 0, payload, bytes(""));
+    (uint256 _seizedAssets, uint256 _repaidAssets) = liquidator.liquidateSmartCollateral(
+      Id.unwrap(marketParams.id()),
+      user2,
+      address(smartProvider),
+      user2Collateral,
+      0,
+      payload
+    );
+    assertEq(user2Collateral, _seizedAssets);
 
     assertEq(lpCollateral.balanceOf(address(moolah)), 0);
     (, user2Debt, user2Collateral) = moolah.position(marketParams.id(), user2);
     assertEq(user2Debt, 0);
     assertEq(user2Collateral, 0);
     assertEq(lp.balanceOf(address(smartProvider)), 0); // all lp redeemed
-    assertApproxEqAbs(token0.balanceOf(bot), amounts[0], 2); // allow 2 wei difference due to rounding
-    assertApproxEqAbs(bot.balance - bnbReceive, amounts[1], 2); // allow 2 wei difference due to rounding
+    assertApproxEqAbs(token0.balanceOf(address(liquidator)), amounts[0], 2); // allow 2 wei difference due to rounding
+    assertApproxEqAbs(address(liquidator).balance, amounts[1], 2); // allow 2 wei difference due to rounding
+    uint256 usdtAfter = IERC20(USDT).balanceOf(address(liquidator));
+    assertEq(usdtAfter, usdtBefore - _repaidAssets);
+  }
+
+  function test_liquidate_via_public_liquidator() public {
+    test_borrow_usdt();
+    uint256 borrowAmount = 560000 ether;
+    vm.prank(user2);
+    moolah.borrow(marketParams, borrowAmount, 0, user2, user2);
+
+    skip(1000000 days); // skip to trigger liquidation
+
+    moolah.accrueInterest(marketParams);
+
+    bool isHealthy = moolah.isHealthy(marketParams, marketParams.id(), user2);
+    assertTrue(!isHealthy);
+    (, uint256 user2Debt, uint256 user2Collateral) = moolah.position(marketParams.id(), user2);
+
+    vm.startPrank(user2);
+    deal(USDT, user2, user2Debt + 1000 ether);
+    IERC20(USDT).approve(address(publicLiquidator), user2Debt + 1000 ether);
+
+    uint256[2] memory amounts = dexInfo.calc_coins_amount(address(dex), user2Collateral);
+    uint256 minAmount0 = (amounts[0] * 99) / 100; // slippage 1%
+    uint256 minAmount1 = (amounts[1] * 99) / 100; // slippage 1%
+    bytes memory payload = abi.encode(minAmount0, minAmount1);
+    vm.stopPrank();
+
+    vm.prank(manager);
+    moolah.addProvider(marketParams.id(), address(smartProvider));
+    assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
+
+    uint256 usdtBefore = IERC20(USDT).balanceOf(user2);
+    vm.startPrank(user2);
+    (uint256 _seizedAssets, uint256 _repaidAssets) = publicLiquidator.liquidateSmartCollateral(
+      Id.unwrap(marketParams.id()),
+      user2,
+      address(smartProvider),
+      user2Collateral,
+      0,
+      payload
+    );
+    assertEq(user2Collateral, _seizedAssets);
+
+    assertEq(lpCollateral.balanceOf(address(moolah)), 0);
+    (, user2Debt, user2Collateral) = moolah.position(marketParams.id(), user2);
+    assertEq(user2Debt, 0);
+    assertEq(user2Collateral, 0);
+    assertEq(lp.balanceOf(address(smartProvider)), 0); // all lp redeemed
+    assertApproxEqAbs(token0.balanceOf(user2), amounts[0], 2); // allow 2 wei difference due to rounding
+    assertApproxEqAbs(user2.balance, amounts[1], 2); // allow 2 wei difference due to rounding
+    uint256 usdtAfter = IERC20(USDT).balanceOf(user2);
+    assertEq(usdtAfter, usdtBefore - _repaidAssets);
+  }
+
+  function test_flash_liquidate_via_liquidator() public {
+    test_borrow_usdt();
+    uint256 borrowAmount = 560000 ether;
+    vm.prank(user2);
+    moolah.borrow(marketParams, borrowAmount, 0, user2, user2);
+
+    skip(1000000 days); // skip to trigger liquidation
+
+    moolah.accrueInterest(marketParams);
+
+    bool isHealthy = moolah.isHealthy(marketParams, marketParams.id(), user2);
+    assertTrue(!isHealthy);
+    (, uint256 user2Debt, uint256 user2Collateral) = moolah.position(marketParams.id(), user2);
+
+    vm.startPrank(bot);
+    deal(USDT, bot, user2Debt + 1000 ether);
+    deal(USDT, address(liquidator), user2Debt + 1000 ether);
+    IERC20(USDT).approve(address(moolah), user2Debt + 1000 ether);
+
+    uint256[2] memory amounts = dexInfo.calc_coins_amount(address(dex), user2Collateral);
+    uint256 minAmount0 = (amounts[0] * 99) / 100; // slippage 1%
+    uint256 minAmount1 = (amounts[1] * 99) / 100; // slippage 1%
+    bytes memory payload = abi.encode(minAmount0, minAmount1);
+
+    vm.stopPrank();
+
+    vm.prank(manager);
+    moolah.addProvider(marketParams.id(), address(smartProvider));
+    assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
+
+    address token0Pair = address(new MockOneInch());
+    address token1Pair = address(new MockOneInch());
+    vm.startPrank(manager);
+    liquidator.setPairWhitelist(token0Pair, true);
+    liquidator.setPairWhitelist(token1Pair, true);
+    vm.stopPrank();
+    bytes memory swapToken0Data = abi.encodeWithSelector(
+      MockOneInch.swap.selector,
+      address(token0),
+      USDT,
+      amounts[0],
+      user2Debt / 2 // min USDT out
+    );
+
+    bytes memory swapToken1Data = abi.encodeWithSelector(
+      MockOneInch.swap.selector,
+      BNB_ADDRESS,
+      USDT,
+      amounts[1],
+      user2Debt / 2 // min USDT out
+    );
+
+    uint256 loanBeforeLiq = IERC20(USDT).balanceOf(address(liquidator));
+    uint256 loanBeforeMoolah = IERC20(USDT).balanceOf(address(moolah));
+    vm.startPrank(bot);
+    (uint256 _seizedAssets, uint256 _repaidAssets) = liquidator.flashLiquidateSmartCollateral(
+      Id.unwrap(marketParams.id()),
+      user2,
+      address(smartProvider),
+      user2Collateral,
+      token0Pair,
+      token1Pair,
+      swapToken0Data,
+      swapToken1Data,
+      payload
+    );
+    assertEq(user2Collateral, _seizedAssets);
+
+    assertEq(lpCollateral.balanceOf(address(moolah)), 0);
+    uint256 loanAfterLiq = IERC20(USDT).balanceOf(address(liquidator));
+    assertEq(loanAfterLiq, loanBeforeLiq + user2Debt - _repaidAssets);
+    (, user2Debt, user2Collateral) = moolah.position(marketParams.id(), user2);
+    assertEq(user2Debt, 0);
+    assertEq(user2Collateral, 0);
+    assertEq(lp.balanceOf(address(smartProvider)), 0); // all lp redeemed
+    assertEq(token0.balanceOf(address(liquidator)), 0);
+    assertEq(address(liquidator).balance, 0);
+    uint256 loanAfterMoolah = IERC20(USDT).balanceOf(address(moolah));
+    assertEq(loanAfterMoolah, loanBeforeMoolah + _repaidAssets);
+  }
+
+  function test_flash_liquidate_via_public_liquidator() public {
+    test_borrow_usdt();
+    uint256 borrowAmount = 560000 ether;
+    vm.prank(user2);
+    moolah.borrow(marketParams, borrowAmount, 0, user2, user2);
+
+    skip(1000000 days); // skip to trigger liquidation
+
+    moolah.accrueInterest(marketParams);
+
+    bool isHealthy = moolah.isHealthy(marketParams, marketParams.id(), user2);
+    assertTrue(!isHealthy);
+    (, uint256 user2Debt, uint256 user2Collateral) = moolah.position(marketParams.id(), user2);
+
+    vm.startPrank(bot);
+    deal(USDT, user2, user2Debt + 1000 ether);
+    IERC20(USDT).approve(address(moolah), user2Debt + 1000 ether);
+
+    uint256[2] memory amounts = dexInfo.calc_coins_amount(address(dex), user2Collateral);
+    uint256 minAmount0 = (amounts[0] * 99) / 100; // slippage 1%
+    uint256 minAmount1 = (amounts[1] * 99) / 100; // slippage 1%
+    bytes memory payload = abi.encode(minAmount0, minAmount1);
+
+    vm.stopPrank();
+
+    vm.prank(manager);
+    moolah.addProvider(marketParams.id(), address(smartProvider));
+    assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
+
+    address token0Pair = address(new MockOneInch());
+    address token1Pair = address(new MockOneInch());
+    bytes memory swapToken0Data = abi.encodeWithSelector(
+      MockOneInch.swap.selector,
+      address(token0),
+      USDT,
+      amounts[0],
+      user2Debt / 2 // min USDT out
+    );
+
+    bytes memory swapToken1Data = abi.encodeWithSelector(
+      MockOneInch.swap.selector,
+      BNB_ADDRESS,
+      USDT,
+      amounts[1],
+      user2Debt / 2 // min USDT out
+    );
+
+    uint256 loanBefore = IERC20(USDT).balanceOf(user2);
+    uint256 loanBeforeMoolah = IERC20(USDT).balanceOf(address(moolah));
+    vm.startPrank(user2);
+    (uint256 _seizedAssets, uint256 _repaidAssets) = publicLiquidator.flashLiquidateSmartCollateral(
+      Id.unwrap(marketParams.id()),
+      user2,
+      address(smartProvider),
+      user2Collateral,
+      token0Pair,
+      token1Pair,
+      swapToken0Data,
+      swapToken1Data,
+      payload
+    );
+    assertEq(user2Collateral, _seizedAssets);
+
+    assertEq(lpCollateral.balanceOf(address(moolah)), 0);
+    uint256 loanAfter = IERC20(USDT).balanceOf(user2);
+    assertEq(loanAfter, loanBefore + user2Debt - _repaidAssets);
+    (, user2Debt, user2Collateral) = moolah.position(marketParams.id(), user2);
+    assertEq(user2Debt, 0);
+    assertEq(user2Collateral, 0);
+    assertEq(lp.balanceOf(address(smartProvider)), 0); // all lp redeemed
+    assertEq(token0.balanceOf(address(publicLiquidator)), 0);
+    assertEq(address(publicLiquidator).balance, 0);
+    uint256 loanAfterMoolah = IERC20(USDT).balanceOf(address(moolah));
+    assertEq(loanAfterMoolah, loanBeforeMoolah + _repaidAssets);
   }
 
   function test_repay_usdt() public {
@@ -522,5 +790,65 @@ contract SmartProviderTest is Test {
 
     assertEq(token0.balanceOf(user2), token0Balance);
     assertEq(user2.balance - bnbBalance, expectBnbAmt);
+  }
+
+  function test_peek() public {
+    // supply more liquidity to market
+    vm.startPrank(userA);
+    uint256 usdtAmt = 100_000_000 ether;
+    deal(USDT, userA, usdtAmt);
+    IERC20(USDT).approve(address(moolah), usdtAmt);
+    moolah.supply(marketParams, usdtAmt, 0, userA, bytes(""));
+    vm.stopPrank();
+
+    uint256 lpPrice = smartProvider.peek(address(lp));
+
+    // user2 deposit 1000 LP tokens as collateral
+    uint256 supplyAmount = 1000 ether;
+    uint256[2] memory amounts = dexInfo.calc_coins_amount(address(dex), supplyAmount);
+    deal(address(token0), user2, amounts[0]);
+    deal(user2, amounts[1]);
+    vm.startPrank(user2);
+    token0.approve(address(smartProvider), amounts[0]);
+    smartProvider.supplyCollateral{ value: amounts[1] }(
+      marketParams,
+      user2,
+      amounts[0],
+      amounts[1],
+      supplyAmount - 10 // minus 10 wei to avoid rounding issue
+    );
+    // check user2 borrow limit
+    (, , uint256 user2Collateral) = moolah.position(marketParams.id(), user2);
+    uint256 borrowLimit = (user2Collateral * lpPrice * lltv70) / 1e18 / 1e8;
+    moolah.borrow(marketParams, borrowLimit - 100, 0, user2, user2);
+
+    // manipulate lp price by swapping on dex
+    uint256 amount0 = 50_000 ether;
+    deal(address(token0), user2, amount0);
+    token0.approve(address(dex), amount0);
+    uint256 amount1BalBefore = user2.balance;
+    dex.exchange(0, 1, amount0, 0);
+    uint256 amount1BalAfter = user2.balance;
+
+    uint256 lpPrice2 = smartProvider.peek(address(lp));
+    // User2 can borrow more
+    (, , user2Collateral) = moolah.position(marketParams.id(), user2);
+    uint256 newBorrowLimit = (user2Collateral * lpPrice2 * lltv70) / 1e18 / 1e8;
+    moolah.borrow(marketParams, newBorrowLimit - borrowLimit, 0, user2, user2);
+
+    // User2 restore pool reserve by swapping back
+    uint256 amount1 = amount1BalAfter - amount1BalBefore;
+    deal(user2, amount1);
+    dex.exchange{ value: amount1 }(1, 0, amount1, 0);
+    uint256 lpPrice3 = smartProvider.peek(address(lp));
+
+    // check user2 borrow limit after restore
+    (, uint256 borrowedShares, ) = moolah.position(marketParams.id(), user2);
+    uint256 borrowLimitAfter = (user2Collateral * lpPrice3 * lltv70) / 1e18 / 1e8;
+    (, , uint128 totalBorrowAssets, uint128 totalBorrowShares, , ) = moolah.market(marketParams.id());
+
+    uint256 debt = borrowedShares.toAssetsUp(totalBorrowAssets, totalBorrowShares);
+    assertLe(debt, borrowLimitAfter);
+    vm.stopPrank();
   }
 }

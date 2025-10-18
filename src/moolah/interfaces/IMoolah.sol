@@ -49,10 +49,8 @@ struct Signature {
 /// @dev This interface is used for factorizing IMoolahStaticTyping and IMoolah.
 /// @dev Consider using the IMoolah interface instead of this one.
 interface IMoolahBase {
-  /// @notice The EIP-712 domain separator.
-  /// @dev Warning: Every EIP-712 signed message based on this domain separator can be reused on chains sharing the
-  /// same chain id and on forks because the domain separator would be the same.
-  function DOMAIN_SEPARATOR() external view returns (bytes32);
+  /// @notice The EIP-712 domain separator used in the encoding of the signatures for `setAuthorizationWithSig`.
+  function domainSeparator() external view returns (bytes32);
 
   /// @notice The fee recipient of all markets.
   /// @dev The recipient receives the fees of a given market through a supply position on that market.
@@ -255,30 +253,6 @@ interface IMoolahBase {
     address borrower,
     uint256 seizedAssets,
     uint256 repaidShares,
-    bytes memory data
-  ) external returns (uint256, uint256);
-
-  /// @notice Liquidates the given `repaidShares` of debt asset or seize the given `seizedAssets` of collateral on the
-  /// given market `marketParams` of the given `borrower`'s position, optionally calling back the caller's
-  /// `onMoolahLiquidate` function with the given `data`.
-  /// @dev Either `seizedAssets` or `repaidShares` should be zero.
-  /// @dev Seizing more than the collateral balance will underflow and revert without any error message.
-  /// @dev Repaying more than the borrow balance will underflow and revert without any error message.
-  /// @dev An attacker can front-run a liquidation with a small repay making the transaction revert for underflow.
-  /// @param marketParams The market of the position.
-  /// @param borrower The owner of the position.
-  /// @param seizedAssets The amount of collateral to seize.
-  /// @param repaidShares The amount of shares to repay.
-  /// @param payload The encoded minimum amount0 and minimum amount1 pass to `SmartProvider`. Pass empty data if not needed.
-  /// @param data Arbitrary data to pass to the `onMoolahLiquidate` callback. Pass empty data if not needed.
-  /// @return The amount of assets seized.
-  /// @return The amount of assets repaid.
-  function liquidate(
-    MarketParams memory marketParams,
-    address borrower,
-    uint256 seizedAssets,
-    uint256 repaidShares,
-    bytes memory payload,
     bytes memory data
   ) external returns (uint256, uint256);
 
