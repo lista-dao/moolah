@@ -81,6 +81,8 @@ contract SmartProvider is
     uint256 minAmount1
   );
 
+  event RedeemLpCollateral(address indexed liquidator, uint256 lpAmount, uint256 token0Amount, uint256 token1Amount);
+
   modifier onlyMoolah() {
     require(msg.sender == address(MOOLAH), "not moolah");
     _;
@@ -353,42 +355,38 @@ contract SmartProvider is
     }
   }
 
-  function liquidate(Id id, address borrower) external onlyMoolah {
-    revert("Not implemented");
-  }
+  function liquidate(Id id, address borrower) external onlyMoolah {}
 
   /**
    * @notice Liquidates a position by burning the seized collateral token and removing liquidity from the stableswap pool.
    * @notice The seized tokens (token0 and token1) are then sent to the liquidator.
    * @notice This function assumes that the liquidator has already received the seized collateral token which will be burned.
-   * @param id The ID of the market to liquidate.
    * @param liquidator The address of the liquidator.
-   * @param seizedAssets The amount of collateral to be seized (in collateral token).
-   * @param payload The abi encoded data of minAmounts (minAmount0 and minAmount1) to validate slippage during removing liquidity.
+   * @param lpAmount The amount of collateral to be redeemed (in LP tokens).
+   * @param minAmount0 The minimum amount of token0 to receive (slippage tolerance).
+   * @param minAmount1 The minimum amount of token1 to receive (slippage tolerance).
+   * @return The amount of token0 and token1 redeemed.
    */
-  function liquidate(
-    Id id,
-    address payable liquidator,
-    uint256 seizedAssets,
-    bytes calldata payload
-  ) external onlyMoolah {
-    MarketParams memory marketParams = MOOLAH.idToMarketParams(id);
-    require(marketParams.collateralToken == TOKEN, "invalid collateral token");
-    require(seizedAssets > 0, "zero seized assets");
+  function redeemLpCollateral(
+    address payable liquidator, // liquidator contract
+    uint256 lpAmount,
+    uint256 minAmount0,
+    uint256 minAmount1
+  ) external nonReentrant returns (uint256, uint256) {
+    require(liquidator != address(0), ErrorsLib.ZERO_ADDRESS);
+    require(lpAmount > 0, "zero seized assets");
     // burn collateral token sent to the liquidator before
-    IStableSwapLPCollateral(TOKEN).burn(liquidator, seizedAssets);
-
-    // validate slippage before removing liquidity
-    (uint256 minAmount0, uint256 minAmount1) = abi.decode(payload, (uint256, uint256));
+    IStableSwapLPCollateral(TOKEN).burn(liquidator, lpAmount);
 
     // remove liquidity from the stableswap pool
-    (uint256 token0Amount, uint256 token1Amount) = _redeemLp(seizedAssets, minAmount0, minAmount1);
+    (uint256 token0Amount, uint256 token1Amount) = _redeemLp(lpAmount, minAmount0, minAmount1);
 
     // send token0 and token1 to the liquidator
     if (token0Amount > 0) transferOutTo(0, token0Amount, liquidator);
     if (token1Amount > 0) transferOutTo(1, token1Amount, liquidator);
 
-    emit SmartLiquidation(liquidator, TOKEN, dexLP, seizedAssets, minAmount0, minAmount1);
+    emit RedeemLpCollateral(liquidator, lpAmount, token0Amount, token1Amount);
+    return (token0Amount, token1Amount);
   }
 
   function _redeemLp(
