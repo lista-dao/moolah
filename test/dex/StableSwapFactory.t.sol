@@ -76,14 +76,14 @@ contract StableSwapFactoryTest is Test {
     factory.createSwapPair(address(token0), token1, "LPToken", "LPT", 30, 1000000, 500000, admin, admin, admin, oracle);
 
     (address t0, address t1) = factory.sortTokens(address(token0), token1);
-    (address swapContract, address tokenA, address tokenB, address lp) = factory.stableSwapPairInfo(t0, t1, 0);
+    (address swapContract, address tokenA, address tokenB, address lp) = factory.stableSwapPairInfos(t0, t1, 0);
 
     assertEq(tokenA, t0);
     assertEq(tokenB, t1);
     assertEq(swapContract, factory.swapPairContract(0));
     assertEq(factory.pairLength(), 1);
 
-    StableSwapFactory.StableSwapPairInfo[] memory pairs = factory.getPairInfo(tokenA, tokenB);
+    StableSwapFactory.StableSwapPairInfo[] memory pairs = factory.getPairInfos(tokenA, tokenB);
     assertEq(pairs.length, 1);
     assertEq(pairs[0].swapContract, swapContract);
     assertEq(pairs[0].token0, tokenA);
@@ -104,13 +104,13 @@ contract StableSwapFactoryTest is Test {
       admin,
       oracle
     );
-    (address swapContract2, address tokenA2, address tokenB2, address lp2) = factory.stableSwapPairInfo(t0, t1, 1);
+    (address swapContract2, address tokenA2, address tokenB2, address lp2) = factory.stableSwapPairInfos(t0, t1, 1);
     assertEq(tokenA2, t0);
     assertEq(tokenB2, t1);
     assertEq(swapContract2, factory.swapPairContract(1));
     assertEq(factory.pairLength(), 2);
 
-    StableSwapFactory.StableSwapPairInfo[] memory pairs2 = factory.getPairInfo(tokenA2, tokenB2);
+    StableSwapFactory.StableSwapPairInfo[] memory pairs2 = factory.getPairInfos(tokenA2, tokenB2);
     assertEq(pairs2.length, 2);
     assertEq(pairs2[1].swapContract, swapContract2);
     assertEq(pairs2[1].token0, tokenA2);
