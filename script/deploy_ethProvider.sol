@@ -6,13 +6,13 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 
 import { ETHProvider } from "../src/provider/ETHProvider.sol";
 
-contract BNBProviderDeploy is Script {
-  address moolah = 0x29c53B75b4CD3CeC0B58F935dC642fF47B708d65;
+contract ETHProviderDeploy is Script {
+  address moolah = 0xf820fB4680712CD7263a0D3D024D5b5aEA82Fd70;
 
-  address asset = 0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9; // WETH
+  address asset = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2; // WETH
 
   function run() public {
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY_TESTNET");
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
