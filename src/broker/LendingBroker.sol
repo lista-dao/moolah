@@ -995,6 +995,20 @@ contract LendingBroker is
     emit BorrowPaused(paused);
   }
 
+  /**
+   * @dev pause contract
+   */
+  function pause() external onlyRole(PAUSER) {
+    _pause();
+  }
+
+  /**
+   * @dev unpause contract
+   */
+  function unpause() external onlyRole(MANAGER) {
+    _unpause();
+  }
+
   /// @dev only callable by the DEFAULT_ADMIN_ROLE (must be a TimeLock contract)
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 }
