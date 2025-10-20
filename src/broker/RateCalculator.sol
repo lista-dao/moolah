@@ -28,12 +28,11 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
    * @dev Initializes the contract with the given addresses
    * @param _admin The address of the admin role
    * @param _manager The address of the manager role
-   * @param _pauser The address of the pauser role
    * @param _bot The address of the bot role
    */
-  function initialize(address _admin, address _manager, address _pauser, address _bot) public initializer {
+  function initialize(address _admin, address _manager, address _bot) public initializer {
     require(
-      _admin != address(0) && _manager != address(0) && _pauser != address(0) && _bot != address(0),
+      _admin != address(0) && _manager != address(0) && _bot != address(0),
       "RateCalculator/zero-address-provided"
     );
 
@@ -42,7 +41,6 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
 
     _grantRole(DEFAULT_ADMIN_ROLE, _admin);
     _grantRole(MANAGER, _manager);
-    _grantRole(PAUSER, _pauser);
     _grantRole(BOT, _bot);
   }
 
