@@ -9,13 +9,13 @@ import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 contract MoolahVaultConfigDeploy is Script {
   using MarketParamsLib for MarketParams;
   // todo update vault
-  MoolahVault OIKVault = MoolahVault(0x6d6783C146F2B0B2774C1725297f1845dc502525);
+  MoolahVault TakeVault = MoolahVault(0x6d6783C146F2B0B2774C1725297f1845dc502525);
   MoolahVault EGL1Vault = MoolahVault(0x6d6783C146F2B0B2774C1725297f1845dc502525);
 
   uint256 fee = 50 * 1e16;
   address feeRecipient = 0x2E2Eed557FAb1d2E11fEA1E1a23FF8f1b23551f3;
   address skimRecipient = 0x1d60bBBEF79Fb9540D271Dbb01925380323A8f66;
-  address OIKWhiteList = 0x44a26069A57f61f290B49c8848f1F43786446976;
+  address TakeWhiteList = 0x44a26069A57f61f290B49c8848f1F43786446976;
   address EGL1WhiteList = 0xf4780c9929E713D0b0C6F6bcA3c2f94461106717;
 
   address ETH = 0x2170Ed0880ac9A755fd29B2688956BD959F933F8;
@@ -31,6 +31,7 @@ contract MoolahVaultConfigDeploy is Script {
   address B2 = 0x783c3f003f172c6Ac5AC700218a357d2D66Ee2a2;
   address OIK = 0xB035723D62e0e2ea7499D76355c9D560f13ba404;
   address EGL1 = 0xf4B385849f2e817E92bffBfB9AEb48F950Ff4444;
+  address Take = 0xE747E54783Ba3F77a8E5251a3cBA19EBe9C0E197;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
@@ -57,17 +58,16 @@ contract MoolahVaultConfigDeploy is Script {
 
     vm.startBroadcast(deployerPrivateKey);
 
-    configOIK(deployer, OIKVault, OIKWhiteList);
-    configEGL1(deployer, EGL1Vault, EGL1WhiteList);
+    configTake(deployer, TakeVault, TakeWhiteList);
 
     vm.stopBroadcast();
 
     console.log("vault config done!");
   }
 
-  function configOIK(address deployer, MoolahVault vault, address whiteList) internal {
+  function configTake(address deployer, MoolahVault vault, address whiteList) internal {
     MarketParams memory BTCBParams = MarketParams({
-      loanToken: OIK,
+      loanToken: Take,
       collateralToken: BTCB,
       oracle: multiOracle,
       irm: alphaIrm,
@@ -75,7 +75,7 @@ contract MoolahVaultConfigDeploy is Script {
     });
 
     MarketParams memory USDTParams = MarketParams({
-      loanToken: OIK,
+      loanToken: Take,
       collateralToken: USDT,
       oracle: multiOracle,
       irm: alphaIrm,
@@ -92,8 +92,8 @@ contract MoolahVaultConfigDeploy is Script {
 
     vault.addWhiteList(whiteList);
 
-    vault.setCap(BTCBParams, 50_000_000 ether);
-    vault.setCap(USDTParams, 50_000_000 ether);
+    vault.setCap(BTCBParams, 10_000_000 ether);
+    vault.setCap(USDTParams, 10_000_000 ether);
 
     Id BTCBId = BTCBParams.id();
     Id USDTId = USDTParams.id();
