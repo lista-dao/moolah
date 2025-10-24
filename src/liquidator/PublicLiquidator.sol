@@ -353,7 +353,6 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
 
     // redeem lp collateral from smart collateral provider and transfer to msg.sender
     (uint256 token0Amount, uint256 token1Amount) = ISmartProvider(smartProvider).redeemLpCollateral(
-      payable(address(this)),
       collateralTokenBalanceAfter - collateralTokenBalanceBefore,
       minAmount0,
       minAmount1
@@ -459,7 +458,6 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     } else if (arb.swapSmartCollateral) {
       // redeem lp
       (uint256 amount0, uint256 amount1) = ISmartProvider(arb.smartProvider).redeemLpCollateral(
-        payable(address(this)),
         arb.seized,
         arb.minToken0Amt,
         arb.minToken1Amt

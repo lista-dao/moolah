@@ -361,31 +361,28 @@ contract SmartProvider is
    * @notice Liquidates a position by burning the seized collateral token and removing liquidity from the stableswap pool.
    * @notice The seized tokens (token0 and token1) are then sent to the liquidator.
    * @notice This function assumes that the liquidator has already received the seized collateral token which will be burned.
-   * @param liquidator The address of the liquidator.
    * @param lpAmount The amount of collateral to be redeemed (in LP tokens).
    * @param minAmount0 The minimum amount of token0 to receive (slippage tolerance).
    * @param minAmount1 The minimum amount of token1 to receive (slippage tolerance).
    * @return The amount of token0 and token1 redeemed.
    */
   function redeemLpCollateral(
-    address payable liquidator, // liquidator contract
     uint256 lpAmount,
     uint256 minAmount0,
     uint256 minAmount1
   ) external nonReentrant returns (uint256, uint256) {
-    require(liquidator != address(0), ErrorsLib.ZERO_ADDRESS);
     require(lpAmount > 0, "zero seized assets");
     // burn collateral token sent to the liquidator before
-    IStableSwapLPCollateral(TOKEN).burn(liquidator, lpAmount);
+    IStableSwapLPCollateral(TOKEN).burn(msg.sender, lpAmount);
 
     // remove liquidity from the stableswap pool
     (uint256 token0Amount, uint256 token1Amount) = _redeemLp(lpAmount, minAmount0, minAmount1);
 
     // send token0 and token1 to the liquidator
-    if (token0Amount > 0) transferOutTo(0, token0Amount, liquidator);
-    if (token1Amount > 0) transferOutTo(1, token1Amount, liquidator);
+    if (token0Amount > 0) transferOutTo(0, token0Amount, payable(msg.sender));
+    if (token1Amount > 0) transferOutTo(1, token1Amount, payable(msg.sender));
 
-    emit RedeemLpCollateral(liquidator, lpAmount, token0Amount, token1Amount);
+    emit RedeemLpCollateral(msg.sender, lpAmount, token0Amount, token1Amount);
     return (token0Amount, token1Amount);
   }
 
