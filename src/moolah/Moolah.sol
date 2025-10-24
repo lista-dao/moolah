@@ -608,11 +608,6 @@ contract Moolah is
       if (provider != address(0)) {
         IProvider(provider).liquidate(id, borrower);
       }
-      // check if the market has a broker assigned
-      address broker = brokers[id];
-      if (broker != address(0) && marketParams.collateralToken == IBrokerBase(broker).COLLATERAL_TOKEN()) {
-        IBrokerBase(broker).liquidate(id, borrower);
-      }
     }
 
     if (data.length > 0) IMoolahLiquidateCallback(msg.sender).onMoolahLiquidate(repaidAssets, data);

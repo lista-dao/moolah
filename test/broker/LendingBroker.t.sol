@@ -9,7 +9,7 @@ import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
 import { IMoolah, MarketParams, Id, Position, Market } from "moolah/interfaces/IMoolah.sol";
 import { OracleMock } from "../../src/moolah/mocks/OracleMock.sol";
-import { IrmMock } from "../../src/moolah/mocks/IrmMock.sol";
+import { IrmMockZero } from "../../src/moolah/mocks/IrmMock.sol";
 import { ERC20Mock } from "../../src/moolah/mocks/ERC20Mock.sol";
 
 import { LendingBroker } from "../../src/broker/LendingBroker.sol";
@@ -23,12 +23,14 @@ import { MarketAllocation } from "../../src/moolah-vault/interfaces/IMoolahVault
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
 import { MathLib, WAD } from "moolah/libraries/MathLib.sol";
-import { ORACLE_PRICE_SCALE } from "moolah/libraries/ConstantsLib.sol";
+import { UtilsLib } from "moolah/libraries/UtilsLib.sol";
+import { IMoolahLiquidateCallback } from "../../src/moolah/interfaces/IMoolahCallbacks.sol";
 
 contract LendingBrokerTest is Test {
   using MarketParamsLib for MarketParams;
   using SharesMathLib for uint256;
   using MathLib for uint256;
+  using UtilsLib for uint256;
 
   // ========= Shared state (unused fields may remain default in some tests) =========
   // Core
@@ -42,17 +44,15 @@ contract LendingBrokerTest is Test {
   Id public id;
 
   // Token handles (real tokens on fork or mocks locally if used)
-  IERC20 public loanToken;
-  IERC20 public collateralToken;
   OracleMock public oracle; // unused in fork path
-  IrmMock public irm; // unused in fork path
+  IrmMockZero public irm; // unused in fork path
   address supplier = address(0x201);
   address borrower = address(0x202);
-  address liquidator = address(0x203);
+  LiquidationCallbackMock public liquidator;
 
   uint256 constant LTV = 0.8e18;
   uint256 constant SUPPLY_LIQ = 1_000_000 ether;
-  uint256 constant COLLATERAL = 1_000 ether;
+  uint256 constant COLLATERAL = 1 ether;
 
   // Local roles for tests
   address constant ADMIN = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253;
@@ -93,7 +93,7 @@ contract LendingBrokerTest is Test {
     oracle.setPrice(address(BTCB), 120000e8);
 
     // IRM enable + LLTV
-    irm = new IrmMock();
+    irm = new IrmMockZero();
     vm.prank(MANAGER);
     Moolah(address(moolah)).enableIrm(address(irm));
     vm.prank(MANAGER);
@@ -106,7 +106,7 @@ contract LendingBrokerTest is Test {
     RateCalculator rcImpl = new RateCalculator();
     ERC1967Proxy rcProxy = new ERC1967Proxy(
       address(rcImpl),
-      abi.encodeWithSelector(RateCalculator.initialize.selector, ADMIN, MANAGER, PAUSER, BOT)
+      abi.encodeWithSelector(RateCalculator.initialize.selector, ADMIN, MANAGER, BOT)
     );
     rateCalc = RateCalculator(address(rcProxy));
 
@@ -147,20 +147,27 @@ contract LendingBrokerTest is Test {
     moolah.supply(marketParams, seed, 0, supplier, bytes(""));
     vm.stopPrank();
 
-    // Token handles
-    loanToken = IERC20(address(LISUSD));
-    collateralToken = IERC20(address(BTCB));
-
     // Fund borrower with collateral and deposit to Moolah
     BTCB.setBalance(borrower, COLLATERAL);
     vm.startPrank(borrower);
-    collateralToken.approve(address(moolah), type(uint256).max);
+    BTCB.approve(address(moolah), type(uint256).max);
     moolah.supplyCollateral(marketParams, COLLATERAL, borrower, bytes(""));
     vm.stopPrank();
 
     // Approval for borrower -> broker (for future repay)
     vm.prank(borrower);
-    loanToken.approve(address(broker), type(uint256).max);
+    LISUSD.approve(address(broker), type(uint256).max);
+
+    // deploy liquidator contract
+    liquidator = new LiquidationCallbackMock();
+
+    // whitelist lendingbroker as liquidator in moolah
+    vm.prank(MANAGER);
+    Moolah(address(moolah)).addLiquidationWhitelist(id, address(broker));
+
+    // whitelist liquidator at lending broker
+    vm.prank(MANAGER);
+    broker.toggleLiquidationWhitelist(address(liquidator), true);
   }
 
   function _snapshot(address user) internal view returns (Market memory market, Position memory pos) {
@@ -170,6 +177,76 @@ contract LendingBrokerTest is Test {
 
   function _principalRepaid(Market memory beforeMarket, Market memory afterMarket) internal pure returns (uint256) {
     return uint256(beforeMarket.totalBorrowAssets) - uint256(afterMarket.totalBorrowAssets);
+  }
+
+  function _totalPrincipalAtBroker(address user) internal view returns (uint256 totalPrincipal) {
+    DynamicLoanPosition memory dyn = broker.userDynamicPosition(user);
+    totalPrincipal += dyn.principal;
+
+    FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(user);
+    for (uint256 i = 0; i < fixedPositions.length; i++) {
+      totalPrincipal += fixedPositions[i].principal - fixedPositions[i].principalRepaid;
+    }
+  }
+
+  function _totalInterestAtBroker(address user) internal view returns (uint256 totalInterest) {
+    FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(user);
+    DynamicLoanPosition memory dynamicPosition = broker.userDynamicPosition(user);
+    uint256 currentRate = rateCalc.getRate(address(broker));
+    uint256 totalDebt;
+    // [1] total debt from fixed position
+    for (uint256 i = 0; i < fixedPositions.length; i++) {
+      FixedLoanPosition memory _fixedPos = fixedPositions[i];
+      // add principal
+      totalDebt += _fixedPos.principal - _fixedPos.principalRepaid;
+      // add interest
+      totalDebt += BrokerMath.getAccruedInterestForFixedPosition(_fixedPos) - _fixedPos.interestRepaid;
+    }
+    // [2] total debt from dynamic position
+    totalDebt += BrokerMath.denormalizeBorrowAmount(dynamicPosition.normalizedDebt, currentRate);
+
+    totalInterest = totalDebt - _principalAtMoolah(user);
+  }
+
+  function _principalAtMoolah(address user) internal view returns (uint256) {
+    Market memory market = moolah.market(id);
+    Position memory pos = moolah.position(id, user);
+    return uint256(pos.borrowShares).toAssetsUp(market.totalBorrowAssets, market.totalBorrowShares);
+  }
+
+  function healthStatus(address user) internal view {
+    Market memory market = moolah.market(marketParams.id());
+    Position memory position = moolah.position(marketParams.id(), user);
+    uint256 borrowed = uint256(position.borrowShares).toAssetsUp(market.totalBorrowAssets, market.totalBorrowShares);
+    uint256 maxBorrow = uint256(position.collateral).mulDivDown(moolah._getPrice(marketParams, user), 1e36).wMulDown(
+      marketParams.lltv
+    );
+
+    console.log("health status - borrowed: ", borrowed);
+    console.log("health status - maxBorrow: ", maxBorrow);
+  }
+
+  uint256 internal nextTermId;
+
+  function _prepareLiquidatablePosition() internal {
+    uint256 termId = ++nextTermId;
+    vm.prank(MANAGER);
+    broker.setFixedTermAndRate(termId, 30 days, RATE_SCALE + 30300 * 10 ** 14); // 10% APR
+
+    vm.startPrank(borrower);
+    broker.borrow(40000 ether);
+    broker.borrow(40000 ether, termId);
+    vm.stopPrank();
+
+    vm.prank(MANAGER);
+    rateCalc.setMaxRatePerSecond(address(broker), RATE_SCALE + 30301 * 10 ** 14);
+
+    vm.prank(BOT);
+    rateCalc.setRatePerSecond(address(broker), RATE_SCALE + 30300 * 10 ** 14);
+
+    skip(30 days);
+    // slash collateral price to drive the position underwater
+    oracle.setPrice(address(BTCB), 100000e8);
   }
 
   // -----------------------------
@@ -183,7 +260,7 @@ contract LendingBrokerTest is Test {
     broker.borrow(borrowAmt);
 
     // User receives loan tokens
-    assertEq(loanToken.balanceOf(borrower), borrowAmt);
+    assertEq(LISUSD.balanceOf(borrower), borrowAmt);
 
     // Position at Moolah increased
     uint128 borrowSharesBefore;
@@ -229,7 +306,7 @@ contract LendingBrokerTest is Test {
     broker.repay(repayAmt, borrower);
     vm.stopPrank();
 
-    uint256 helperAfter = loanToken.balanceOf(helper);
+    uint256 helperAfter = LISUSD.balanceOf(helper);
     (uint256 principalAfter, uint256 normalizedAfter) = broker.dynamicLoanPositions(borrower);
     (Market memory marketAfter, Position memory posAfter) = _snapshot(borrower);
 
@@ -272,12 +349,12 @@ contract LendingBrokerTest is Test {
     uint256 budget = actualDebt + buffer;
 
     LISUSD.setBalance(borrower, budget);
-    uint256 balanceBefore = loanToken.balanceOf(borrower);
+    uint256 balanceBefore = LISUSD.balanceOf(borrower);
 
     vm.prank(borrower);
     broker.repay(budget, borrower);
 
-    uint256 balanceAfter = loanToken.balanceOf(borrower);
+    uint256 balanceAfter = LISUSD.balanceOf(borrower);
     (Market memory marketAfter, Position memory posAfter) = _snapshot(borrower);
     (uint256 principalAfter, uint256 normalizedAfter) = broker.dynamicLoanPositions(borrower);
 
@@ -332,7 +409,7 @@ contract LendingBrokerTest is Test {
     broker.repay(budget, borrower);
     vm.stopPrank();
 
-    uint256 helperAfter = loanToken.balanceOf(helper);
+    uint256 helperAfter = LISUSD.balanceOf(helper);
     (Market memory marketAfter, Position memory posAfter) = _snapshot(borrower);
     (uint256 principalAfter, uint256 normalizedAfter) = broker.dynamicLoanPositions(borrower);
 
@@ -547,7 +624,7 @@ contract LendingBrokerTest is Test {
     broker.repay(repayAmt, posId, borrower);
     vm.stopPrank();
 
-    uint256 helperAfter = loanToken.balanceOf(helper);
+    uint256 helperAfter = LISUSD.balanceOf(helper);
     (Market memory marketAfter, Position memory posAfter) = _snapshot(borrower);
     FixedLoanPosition[] memory afterPositions = broker.userFixedPositions(borrower);
     assertEq(afterPositions.length, 1, "position removed unexpectedly");
@@ -625,7 +702,7 @@ contract LendingBrokerTest is Test {
     );
     assertLt(residualAssets, 1e16, "residual borrow assets too large");
 
-    uint256 helperAfter = loanToken.balanceOf(helper);
+    uint256 helperAfter = LISUSD.balanceOf(helper);
     uint256 spent = helperBudget - helperAfter;
 
     uint256 principalRepaid = _principalRepaid(marketBefore, marketAfter);
@@ -667,7 +744,7 @@ contract LendingBrokerTest is Test {
     assertEq(fixedBefore.length, 1, "expected one fixed position");
     uint256 posId = fixedBefore[0].posId;
 
-    uint256 borrowerBalanceBefore = loanToken.balanceOf(borrower);
+    uint256 borrowerBalanceBefore = LISUSD.balanceOf(borrower);
     uint256 overpayAmount = fixedBorrow + 10 ether;
 
     vm.prank(borrower);
@@ -690,274 +767,118 @@ contract LendingBrokerTest is Test {
     );
     assertApproxEqAbs(borrowAssetsAfter, dynamicBorrow, 1, "unexpected borrow assets after overpay");
 
-    uint256 borrowerBalanceAfter = loanToken.balanceOf(borrower);
+    uint256 borrowerBalanceAfter = LISUSD.balanceOf(borrower);
     assertEq(borrowerBalanceBefore - borrowerBalanceAfter, fixedBorrow, "incorrect token spend");
   }
 
-  // -----------------------------
-  // Liquidation path: dynamic first, then fixed (sorted by maturity)
-  // -----------------------------
-  function test_liquidation_updatesBrokerPositions() public {
-    uint256 dynBorrow = 600 ether;
-    vm.prank(borrower);
-    broker.borrow(dynBorrow);
+  //////////////////////////////////////////////////////
+  ///////////////// Liquidation Tests //////////////////
+  //////////////////////////////////////////////////////
+  function test_liquidation_fullClearsPrincipal_andSuppliesInterest() public {
+    test_liquidation(100 * 1e8);
+  }
 
-    vm.prank(MANAGER);
-    broker.setFixedTermAndRate(31, 45 days, RATE_SCALE + 2);
+  function test_liquidation_halfClearsPrincipal_andSuppliesInterest() public {
+    test_liquidation(50 * 1e8);
+  }
 
-    vm.prank(borrower);
-    broker.borrow(300 ether, 31);
+  function test_liquidation_tinyClearsPrincipal_andSuppliesInterest() public {
+    test_liquidation(3 * 1e8);
+  }
 
-    FixedLoanPosition[] memory beforeFix = broker.userFixedPositions(borrower);
-    assertEq(beforeFix.length, 1);
-    uint256 fixedPosId = beforeFix[0].posId;
+  function test_liquidation(uint256 percentageToLiquidate) internal {
+    _prepareLiquidatablePosition();
 
-    (uint256 dynPrincipalBefore, uint256 dynNormalizedBefore) = broker.dynamicLoanPositions(borrower);
+    /*
+    console.log("Broker address: ", address(broker));
+    console.log("Moolah address: ", address(moolah));
+    console.log("collateral token address: ", address(BTCB));
+    console.log("loan token address: ", address(LISUSD));
+    console.log("liquidator address: ", address(liquidator));
+    */
 
-    // make the account unhealthy
-    oracle.setPrice(address(BTCB), 10_000_000);
+    console.log("====== Liquidation Test Start percentage %s % =======", percentageToLiquidate / 1e8);
 
-    Market memory mmkt = moolah.market(id);
-    Position memory pre = moolah.position(id, borrower);
-    uint256 repayAssets = 50 ether; // keep smaller than dynamic principal so fixed should remain untouched
-    uint256 repaidShares = repayAssets.toSharesUp(mmkt.totalBorrowAssets, mmkt.totalBorrowShares);
+    // get user's borrow shares
+    Position memory posBefore = moolah.position(marketParams.id(), borrower);
 
-    LISUSD.setBalance(liquidator, 1_000 ether);
-    vm.startPrank(liquidator);
-    IERC20(address(LISUSD)).approve(address(moolah), type(uint256).max);
-    moolah.liquidate(marketParams, borrower, 0, repaidShares, bytes(""));
-    vm.stopPrank();
+    uint256 userBorrowShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, percentageToLiquidate, 100 * 1e8);
+    uint256 userCollateralBefore = posBefore.collateral;
 
-    vm.prank(address(moolah));
-    broker.liquidate(id, borrower);
+    console.log("[Before] user borrow shares before: ", userBorrowShares);
+    console.log("[Before] user collateral before: ", userCollateralBefore);
 
-    (uint256 dynPrincipalAfter, uint256 dynNormalizedAfter) = broker.dynamicLoanPositions(borrower);
-    assertLt(dynPrincipalAfter, dynPrincipalBefore, "dynamic principal not reduced");
-    assertLt(dynNormalizedAfter, dynNormalizedBefore, "normalized debt unchanged");
+    uint256 brokerCollateralBalBefore = BTCB.balanceOf(address(broker));
 
-    FixedLoanPosition[] memory afterFix = broker.userFixedPositions(borrower);
-    assertEq(afterFix.length, 1, "fixed position count should stay the same");
-    FixedLoanPosition memory fixedAfter = afterFix[0];
-    assertEq(fixedAfter.posId, fixedPosId);
-    assertEq(
-      fixedAfter.principalRepaid,
-      beforeFix[0].principalRepaid,
-      "fixed position should remain untouched until dynamic cleared"
+    (uint256 seizedAssets, uint256 repaidShares, uint256 repaidAssets) = BrokerMath.previewLiquidationRepayment(
+      marketParams,
+      moolah.market(marketParams.id()),
+      0,
+      userBorrowShares,
+      moolah._getPrice(marketParams, borrower)
     );
+    console.log("[Preview] seized assets: ", seizedAssets);
+    console.log("[Preview] repaid shares: ", repaidShares);
+    console.log("[Preview] repaid assets: ", repaidAssets);
+    healthStatus(borrower);
 
-    Position memory post = moolah.position(id, borrower);
-    assertLt(post.borrowShares, pre.borrowShares, "moolah borrow shares should fall");
-  }
+    uint256 interestBefore = _totalInterestAtBroker(borrower);
+    console.log("pre-liquidation interest at broker: ", interestBefore);
+    uint256 principalBeforeBroker = _totalPrincipalAtBroker(borrower);
+    uint256 principalBeforeMoolah = _principalAtMoolah(borrower);
+    console.log("[Before] broker principal: ", principalBeforeBroker);
+    console.log("[Before] moolah principal: ", principalBeforeMoolah);
+    assertApproxEqAbs(principalBeforeBroker, principalBeforeMoolah, 1, "pre principal mismatch");
 
-  function test_liquidation_prefersEarlierMaturityFixedPosition() public {
-    // configure three fixed terms with increasing maturities
-    vm.startPrank(MANAGER);
-    broker.setFixedTermAndRate(1, 30 days, RATE_SCALE + 1);
-    broker.setFixedTermAndRate(2, 60 days, RATE_SCALE + 1);
-    broker.setFixedTermAndRate(3, 90 days, RATE_SCALE + 1);
-    vm.stopPrank();
-
-    // borrow against each term
-    vm.startPrank(borrower);
-    broker.borrow(200 ether, 1);
-    broker.borrow(200 ether, 2);
-    broker.borrow(200 ether, 3);
-    vm.stopPrank();
-
-    FixedLoanPosition[] memory beforeFix = broker.userFixedPositions(borrower);
-    (uint256 shortPosId, uint256 midPosId, uint256 longPosId) = _classifyByDuration(beforeFix);
-    assertTrue(shortPosId != 0 && midPosId != 0 && longPosId != 0, "missing fixed positions");
-
-    // force undercollateralization
-    oracle.setPrice(address(BTCB), 10_000_000);
-
-    Market memory mmkt = moolah.market(id);
-    Position memory pre = moolah.position(id, borrower);
-    uint256 repayAssets = 50 ether; // less than a single principal so only first maturity should absorb it
-    uint256 repaidShares = repayAssets.toSharesUp(mmkt.totalBorrowAssets, mmkt.totalBorrowShares);
-
-    // perform liquidation at Moolah level
-    LISUSD.setBalance(liquidator, 1_000 ether);
-    vm.startPrank(liquidator);
-    IERC20(address(LISUSD)).approve(address(moolah), type(uint256).max);
-    moolah.liquidate(marketParams, borrower, 0, repaidShares, bytes(""));
-    vm.stopPrank();
-
-    // invoke broker side liquidation (restricted to Moolah)
-    vm.prank(address(moolah));
-    broker.liquidate(id, borrower);
-
-    FixedLoanPosition[] memory afterFix = broker.userFixedPositions(borrower);
-    FixedLoanPosition memory shortAfter;
-    FixedLoanPosition memory midAfter;
-    FixedLoanPosition memory longAfter;
-    bool shortFound;
-    bool midFound;
-    bool longFound;
-    (shortAfter, shortFound) = _findByPosId(afterFix, shortPosId);
-    (midAfter, midFound) = _findByPosId(afterFix, midPosId);
-    (longAfter, longFound) = _findByPosId(afterFix, longPosId);
-
-    // earlier maturity should absorb repayment while later ones remain untouched
-    assertTrue(shortFound, "short maturity position missing");
-    assertGt(shortAfter.principalRepaid, 0, "earliest maturity not prioritized");
-
-    if (midFound) {
-      assertEq(
-        midAfter.principalRepaid,
-        beforeFix[_indexOf(beforeFix, midPosId)].principalRepaid,
-        "mid maturity unexpectedly repaid"
-      );
-    }
-    if (longFound) {
-      assertEq(
-        longAfter.principalRepaid,
-        beforeFix[_indexOf(beforeFix, longPosId)].principalRepaid,
-        "long maturity unexpectedly repaid"
-      );
-    }
-
-    Position memory post = moolah.position(id, borrower);
-    assertLt(post.borrowShares, pre.borrowShares, "moolah shares not reduced");
-  }
-
-  function test_liquidation_fullClear_removesBrokerDebt() public {
-    vm.startPrank(MANAGER);
-    broker.setFixedTermAndRate(1, 10 days, 1.05e27);
-    broker.setFixedTermAndRate(2, 30 days, 1.06e27);
-    vm.stopPrank();
-
-    uint256 dynamicBorrow = 200 ether;
-    uint256 fixedBorrowShort = 300 ether;
-    uint256 fixedBorrowLong = 400 ether;
-
-    vm.startPrank(borrower);
-    broker.borrow(dynamicBorrow);
-    broker.borrow(fixedBorrowShort, 1);
-    broker.borrow(fixedBorrowLong, 2);
-    vm.stopPrank();
-
-    oracle.setPrice(address(BTCB), 5e7);
-
-    address liquidator2 = address(0xB0B);
-    uint256 liquidatorBudget = 1_000 ether;
-    LISUSD.setBalance(liquidator2, liquidatorBudget);
-
-    vm.startPrank(liquidator2);
-    IERC20(address(LISUSD)).approve(address(moolah), type(uint256).max);
-    moolah.liquidate(marketParams, borrower, COLLATERAL, 0, bytes(""));
-    vm.stopPrank();
-
-    vm.prank(address(moolah));
-    broker.liquidate(id, borrower);
-
-    DynamicLoanPosition memory dyn = broker.userDynamicPosition(borrower);
-    assertEq(dyn.principal, 0, "dynamic principal not cleared");
-    assertEq(dyn.normalizedDebt, 0, "dynamic normalized debt not cleared");
-
-    FixedLoanPosition[] memory fixedAfter = broker.userFixedPositions(borrower);
-    assertEq(fixedAfter.length, 0, "fixed positions remain after full liquidation");
-
-    Position memory post = moolah.position(id, borrower);
-    assertEq(post.borrowShares, 0, "moolah borrow shares not zeroed");
-    assertEq(post.collateral, 0, "moolah collateral not seized");
-  }
-
-  function test_liquidation_dynamicInterestOnlyLeavesPrincipalIntact() public {
-    uint256 borrowAmt = 800 ether;
-    vm.prank(borrower);
-    broker.borrow(borrowAmt);
-
-    vm.prank(BOT);
-    rateCalc.setRatePerSecond(address(broker), RATE_SCALE + 2);
-
-    skip(200 days);
-
-    oracle.setPrice(address(BTCB), 10_000_000);
-
-    (uint256 principalBefore, uint256 normalizedBefore) = broker.dynamicLoanPositions(borrower);
-    uint256 rate = IRateCalculator(address(rateCalc)).accrueRate(address(broker));
-    uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(normalizedBefore, rate);
-    uint256 interestOutstanding = actualDebt > principalBefore ? actualDebt - principalBefore : 0;
-    assertGt(interestOutstanding, 0, "no accrued interest");
-
+    uint256 vaultSharesBefore = moolah.position(id, address(vault)).supplyShares;
     Market memory marketBefore = moolah.market(id);
-    uint256 repaidShares = interestOutstanding.toSharesDown(
-      marketBefore.totalBorrowAssets,
-      marketBefore.totalBorrowShares
+    uint256 vaultAssetsBefore = vaultSharesBefore.toAssetsUp(
+      marketBefore.totalSupplyAssets,
+      marketBefore.totalSupplyShares
     );
-    if (repaidShares == 0) {
-      repaidShares = interestOutstanding.toSharesUp(marketBefore.totalBorrowAssets, marketBefore.totalBorrowShares);
-    }
-    assertGt(repaidShares, 0, "repaid shares zero");
+    console.log("[Before] vault shares: ", vaultSharesBefore);
+    console.log("[Before] vault assets: ", vaultAssetsBefore);
 
-    uint256 assumedAssets = repaidShares.toAssetsUp(marketBefore.totalBorrowAssets, marketBefore.totalBorrowShares);
-    assertLe(assumedAssets, interestOutstanding + 1 ether, "liquidation tries to repay principal portion");
+    LISUSD.setBalance(address(liquidator), 1_000_000 ether);
+    console.log("[Before] liquidator loanToken balance: ", LISUSD.balanceOf(address(liquidator)));
+    console.log("[Before] liquidator collateral balance: ", BTCB.balanceOf(address(liquidator)));
 
-    address liquidator2 = address(0xABC);
-    uint256 startingBalance = assumedAssets + 1 ether;
-    LISUSD.setBalance(liquidator2, startingBalance);
-    vm.startPrank(liquidator2);
-    IERC20(address(LISUSD)).approve(address(moolah), type(uint256).max);
-    moolah.liquidate(marketParams, borrower, 0, repaidShares, bytes(""));
+    vm.startPrank(address(liquidator));
+    // as liquidator don't know how much to approve, just approve max
+    LISUSD.approve(address(broker), type(uint256).max);
+    broker.liquidate(marketParams, borrower, 0, userBorrowShares, abi.encode(""));
     vm.stopPrank();
 
-    vm.prank(address(moolah));
-    broker.liquidate(id, borrower);
+    console.log("liquidator balance after: ", LISUSD.balanceOf(address(liquidator)));
 
-    (uint256 principalAfter, uint256 normalizedAfter) = broker.dynamicLoanPositions(borrower);
-    uint256 balanceAfter = loanToken.balanceOf(liquidator2);
-    uint256 spentAssets = startingBalance - balanceAfter;
-    assertGt(spentAssets, 0, "no assets spent");
+    uint256 vaultSharesAfter = moolah.position(id, address(vault)).supplyShares;
+    Market memory marketAfter = moolah.market(id);
+    uint256 vaultAssetsAfter = vaultSharesAfter.toAssetsUp(
+      marketAfter.totalSupplyAssets,
+      marketAfter.totalSupplyShares
+    );
+    console.log("[After] vault assets: ", vaultAssetsAfter);
+    assertGt(vaultSharesAfter, vaultSharesBefore, "interest not supplied to vault");
 
-    uint256 tolerance = 1e9; // allow for rounding noise
-    if (spentAssets <= interestOutstanding + tolerance) {
-      assertEq(principalAfter, principalBefore, "principal should remain when only interest is repaid");
-    } else {
-      uint256 principalPaid = spentAssets - interestOutstanding;
-      uint256 actualPrincipalPaid = principalBefore - principalAfter;
-      assertApproxEqAbs(actualPrincipalPaid, principalPaid, tolerance, "principal repayment mismatch");
-    }
+    uint256 principalAfterBroker = _totalPrincipalAtBroker(borrower);
+    uint256 principalAfterMoolah = _principalAtMoolah(borrower);
+    uint256 interestAfter = _totalInterestAtBroker(borrower);
+    console.log("[After] broker principal: ", principalAfterBroker);
+    console.log("[After] moolah principal: ", principalAfterMoolah);
+    console.log("[After] interest at broker: ", interestAfter);
+    console.log("[After] liquidator loanToken balance: ", LISUSD.balanceOf(address(liquidator)));
+    console.log("[After] liquidator collateral balance: ", BTCB.balanceOf(address(liquidator)));
+    console.log("[After] broker collateral gained: ", BTCB.balanceOf(address(broker)) - brokerCollateralBalBefore);
+    assertApproxEqAbs(principalAfterBroker, principalAfterMoolah, 1, "principal mismatch after full");
 
-    uint256 principalDrop = principalBefore - principalAfter;
-    assertLe(principalDrop, spentAssets + tolerance, "principal decreased more than assets repaid");
-    assertLe(normalizedAfter, normalizedBefore, "normalized debt increased");
-  }
-
-  function _classifyByDuration(
-    FixedLoanPosition[] memory positions
-  ) internal pure returns (uint256 shortPosId, uint256 midPosId, uint256 longPosId) {
-    for (uint256 i = 0; i < positions.length; i++) {
-      uint256 duration = positions[i].end - positions[i].start;
-      if (duration == 30 days) {
-        shortPosId = positions[i].posId;
-      } else if (duration == 60 days) {
-        midPosId = positions[i].posId;
-      } else if (duration == 90 days) {
-        longPosId = positions[i].posId;
-      }
-    }
-  }
-
-  function _findByPosId(
-    FixedLoanPosition[] memory positions,
-    uint256 posId
-  ) internal pure returns (FixedLoanPosition memory position, bool found) {
-    for (uint256 i = 0; i < positions.length; i++) {
-      if (positions[i].posId == posId) {
-        return (positions[i], true);
-      }
-    }
-    return (position, false);
-  }
-
-  function _indexOf(FixedLoanPosition[] memory positions, uint256 posId) internal pure returns (uint256) {
-    for (uint256 i = 0; i < positions.length; i++) {
-      if (positions[i].posId == posId) {
-        return i;
-      }
-    }
-    revert("position not found");
+    // user supply shares
+    Position memory posAfter = moolah.position(marketParams.id(), borrower);
+    uint256 userBorrowSharesAfter = posAfter.borrowShares;
+    uint256 userCollateralAfter = posAfter.collateral;
+    uint256 userSupplySharesAfter = posAfter.supplyShares;
+    console.log("[After] user borrow shares: ", userBorrowSharesAfter);
+    console.log("[After] user collateral: ", userCollateralAfter);
+    console.log("[After] user supply shares: ", userSupplySharesAfter);
   }
 
   function test_provisioning_and_allocation() public {
@@ -1030,7 +951,7 @@ contract LendingBrokerTest is Test {
     vm.prank(borrower);
     broker.borrow(amount);
 
-    assertEq(loanToken.balanceOf(borrower), amount);
+    assertEq(LISUSD.balanceOf(borrower), amount);
   }
 
   function test_setFixedTermOnlyManager_Reverts() public {
@@ -1050,11 +971,6 @@ contract LendingBrokerTest is Test {
     vm.expectRevert(bytes("broker/exceed-max-fixed-positions"));
     broker.borrow(1 ether, 11);
     vm.stopPrank();
-  }
-
-  function test_liquidateOnlyMoolah_Reverts() public {
-    vm.expectRevert(bytes("Broker/not-moolah"));
-    broker.liquidate(id, borrower);
   }
 
   function test_peekLoanToken_OneE8() public {
@@ -1082,8 +998,8 @@ contract LendingBrokerTest is Test {
   }
 
   function test_peekUnsupportedToken_Reverts() public {
-    vm.expectRevert(bytes("Broker/unsupported-token"));
-    broker.peek(address(0xDEAD), borrower);
+    vm.expectRevert(bytes("broker/unsupported-token"));
+    broker.peek(address(0xDEA), borrower);
   }
 
   function test_marketIdSet_guard_reverts() public {
@@ -1182,25 +1098,20 @@ contract LendingBrokerTest is Test {
     assertEq(peeked, priceFromOracle);
   }
 
-  function test_liquidate_invalidMarket_reverts() public {
-    // construct a bogus id with different token pair
-    MarketParams memory bogus = MarketParams({
-      loanToken: address(0x1),
-      collateralToken: address(0x2),
-      oracle: address(oracle),
-      irm: address(irm),
-      lltv: 80 * 1e16
-    });
-    Id badId = bogus.id();
-    vm.expectRevert(bytes("Broker/invalid-market"));
-    vm.prank(address(moolah));
-    broker.liquidate(badId, borrower);
-  }
-
   function test_setMaxFixedLoanPositions_sameValue_reverts() public {
     // default is 10 (from initialize)
     vm.expectRevert(bytes("broker/same-value-provided"));
     vm.prank(MANAGER);
     broker.setMaxFixedLoanPositions(10);
+  }
+}
+
+contract LiquidationCallbackMock is IMoolahLiquidateCallback {
+  uint256 public lastRepaidAssets;
+  bytes public lastData;
+
+  function onMoolahLiquidate(uint256 repaidAssets, bytes calldata data) external override {
+    lastRepaidAssets = repaidAssets;
+    lastData = data;
   }
 }

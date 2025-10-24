@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import { Id } from "moolah/interfaces/IMoolah.sol";
+import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 
 struct FixedTermAndRate {
   uint256 termId;
@@ -25,6 +25,15 @@ struct DynamicLoanPosition {
   uint256 normalizedDebt;
 }
 
+struct LiquidationContext {
+  address liquidator; // the address of the liquidator(for onMoolahLiquidate callback)
+  address borrower; // the address of the borrower being liquidated
+  bool active; // indecates if liquidation is in progress
+  uint256 principal; // principal at Moolah
+  uint256 totalDebt; // total debt including interest at LendingBroker
+  uint256 preCollateral; // pre-balance of collateral token before liquidation
+}
+
 /// @dev Broker Base interface
 /// maintain lightweight for Moolah
 interface IBrokerBase {
@@ -42,9 +51,18 @@ interface IBrokerBase {
   function peek(address token, address user) external view returns (uint256 price);
 
   /// @dev liquidate a user's position
-  /// @param marketId The market id of the broker belongs to
-  /// @param user The address of the user position is being liquidated
-  function liquidate(Id marketId, address user) external;
+  /// @param marketParams The market of the position.
+  /// @param borrower The owner of the position.
+  /// @param seizedAssets The amount of assets to seize.
+  /// @param repaidShares The amount of shares to repay.
+  /// @param data The callback data.
+  function liquidate(
+    MarketParams memory marketParams,
+    address borrower,
+    uint256 seizedAssets,
+    uint256 repaidShares,
+    bytes calldata data
+  ) external;
 }
 
 /// @dev Broker interface
@@ -76,12 +94,22 @@ interface IBroker is IBrokerBase {
   event Liquidated(address indexed user, uint256 principalToDeduct);
   event MarketIdSet(Id marketId);
   event BorrowPaused(bool paused);
+  event AddedLiquidationWhitelist(address indexed account);
+  event RemovedLiquidationWhitelist(address indexed account);
 
   /// ------------------------------
   ///        View functions
   /// ------------------------------
   /// @dev get the fixed terms available for borrowing
   function getFixedTerms() external view returns (FixedTermAndRate[] memory);
+
+  /// @dev get user's fixed loan positions
+  /// @param user The address of the user
+  function userFixedPositions(address user) external view returns (FixedLoanPosition[] memory);
+
+  /// @dev get user's dynamic loan position
+  /// @param user The address of the user
+  function userDynamicPosition(address user) external view returns (DynamicLoanPosition memory);
 
   /// ------------------------------
   ///      External functions

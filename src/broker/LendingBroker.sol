@@ -9,15 +9,16 @@ import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
-import { IBroker, FixedLoanPosition, DynamicLoanPosition, FixedTermAndRate } from "./interfaces/IBroker.sol";
+import { IBroker, FixedLoanPosition, DynamicLoanPosition, FixedTermAndRate, LiquidationContext } from "./interfaces/IBroker.sol";
 import { IRateCalculator } from "./interfaces/IRateCalculator.sol";
 import { BrokerMath, RATE_SCALE } from "./libraries/BrokerMath.sol";
 
 import { MarketParamsLib } from "../moolah/libraries/MarketParamsLib.sol";
 import { SharesMathLib } from "../moolah/libraries/SharesMathLib.sol";
-import { IMoolahVault } from "../moolah-vault/interfaces/IMoolahVault.sol";
 import { Id, IMoolah, MarketParams, Market, Position } from "../moolah/interfaces/IMoolah.sol";
+import { IMoolahLiquidateCallback } from "../moolah/interfaces/IMoolahCallbacks.sol";
 import { IOracle } from "../moolah/interfaces/IOracle.sol";
 import { UtilsLib } from "../moolah/libraries/UtilsLib.sol";
 
@@ -38,6 +39,7 @@ contract LendingBroker is
   using MarketParamsLib for MarketParams;
   using SharesMathLib for uint256;
   using UtilsLib for uint256;
+  using EnumerableSet for EnumerableSet.AddressSet;
 
   // ------- Roles -------
   bytes32 public constant MANAGER = keccak256("MANAGER");
@@ -46,7 +48,7 @@ contract LendingBroker is
 
   // ------- Immutables -------
   IMoolah public immutable MOOLAH;
-  IMoolahVault public immutable MOOLAH_VAULT;
+  address public immutable MOOLAH_VAULT;
   IOracle public immutable ORACLE;
   address public LOAN_TOKEN;
   address public COLLATERAL_TOKEN;
@@ -75,6 +77,13 @@ contract LendingBroker is
   /// @dev if true, new borrow will be paused
   bool public borrowPaused;
 
+  // --- liquidation ---
+  /// @dev stores the context of an ongoing liquidation
+  ///      will be cleared after liquidation
+  LiquidationContext private liquidationContext;
+  /// @dev liquidation whitelist
+  EnumerableSet.AddressSet private liquidationWhitelist;
+
   // ------- Modifiers -------
   modifier onlyMoolah() {
     require(msg.sender == address(MOOLAH), "Broker/not-moolah");
@@ -102,7 +111,7 @@ contract LendingBroker is
     require(moolah != address(0) && moolahVault != address(0) && oracle != address(0), "broker/zero-address-provided");
     // set addresses
     MOOLAH = IMoolah(moolah);
-    MOOLAH_VAULT = IMoolahVault(moolahVault);
+    MOOLAH_VAULT = moolahVault;
     ORACLE = IOracle(oracle);
 
     _disableInitializers();
@@ -420,167 +429,193 @@ contract LendingBroker is
    * @dev Liquidate a borrower's debt by accruing interest and repaying the dynamic
    *      position first, then settling fixed-rate positions sorted by APR and
    *      remaining principal. The last fixed position absorbs any rounding delta.
-   * @param id The market id
-   * @param user The address of the user being liquidated
+   * @param marketParams The market of the position.
+   * @param borrower The owner of the position.
+   * @param seizedAssets The amount of collateral to seize.
+   * @param repaidShares The amount of shares to repay.
+   * @param data Arbitrary data to pass to the `onMoolahLiquidate` callback. Pass empty data if not needed.
    */
-  function liquidate(Id id, address user) external override onlyMoolah marketIdSet whenNotPaused nonReentrant {
-    require(
-      _getMarketParams(id).loanToken == _getMarketParams(MARKET_ID).loanToken &&
-        _getMarketParams(id).collateralToken == _getMarketParams(MARKET_ID).collateralToken,
-      "Broker/invalid-market"
-    );
-    require(user != address(0), "Broker/invalid-user");
+  function liquidate(
+    MarketParams memory marketParams,
+    address borrower,
+    uint256 seizedAssets,
+    uint256 repaidShares,
+    bytes calldata data
+  ) external override marketIdSet whenNotPaused nonReentrant {
+    Id id = marketParams.id();
+    require(_checkLiquidationWhiteList(msg.sender), "broker/not-liquidation-whitelist");
+    require(Id.unwrap(id) == Id.unwrap(MARKET_ID), "broker/invalid-market-id");
+    require(UtilsLib.exactlyOneZero(seizedAssets, repaidShares), "broker/invalid-liquidation-params");
+    require(borrower != address(0), "broker/invalid-user");
     // fetch positions
-    DynamicLoanPosition storage dynamicPosition = dynamicLoanPositions[user];
-    FixedLoanPosition[] memory fixedPositions = fixedLoanPositions[user];
+    DynamicLoanPosition storage dynamicPosition = dynamicLoanPositions[borrower];
+    FixedLoanPosition[] memory fixedPositions = fixedLoanPositions[borrower];
     // [1] calculate total outstanding debt before liquidation (principal + interest)
     uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
     uint256 totalDebtAtBroker = BrokerMath.getTotalDebt(fixedPositions, dynamicPosition, rate);
     // [2] calculate actual debt at Moolah after liquidation
     Market memory market = MOOLAH.market(id);
-    Position memory mPos = MOOLAH.position(id, user);
-    // thats how much user borrowed from Moolah (0% interest, should = total principal at LendingBroker)
-    // after liquidation, this will be the new debt amount (partial of collateral has been liquidated)
+    Position memory mPos = MOOLAH.position(id, borrower);
     uint256 debtAtMoolah = uint256(mPos.borrowShares).toAssetsUp(market.totalBorrowAssets, market.totalBorrowShares);
-    // debt at broker > debt at moolah, we need to deduct the diff from positions
-    uint256 principalToDeduct = totalDebtAtBroker.zeroFloorSub(debtAtMoolah);
-    if (principalToDeduct == 0) return;
+
+    // [3] calculate the loan token amount to repay to moolah
+    uint256 repaidAssets;
+    (, , repaidAssets) = BrokerMath.previewLiquidationRepayment(
+      marketParams,
+      market,
+      seizedAssets,
+      repaidShares,
+      MOOLAH._getPrice(marketParams, borrower)
+    );
+
+    // [4] calculate extra amount we need to repay interest to broker
+    uint256 interestToBroker = BrokerMath.mulDivFlooring(
+      repaidAssets,
+      totalDebtAtBroker.zeroFloorSub(debtAtMoolah),
+      totalDebtAtBroker
+    );
+
+    // [5] transfer loan token from liquidator and supply interest to vault
+    IERC20(LOAN_TOKEN).safeTransferFrom(msg.sender, address(this), repaidAssets + interestToBroker);
+    if (interestToBroker > 0) {
+      _supplyToMoolahVault(interestToBroker);
+    }
+
+    // [6] init liquidation context
+    //  - must call this before call moolah.liquidate()
+    //  - moolah will call peek() to get a lowered price during liquidation
+    //    in order to get correct seized assets
+    uint256 collateralTokenPrebalance = IERC20(COLLATERAL_TOKEN).balanceOf(address(this));
+    liquidationContext = LiquidationContext({
+      active: true,
+      liquidator: msg.sender,
+      borrower: borrower,
+      principal: debtAtMoolah,
+      totalDebt: totalDebtAtBroker,
+      preCollateral: collateralTokenPrebalance
+    });
+
+    // [7] call liquidate on moolah
+    IERC20(LOAN_TOKEN).safeIncreaseAllowance(address(MOOLAH), repaidAssets);
+    MOOLAH.liquidate(marketParams, borrower, seizedAssets, repaidShares, data);
+
+    // [8] send seized collateral to liquidator or call back if data is provided
+    if (data.length == 0) {
+      // if no data provided, transfer seized collateral to liquidator directly
+      IERC20(COLLATERAL_TOKEN).safeTransfer(
+        msg.sender,
+        IERC20(COLLATERAL_TOKEN).balanceOf(address(this)) - collateralTokenPrebalance
+      );
+    }
+
+    if (repaidAssets == 0 && interestToBroker == 0) return;
+
+    // [8] deduct interest and principal from positions
     // deduct from dynamic position and returns the leftover assets to deduct
-    principalToDeduct = _deductDynamicPositionDebt(dynamicPosition, principalToDeduct, rate);
+    (uint256 interestLeftover, uint256 principalLeftover) = _deductDynamicPositionDebt(
+      borrower,
+      dynamicPosition,
+      interestToBroker,
+      repaidAssets,
+      rate
+    );
     // deduct from fixed positions
-    if (principalToDeduct > 0 && fixedPositions.length > 0) {
+    if ((principalLeftover > 0 || interestLeftover > 0) && fixedPositions.length > 0) {
       // sort fixed positions from earliest end time to latest, filter out fully repaid positions
       // positions with earlier end time will be deducted first
-      FixedLoanPosition[] memory sorted = _sortAndFilterFixedPositions(fixedPositions);
+      FixedLoanPosition[] memory sorted = BrokerMath.sortAndFilterFixedPositions(fixedPositions);
       if (sorted.length > 0) {
-        _deductFixedPositionsDebt(user, sorted, principalToDeduct);
+        _deductFixedPositionsDebt(borrower, sorted, interestLeftover, principalLeftover);
       }
     }
+
+    // must clear liquidation context after liquidation
+    delete liquidationContext;
+
     // emit event
-    emit Liquidated(user, totalDebtAtBroker.zeroFloorSub(debtAtMoolah));
+    emit Liquidated(borrower, totalDebtAtBroker.zeroFloorSub(debtAtMoolah));
   }
 
   /**
-   * @dev sorting by end time ascending and filter out fully repaid positions
-   *      - this is a simple insertion sort, gas cost is O(n^2) in worst case,
-   *      - works well for small arrays as user's number of fixed positions is limited
-   * @param positions The fixed loan positions to sort
+   * @dev callback function called by Moolah after liquidation
+   * @param repaidAssets The amount of assets repaid to Moolah
+   * @param data Additional data passed from the liquidator
    */
-  function _sortAndFilterFixedPositions(
-    FixedLoanPosition[] memory positions
-  ) internal pure returns (FixedLoanPosition[] memory) {
-    uint256 len = positions.length;
-    FixedLoanPosition[] memory filtered = new FixedLoanPosition[](len);
-    uint256 count;
-    for (uint256 i = 0; i < len; i++) {
-      FixedLoanPosition memory p = positions[i];
-      if (p.principal > p.principalRepaid) {
-        uint256 j = count;
-        while (j > 0) {
-          FixedLoanPosition memory prev = filtered[j - 1];
-          if (prev.end <= p.end) {
-            break;
-          }
-          filtered[j] = prev;
-          j--;
-        }
-        filtered[j] = p;
-        count++;
-      }
+  function onMoolahLiquidate(uint256 repaidAssets, bytes calldata data) external onlyMoolah marketIdSet {
+    address liquidator = liquidationContext.liquidator;
+    if (liquidationContext.active && liquidator != address(0)) {
+      // transfer seized collateral to liquidator
+      IERC20(COLLATERAL_TOKEN).safeTransfer(
+        liquidator,
+        IERC20(COLLATERAL_TOKEN).balanceOf(address(this)) - liquidationContext.preCollateral
+      );
+      // call back to liquidator if data is provided
+      IMoolahLiquidateCallback(liquidator).onMoolahLiquidate(repaidAssets, data);
     }
-    // trim `filtered` to length `count`
-    assembly {
-      mstore(filtered, count)
+  }
+
+  /**
+   * @dev check if the liquidator is in the whitelist
+   * @param liquidator The address of the liquidator
+   */
+  function _checkLiquidationWhiteList(address liquidator) internal view returns (bool) {
+    if (liquidationWhitelist.length() == 0) {
+      return true;
     }
-    return filtered;
+    return liquidationWhitelist.contains(liquidator);
   }
 
   /**
    * @dev deducts debt from the dynamic position and returns leftover assets
    * @param position The dynamic loan position to modify
+   * @param interestToDeduct The amount of interest repaid during liquidation, leads to deduct from principal and interest
    * @param principalToDeduct The amount of assets repaid during liquidation, leads to deduct from principal and interest
    * @param rate The current interest rate
    */
   function _deductDynamicPositionDebt(
-    DynamicLoanPosition storage position,
+    address user,
+    DynamicLoanPosition memory position,
+    uint256 interestToDeduct,
     uint256 principalToDeduct,
     uint256 rate
-  ) internal returns (uint256) {
-    // get actual debt
-    uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate);
-    if (actualDebt == 0) return principalToDeduct;
-
-    uint256 outstandingInterest = actualDebt.zeroFloorSub(position.principal);
-
-    // clear as much accrued interest as possible
-    uint256 interestPaid = UtilsLib.min(outstandingInterest, principalToDeduct);
-    if (interestPaid > 0) {
-      position.normalizedDebt = position.normalizedDebt.zeroFloorSub(
-        BrokerMath.normalizeBorrowAmount(interestPaid, rate)
-      );
-      principalToDeduct -= interestPaid;
-    }
-
-    // reduce principal with whatever is left
-    uint256 principalPaid = UtilsLib.min(position.principal, principalToDeduct);
-    if (principalPaid > 0) {
-      position.principal -= principalPaid;
-      position.normalizedDebt = position.normalizedDebt.zeroFloorSub(
-        BrokerMath.normalizeBorrowAmount(principalPaid, rate)
-      );
-      principalToDeduct -= principalPaid;
-    }
-
-    return principalToDeduct;
+  ) internal returns (uint256, uint256) {
+    // call BrokerMath to process deduction
+    // will return leftover interest/principal to deduct and the updated position
+    (interestToDeduct, principalToDeduct, position) = BrokerMath.deductDynamicPositionDebt(
+      position,
+      interestToDeduct,
+      principalToDeduct,
+      rate
+    );
+    // update position
+    dynamicLoanPositions[user] = position;
+    return (interestToDeduct, principalToDeduct);
   }
 
   /**
    * @dev allocates repayments to fixed positions by APR and remaining principal
    * @param user The address of the user
    * @param sortedFixedPositions The sorted fixed loan positions
+   * @param interestToDeduct The amount of interest repaid during liquidation, leads to deduct from principal and interest
    * @param principalToDeduct The amount of assets repaid during liquidation, leads to deduct from principal and interest
    */
   function _deductFixedPositionsDebt(
     address user,
     FixedLoanPosition[] memory sortedFixedPositions,
+    uint256 interestToDeduct,
     uint256 principalToDeduct
   ) internal {
     uint256 len = sortedFixedPositions.length;
     for (uint256 i = 0; i < len; i++) {
       if (principalToDeduct == 0) break;
       FixedLoanPosition memory p = sortedFixedPositions[i];
-      // remaining principal before repayment
-      uint256 remainingPrincipal = p.principal - p.principalRepaid;
-      // get accrued interest from LAST REPAID TIME to NOW
-      uint256 accruedInterest = _getAccruedInterestForFixedPosition(p) - p.interestRepaid;
-
-      // initialize repay amounts
-      uint256 repayInterestAmt = principalToDeduct < accruedInterest ? principalToDeduct : accruedInterest;
-      uint256 repayPrincipalAmt = UtilsLib.min(principalToDeduct - repayInterestAmt, remainingPrincipal);
-
-      // repay interest first, it might be zero if user just repaid before
-      if (repayInterestAmt > 0) {
-        // update repaid interest amount
-        p.interestRepaid += repayInterestAmt;
-        // supply interest into vault as revenue
-        principalToDeduct -= repayInterestAmt;
-      }
-
-      // then repay principal if there is any amount left
-      if (principalToDeduct > 0) {
-        // liquidation cannot source additional assets, so penalties are waived
-        uint256 repayPrincipalAmt = UtilsLib.min(principalToDeduct, remainingPrincipal);
-
-        if (repayPrincipalAmt > 0) {
-          principalToDeduct -= repayPrincipalAmt;
-          p.principalRepaid += repayPrincipalAmt;
-          // reset repaid interest to zero (all accrued interest has been cleared)
-          p.interestRepaid = 0;
-          // reset repaid time to now
-          p.lastRepaidTime = block.timestamp;
-        }
-      }
-
+      // call BrokerMath to process deduction one by one
+      // will return leftover interest/principal to deduct and the updated position
+      (interestToDeduct, principalToDeduct, p) = BrokerMath.deductFixedPositionDebt(
+        interestToDeduct,
+        principalToDeduct,
+        p
+      );
       // post repayment
       if (p.principalRepaid >= p.principal) {
         // removes it from user's fixed positions
@@ -618,60 +653,10 @@ contract LendingBroker is
    * @param token The address of the token to get the price for
    * @param user The address of the user
    */
-  function peek(address token, address user) external view override marketIdSet returns (uint256 price) {
-    // loan token's price never changes
-    if (token == LOAN_TOKEN) {
-      return 10 ** 8;
-    } else if (token == COLLATERAL_TOKEN) {
-      /*
-        Broker accrues interest, so collateral price is adjusted downward,
-        this lets Moolah detect risk as interest grows, despite its 0% rate.
-        [A] Collateral Market Price
-        [B] Broker Total Debt (included interest)
-        [C] Moolah Debt (0% rate)
-        [D] Collateral Amount
-        new collateral price  = A - (B-C)/D
-      */
-      // the total debt of the user (principal + interest)
-      uint256 debtAtBroker = BrokerMath.getTotalDebt(
-        fixedLoanPositions[user],
-        dynamicLoanPositions[user],
-        IRateCalculator(rateCalculator).getRate(address(this))
-      );
-      // fetch collateral price from oracle
-      uint256 collateralPrice = IOracle(ORACLE).peek(COLLATERAL_TOKEN);
-      // get user's position info
-      Position memory _position = MOOLAH.position(MARKET_ID, user);
-      // in case there is no collaterals
-      if (_position.collateral == 0) {
-        return collateralPrice;
-      }
-      // get market info
-      Market memory _market = MOOLAH.market(MARKET_ID);
-      // convert shares to borrowed amount (Moolah's debt)
-      uint256 debtAtMoolah = uint256(_position.borrowShares).toAssetsUp(
-        _market.totalBorrowAssets,
-        _market.totalBorrowShares
-      );
-      // get decimal places
-      uint8 collateralDecimals = IERC20Metadata(COLLATERAL_TOKEN).decimals();
-      uint8 loanDecimals = IERC20Metadata(LOAN_TOKEN).decimals();
-      // calculate manipulated price
-      uint256 deltaDebt = debtAtBroker > debtAtMoolah ? (debtAtBroker - debtAtMoolah) : 0;
-      // Convert (brokerDebt − moolahDebt) per unit collateral into an 8‑decimal price.
-      // deltaDebt is in loan token units (10^loanDecimals); collateral is in 10^collateralDecimals.
-      // Scale: ceil(deltaDebt * 10^(8 + collateralDecimals) / (collateral * 10^loanDecimals)).
-      // 10^(collateralDecimals) cancels collateral units; 10^8 sets price precision.
-      // Ceiling rounding avoids under‑deduction (more conservative).
-      uint256 deduction = BrokerMath.mulDivCeiling(
-        deltaDebt,
-        10 ** (8 + uint256(collateralDecimals)),
-        _position.collateral * (10 ** uint256(loanDecimals))
-      );
-      price = deduction >= collateralPrice ? 0 : (collateralPrice - deduction);
-      return price;
-    }
-    revert("Broker/unsupported-token");
+  function peek(address token, address user) public view override marketIdSet returns (uint256 price) {
+    require(user != address(0), "broker/zero-address");
+    require(token == COLLATERAL_TOKEN || token == LOAN_TOKEN, "broker/unsupported-token");
+    price = BrokerMath.peek(token, user, address(MOOLAH), rateCalculator, address(ORACLE), liquidationContext);
   }
 
   /**
@@ -679,7 +664,7 @@ contract LendingBroker is
    * @param user The address of the user
    * @return An array of FixedLoanPosition structs
    */
-  function userFixedPositions(address user) external view returns (FixedLoanPosition[] memory) {
+  function userFixedPositions(address user) external view override returns (FixedLoanPosition[] memory) {
     return fixedLoanPositions[user];
   }
 
@@ -688,7 +673,7 @@ contract LendingBroker is
    * @param user The address of the user
    * @return The DynamicLoanPosition struct
    */
-  function userDynamicPosition(address user) external view returns (DynamicLoanPosition memory) {
+  function userDynamicPosition(address user) external view override returns (DynamicLoanPosition memory) {
     return dynamicLoanPositions[user];
   }
 
@@ -711,6 +696,18 @@ contract LendingBroker is
     require(user != address(0), "broker/zero-address");
     FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
     (interestRepaid, penalty, principalRepaid) = BrokerMath.previewRepayFixedLoanPosition(position, amount);
+  }
+
+  /**
+   * @dev Get the liquidation whitelist
+   * @return An array of addresses in the liquidation whitelist
+   */
+  function getLiquidationWhitelist() external view returns (address[] memory) {
+    address[] memory whitelist = new address[](liquidationWhitelist.length());
+    for (uint256 i = 0; i < liquidationWhitelist.length(); i++) {
+      whitelist[i] = liquidationWhitelist.at(i);
+    }
+    return whitelist;
   }
 
   ///////////////////////////////////////
@@ -836,7 +833,7 @@ contract LendingBroker is
       // approve to Moolah
       IERC20(LOAN_TOKEN).safeIncreaseAllowance(address(MOOLAH), interest);
       // supply interest into vault as revenue
-      MOOLAH.supply(_getMarketParams(MARKET_ID), interest, 0, address(MOOLAH_VAULT), "");
+      MOOLAH.supply(_getMarketParams(MARKET_ID), interest, 0, MOOLAH_VAULT, "");
     }
   }
 
@@ -1007,6 +1004,21 @@ contract LendingBroker is
    */
   function unpause() external onlyRole(MANAGER) {
     _unpause();
+  }
+
+  /**
+   * @dev add an address to the liquidation whitelist
+   * @param account The address to add
+   */
+  function toggleLiquidationWhitelist(address account, bool isAddition) public onlyRole(MANAGER) {
+    require(isAddition != liquidationWhitelist.contains(account), "broker/same-value-provided");
+    if (isAddition) {
+      liquidationWhitelist.add(account);
+      emit AddedLiquidationWhitelist(account);
+    } else {
+      liquidationWhitelist.remove(account);
+      emit RemovedLiquidationWhitelist(account);
+    }
   }
 
   /// @dev only callable by the DEFAULT_ADMIN_ROLE (must be a TimeLock contract)
