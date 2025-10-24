@@ -851,4 +851,39 @@ contract SmartProviderTest is Test {
     assertLe(debt, borrowLimitAfter);
     vm.stopPrank();
   }
+
+  function test_redeemLpCollateral() public {
+    test_supplyDexLp();
+
+    vm.prank(manager);
+    moolah.addProvider(marketParams.id(), address(smartProvider));
+    assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
+
+    uint256 redeemAmount = 500 ether;
+    uint256[2] memory amounts = dexInfo.calc_coins_amount(address(dex), redeemAmount);
+    uint256 amount0Before = token0.balanceOf(user2);
+    uint256 amount1Before = user2.balance;
+
+    vm.startPrank(user2);
+    vm.expectRevert();
+    smartProvider.redeemLpCollateral(redeemAmount, amounts[0], amounts[1]);
+    vm.stopPrank();
+
+    vm.prank(address(smartProvider));
+    lpCollateral.mint(user2, redeemAmount);
+    uint256 lpBalanceBefore = lp.balanceOf(address(smartProvider));
+    uint256 lpCollateralBalanceBefore = lpCollateral.balanceOf(address(smartProvider));
+    vm.startPrank(user2);
+    smartProvider.redeemLpCollateral(redeemAmount, amounts[0], amounts[1]);
+    vm.stopPrank();
+
+    uint256 lpBalanceAfter = lp.balanceOf(address(smartProvider));
+    uint256 lpCollateralBalanceAfter = lpCollateral.balanceOf(address(smartProvider));
+
+    assertEq(lpBalanceBefore - lpBalanceAfter, redeemAmount);
+    assertEq(lpCollateralBalanceBefore, 0);
+    assertEq(lpCollateralBalanceAfter, 0);
+    assertGe(token0.balanceOf(user2), amounts[0] + amount0Before);
+    assertGe(user2.balance, amounts[1] + amount1Before);
+  }
 }
