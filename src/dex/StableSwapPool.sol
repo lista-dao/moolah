@@ -233,6 +233,7 @@ contract StableSwapPool is
   }
 
   function get_virtual_price() external view returns (uint256) {
+    require(_reentrancyGuardEntered() == false, "Reentrant call");
     /**
      * Returns portfolio virtual price (for calculating profit)
      *     scaled up by 1e18

@@ -330,7 +330,6 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     require(collAmount > 0, "No collateral seized");
 
     (uint256 amount0, uint256 amount1) = ISmartProvider(smartProvider).redeemLpCollateral(
-      payable(address(this)),
       collAmount,
       minAmount0,
       minAmount1
@@ -411,7 +410,6 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     } else if (arb.swapSmartCollateral) {
       // redeem lp
       (uint256 amount0, uint256 amount1) = ISmartProvider(arb.smartProvider).redeemLpCollateral(
-        payable(address(this)),
         arb.seized,
         arb.minToken0Amt,
         arb.minToken1Amt

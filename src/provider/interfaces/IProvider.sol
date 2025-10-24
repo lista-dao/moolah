@@ -15,7 +15,6 @@ interface ISmartProvider is IProvider {
   function token(uint256 id) external view returns (address);
 
   function redeemLpCollateral(
-    address payable liquidator,
     uint256 lpAmount,
     uint256 minToken0Out,
     uint256 minToken1Out
