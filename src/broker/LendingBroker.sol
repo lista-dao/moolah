@@ -429,6 +429,9 @@ contract LendingBroker is
    * @dev Liquidate a borrower's debt by accruing interest and repaying the dynamic
    *      position first, then settling fixed-rate positions sorted by APR and
    *      remaining principal. The last fixed position absorbs any rounding delta.
+   *      the parameters are the same as normal liquidator calls moolah.liquidate()
+   * @notice liquidator needs to calculate the extra amount need to repay the interest at broker side
+   *         approve extra amount to broker before calling liquidate
    * @param marketParams The market of the position.
    * @param borrower The owner of the position.
    * @param seizedAssets The amount of collateral to seize.
@@ -469,10 +472,8 @@ contract LendingBroker is
     );
 
     // [4] calculate extra amount we need to repay interest to broker
-    uint256 interestToBroker = BrokerMath.mulDivFlooring(
-      repaidAssets,
-      totalDebtAtBroker.zeroFloorSub(debtAtMoolah),
-      totalDebtAtBroker
+    uint256 interestToBroker = BrokerMath.mulDivCeiling(repaidAssets, totalDebtAtBroker, debtAtMoolah).zeroFloorSub(
+      repaidAssets
     );
 
     // [5] transfer loan token from liquidator and supply interest to vault
@@ -489,9 +490,6 @@ contract LendingBroker is
     liquidationContext = LiquidationContext({
       active: true,
       liquidator: msg.sender,
-      borrower: borrower,
-      principal: debtAtMoolah,
-      totalDebt: totalDebtAtBroker,
       preCollateral: collateralTokenPrebalance
     });
 

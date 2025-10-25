@@ -87,12 +87,6 @@ library BrokerMath {
         _position.collateral * (10 ** uint256(loanDecimals))
       );
       price = deduction >= collateralPrice ? 0 : (collateralPrice - deduction);
-      // check if liquidation is in process
-      // decrease price according to the principal/debt ratio
-      // so that the liquidator can seize the correct amount of collateral
-      if (liqCtx.active && liqCtx.borrower == user) {
-        price = mulDivFlooring(price, liqCtx.principal, liqCtx.totalDebt);
-      }
       return price;
     }
   }

@@ -820,10 +820,10 @@ contract LendingBrokerTest is Test {
     console.log("[Preview] seized assets: ", seizedAssets);
     console.log("[Preview] repaid shares: ", repaidShares);
     console.log("[Preview] repaid assets: ", repaidAssets);
-    healthStatus(borrower);
+    // healthStatus(borrower);
 
     uint256 interestBefore = _totalInterestAtBroker(borrower);
-    console.log("pre-liquidation interest at broker: ", interestBefore);
+    console.log("[Before] interest at broker: ", interestBefore);
     uint256 principalBeforeBroker = _totalPrincipalAtBroker(borrower);
     uint256 principalBeforeMoolah = _principalAtMoolah(borrower);
     console.log("[Before] broker principal: ", principalBeforeBroker);
@@ -848,8 +848,6 @@ contract LendingBrokerTest is Test {
     LISUSD.approve(address(broker), type(uint256).max);
     broker.liquidate(marketParams, borrower, 0, userBorrowShares, abi.encode(""));
     vm.stopPrank();
-
-    console.log("liquidator balance after: ", LISUSD.balanceOf(address(liquidator)));
 
     uint256 vaultSharesAfter = moolah.position(id, address(vault)).supplyShares;
     Market memory marketAfter = moolah.market(id);

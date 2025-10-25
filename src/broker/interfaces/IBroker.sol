@@ -27,10 +27,7 @@ struct DynamicLoanPosition {
 
 struct LiquidationContext {
   address liquidator; // the address of the liquidator(for onMoolahLiquidate callback)
-  address borrower; // the address of the borrower being liquidated
   bool active; // indecates if liquidation is in progress
-  uint256 principal; // principal at Moolah
-  uint256 totalDebt; // total debt including interest at LendingBroker
   uint256 preCollateral; // pre-balance of collateral token before liquidation
 }
 
