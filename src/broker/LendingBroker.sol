@@ -809,8 +809,6 @@ contract LendingBroker is
    * @param amount The amount to repay
    */
   function _repayToMoolah(address payer, address onBehalf, uint256 amount) internal returns (uint256 assetsRepaid) {
-    if (amount == 0) return 0;
-
     IERC20(LOAN_TOKEN).safeTransferFrom(payer, address(this), amount);
     IERC20(LOAN_TOKEN).safeIncreaseAllowance(address(MOOLAH), amount);
 
