@@ -399,7 +399,7 @@ contract LendingBroker is
     );
     position.principal -= amount;
 
-    if (position.principal == 0 && position.normalizedDebt == 0) {
+    if (position.principal == 0) {
       delete dynamicLoanPositions[user];
     }
 
