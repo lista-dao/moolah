@@ -13,6 +13,7 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
   // ------- Roles -------
   bytes32 public constant MANAGER = keccak256("MANAGER");
   bytes32 public constant BOT = keccak256("BOT");
+  bytes32 public constant PAUSER = keccak256("PAUSER");
 
   // ------- State variables -------
 

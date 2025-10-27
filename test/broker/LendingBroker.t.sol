@@ -1091,18 +1091,26 @@ contract LendingBrokerTest is Test {
 
   function test_refinance_matured_success() public {
     // create a short-term fixed position
-    vm.prank(MANAGER);
+    vm.startPrank(MANAGER);
     broker.setFixedTermAndRate(100, 1 hours, RATE_SCALE);
-    vm.prank(borrower);
+    broker.setFixedTermAndRate(101, 2 hours, RATE_SCALE + 1);
+    broker.setFixedTermAndRate(102, 3 hours, RATE_SCALE + 1);
+    vm.stopPrank();
+
+    vm.startPrank(borrower);
     broker.borrow(500 ether, 100);
+    broker.borrow(500 ether, 101);
+    broker.borrow(500 ether, 102);
+    vm.stopPrank();
     // let it mature
-    skip(2 hours);
+    skip(4 hours);
     FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
-    assertEq(positions.length, 1);
-    uint256 posId = positions[0].posId;
+    assertEq(positions.length, 3);
     // refinance as BOT
-    uint256[] memory posIds = new uint256[](1);
-    posIds[0] = posId;
+    uint256[] memory posIds = new uint256[](3);
+    posIds[0] = positions[0].posId;
+    posIds[1] = positions[1].posId;
+    posIds[2] = positions[2].posId;
     vm.prank(BOT);
     broker.refinanceMaturedFixedPositions(borrower, posIds);
     // fixed positions will be removed; the principal aggregates into dynamic in current implementation

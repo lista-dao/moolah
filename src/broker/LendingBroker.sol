@@ -734,8 +734,18 @@ contract LendingBroker is
     // calculate principal to be refinanced one by one
     for (uint256 i = 0; i < posIds.length; i++) {
       uint256 posId = posIds[i];
+      // get all fixed positions of the user
+      FixedLoanPosition[] memory positions = fixedLoanPositions[user];
       // fetch fixed position and make sure it's matured
-      FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
+      FixedLoanPosition memory position;
+      for (uint256 i = 0; i < positions.length; i++) {
+        if (positions[i].posId == posId) {
+          position = positions[i];
+          break;
+        }
+      }
+      // skip if position not found
+      if (position.posId == 0) continue;
       require(block.timestamp >= position.end, "Broker/position-not-expired");
       // Debt of a fixed loan position consist of (1) and (2)
       // (1) net principal
