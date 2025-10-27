@@ -377,9 +377,9 @@ contract LendingBroker is
     require(amount > 0, "broker/zero-amount");
     address user = msg.sender;
     DynamicLoanPosition storage position = dynamicLoanPositions[user];
-    require(position.principal >= amount, "broker/amount-exceed-principal");
     require(fixedLoanPositions[user].length < maxFixedLoanPositions, "broker/exceed-max-fixed-positions");
-
+    // cap amount by principal
+    amount = UtilsLib.min(amount, position.principal);
     // accrue current rate so normalized debt reflects the latest interest
     uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
     uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate);
