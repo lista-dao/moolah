@@ -373,7 +373,7 @@ contract LendingBroker is
   function convertDynamicToFixed(
     uint256 amount,
     uint256 termId
-  ) external override marketIdSet whenNotPaused nonReentrant {
+  ) external override marketIdSet whenBorrowNotPaused whenNotPaused nonReentrant {
     require(amount > 0, "broker/zero-amount");
     address user = msg.sender;
     DynamicLoanPosition storage position = dynamicLoanPositions[user];
