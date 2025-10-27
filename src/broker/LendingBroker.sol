@@ -14,6 +14,7 @@ import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import { IBroker, FixedLoanPosition, DynamicLoanPosition, FixedTermAndRate, LiquidationContext } from "./interfaces/IBroker.sol";
 import { IRateCalculator } from "./interfaces/IRateCalculator.sol";
 import { BrokerMath, RATE_SCALE } from "./libraries/BrokerMath.sol";
+import { IBrokerInterestRelayer } from "./interfaces/IBrokerInterestRelayer.sol";
 
 import { MarketParamsLib } from "../moolah/libraries/MarketParamsLib.sol";
 import { SharesMathLib } from "../moolah/libraries/SharesMathLib.sol";
@@ -48,7 +49,7 @@ contract LendingBroker is
 
   // ------- Immutables -------
   IMoolah public immutable MOOLAH;
-  address public immutable MOOLAH_VAULT;
+  address public immutable RELAYER;
   IOracle public immutable ORACLE;
   address public LOAN_TOKEN;
   address public COLLATERAL_TOKEN;
@@ -103,15 +104,15 @@ contract LendingBroker is
   /**
    * @dev Constructor for the LendingBroker contract
    * @param moolah The address of the Moolah contract
-   * @param moolahVault The address of the MoolahVault contract
+   * @param relayer The address of the BrokerInterestRelayer contract
    * @param oracle The address of the oracle
    */
-  constructor(address moolah, address moolahVault, address oracle) {
+  constructor(address moolah, address relayer, address oracle) {
     // zero address assert
-    require(moolah != address(0) && moolahVault != address(0) && oracle != address(0), "broker/zero-address-provided");
+    require(moolah != address(0) && relayer != address(0) && oracle != address(0), "broker/zero-address-provided");
     // set addresses
     MOOLAH = IMoolah(moolah);
-    MOOLAH_VAULT = moolahVault;
+    RELAYER = relayer;
     ORACLE = IOracle(oracle);
 
     _disableInitializers();
@@ -830,10 +831,10 @@ contract LendingBroker is
    */
   function _supplyToMoolahVault(uint256 interest) internal {
     if (interest > 0) {
-      // approve to Moolah
-      IERC20(LOAN_TOKEN).safeIncreaseAllowance(address(MOOLAH), interest);
-      // supply interest into vault as revenue
-      MOOLAH.supply(_getMarketParams(MARKET_ID), interest, 0, MOOLAH_VAULT, "");
+      // approve to relayer
+      IERC20(LOAN_TOKEN).safeIncreaseAllowance(RELAYER, interest);
+      // supply interest to relayer to be deposited into vault
+      IBrokerInterestRelayer(RELAYER).supplyToVault(interest);
     }
   }
 

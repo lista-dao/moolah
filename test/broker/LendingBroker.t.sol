@@ -14,6 +14,7 @@ import { ERC20Mock } from "../../src/moolah/mocks/ERC20Mock.sol";
 
 import { LendingBroker } from "../../src/broker/LendingBroker.sol";
 import { RateCalculator } from "../../src/broker/RateCalculator.sol";
+import { BrokerInterestRelayer } from "../../src/broker/BrokerInterestRelayer.sol";
 import { IRateCalculator } from "../../src/broker/interfaces/IRateCalculator.sol";
 import { IBroker, FixedLoanPosition, DynamicLoanPosition, FixedTermAndRate } from "../../src/broker/interfaces/IBroker.sol";
 import { BrokerMath, RATE_SCALE } from "../../src/broker/libraries/BrokerMath.sol";
@@ -38,6 +39,7 @@ contract LendingBrokerTest is Test {
   LendingBroker public broker;
   RateCalculator public rateCalc;
   MoolahVault public vault;
+  BrokerInterestRelayer public relayer;
 
   // Market commons
   MarketParams public marketParams;
@@ -102,6 +104,21 @@ contract LendingBrokerTest is Test {
     // Vault (only used as supply receiver for interest in tests)
     vault = new MoolahVault(address(moolah), address(LISUSD));
 
+    // BrokerInterestRelayer
+    BrokerInterestRelayer relayerImpl = new BrokerInterestRelayer();
+    ERC1967Proxy relayerProxy = new ERC1967Proxy(
+      address(relayerImpl),
+      abi.encodeWithSelector(
+        BrokerInterestRelayer.initialize.selector,
+        ADMIN,
+        MANAGER,
+        address(moolah),
+        address(vault),
+        address(LISUSD)
+      )
+    );
+    relayer = BrokerInterestRelayer(address(relayerProxy));
+
     // RateCalculator proxy
     RateCalculator rcImpl = new RateCalculator();
     ERC1967Proxy rcProxy = new ERC1967Proxy(
@@ -111,7 +128,7 @@ contract LendingBrokerTest is Test {
     rateCalc = RateCalculator(address(rcProxy));
 
     // Deploy LendingBroker proxy first (used as oracle by the market)
-    LendingBroker bImpl = new LendingBroker(address(moolah), address(vault), address(oracle));
+    LendingBroker bImpl = new LendingBroker(address(moolah), address(relayer), address(oracle));
     ERC1967Proxy bProxy = new ERC1967Proxy(
       address(bImpl),
       abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
@@ -168,6 +185,10 @@ contract LendingBrokerTest is Test {
     // whitelist liquidator at lending broker
     vm.prank(MANAGER);
     broker.toggleLiquidationWhitelist(address(liquidator), true);
+
+    // add broker into relayer
+    vm.prank(MANAGER);
+    relayer.addBroker(address(broker));
   }
 
   function _snapshot(address user) internal view returns (Market memory market, Position memory pos) {
