@@ -547,4 +547,56 @@ contract StableSwapPoolBNBTest is Test {
 
     assertEq(amountOutWithFee + exFee, amountOutWithoutFee);
   }
+
+  function test_ramp_A() public {
+    uint256 initialA = pool.A();
+    uint256 futureA = initialA * 4;
+    uint256 futureTime = block.timestamp + 14 days;
+
+    vm.startPrank(manager);
+    vm.expectRevert("dev : too early");
+    pool.ramp_A(futureA, futureTime);
+
+    // fast forward 1 day
+    vm.warp(block.timestamp + 1 days);
+    pool.ramp_A(futureA, futureTime);
+
+    assertEq(pool.future_A(), futureA * pool.A_PRECISION());
+    assertEq(pool.future_A_time(), futureTime);
+
+    // fast forward 1 + 7 days
+    vm.warp(block.timestamp + 8 days);
+    uint256 midA = pool.A();
+    assertGt(midA, initialA);
+    assertLt(midA, futureA);
+
+    // fast forward to future time
+    vm.warp(futureTime + 1);
+    assertEq(pool.A(), futureA);
+  }
+
+  function test_stop_rampget_A() public {
+    uint256 initialA = pool.A();
+    uint256 futureA = initialA * 4;
+    uint256 futureTime = block.timestamp + 14 days;
+
+    vm.startPrank(manager);
+    // fast forward 1 day
+    vm.warp(block.timestamp + 1 days);
+    pool.ramp_A(futureA, futureTime);
+
+    // fast forward 7 days
+    vm.warp(block.timestamp + 8 days);
+    uint256 midA = pool.A();
+    assertGt(midA, initialA);
+    assertLt(midA, futureA);
+
+    pool.stop_rampget_A();
+    assertEq(pool.future_A() / pool.A_PRECISION(), midA);
+    assertEq(pool.future_A_time(), block.timestamp);
+
+    // fast forward to original future time
+    vm.warp(futureTime + 1);
+    assertEq(pool.A(), midA);
+  }
 }

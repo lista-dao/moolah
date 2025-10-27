@@ -437,8 +437,8 @@ contract StableSwapPool is
     uint256 dx0 = (value * (10 ** dps0)) / oraclePrices[0]; // token0 amount for $100, in original precision
     uint256 dx1 = (value * (10 ** dps1)) / oraclePrices[1]; // token1 amount for $100, in original precision
 
-    uint256 dy1 = get_dy_without_fee(0, 1, dx0); // token1Amount for 1 token0, in original precision
-    uint256 dy0 = get_dy_without_fee(1, 0, dx1); // token0Amount for 1 token1, in original precision
+    uint256 dy1 = get_dy_without_fee(0, 1, dx0); // token1Amount for $100 token0, in original precision
+    uint256 dy0 = get_dy_without_fee(1, 0, dx1); // token0Amount for $100 token1, in original precision
 
     uint256 price0 = (dx1 * PRECISION_MUL[1] * oraclePrices[1]) / (dy0 * PRECISION_MUL[0]);
     uint256 price1 = (dx0 * PRECISION_MUL[0] * oraclePrices[0]) / (dy1 * PRECISION_MUL[1]);
@@ -726,9 +726,9 @@ contract StableSwapPool is
     require(_future_time >= block.timestamp + MIN_RAMP_TIME, "dev: insufficient time");
 
     uint256 _initial_A = get_A();
+    require(_future_A > 0 && _future_A < MAX_A, "_future_A must be between 0 and MAX_A");
     _future_A = _future_A * A_PRECISION;
 
-    require(_future_A > 0 && _future_A < MAX_A, "_future_A must be between 0 and MAX_A");
     require(
       (_future_A >= _initial_A && _future_A <= _initial_A * MAX_A_CHANGE) ||
         (_future_A < _initial_A && _future_A * MAX_A_CHANGE >= _initial_A),
@@ -834,8 +834,8 @@ contract StableSwapPool is
     require(_oracle != address(0), "ZERO Address for oracle");
     require(_oracle != oracle, "No change in oracle");
 
-    IOracle(oracle).peek(coins[0]);
-    IOracle(oracle).peek(coins[1]);
+    IOracle(_oracle).peek(coins[0]);
+    IOracle(_oracle).peek(coins[1]);
     oracle = _oracle;
 
     emit ChangeOracle(_oracle);
