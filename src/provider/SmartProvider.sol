@@ -270,7 +270,6 @@ contract SmartProvider is
     require(marketParams.collateralToken == TOKEN, "invalid collateral token");
     require(maxCollateralAmount > 0, "invalid collateral amount");
 
-    // validate slippage before removing liquidity
     uint256[2] memory amounts = [token0Amount, token1Amount];
 
     // remove liquidity from the stableswap pool
