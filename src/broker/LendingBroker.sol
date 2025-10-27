@@ -978,9 +978,8 @@ contract LendingBroker is
    */
   function setMaxFixedLoanPositions(uint256 maxPositions) external onlyRole(MANAGER) {
     require(maxFixedLoanPositions != maxPositions, "broker/same-value-provided");
-    uint256 oldMaxFixedLoanPositions = maxFixedLoanPositions;
+    emit MaxFixedLoanPositionsUpdated(maxFixedLoanPositions, maxPositions);
     maxFixedLoanPositions = maxPositions;
-    emit MaxFixedLoanPositionsUpdated(oldMaxFixedLoanPositions, maxPositions);
   }
 
   /**
