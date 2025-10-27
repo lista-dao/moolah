@@ -176,7 +176,7 @@ library BrokerMath {
    */
   function _aprPerSecond(uint256 apr) internal pure returns (uint256) {
     if (apr <= RATE_SCALE) return 0;
-    return Math.mulDiv(apr - RATE_SCALE, 1, 365 days, Math.Rounding.Floor);
+    return Math.mulDiv(apr - RATE_SCALE, 1, 365 days, Math.Rounding.Ceil);
   }
 
   /**
