@@ -226,10 +226,11 @@ library BrokerMath {
    * @dev Normalize the borrow amount based on the current interest rate
    * @param borrowAmount The original borrow amount
    * @param rate The current interest rate
+   * @param roundUp Whether to round up or down
    * @return The normalized borrow amount
    */
-  function normalizeBorrowAmount(uint256 borrowAmount, uint256 rate) public pure returns (uint256) {
-    return Math.mulDiv(borrowAmount, RATE_SCALE, rate, Math.Rounding.Ceil);
+  function normalizeBorrowAmount(uint256 borrowAmount, uint256 rate, bool roundUp) public pure returns (uint256) {
+    return Math.mulDiv(borrowAmount, RATE_SCALE, rate, roundUp ? Math.Rounding.Ceil : Math.Rounding.Floor);
   }
 
   /**
@@ -339,7 +340,7 @@ library BrokerMath {
     if (interestPaid > 0) {
       position.normalizedDebt = UtilsLib.zeroFloorSub(
         position.normalizedDebt,
-        normalizeBorrowAmount(interestPaid, rate)
+        normalizeBorrowAmount(interestPaid, rate, false)
       );
       interestToDeduct -= interestPaid;
     }
@@ -350,7 +351,7 @@ library BrokerMath {
       position.principal -= principalPaid;
       position.normalizedDebt = UtilsLib.zeroFloorSub(
         position.normalizedDebt,
-        normalizeBorrowAmount(principalPaid, rate)
+        normalizeBorrowAmount(principalPaid, rate, false)
       );
       principalToDeduct -= principalPaid;
     }

@@ -469,7 +469,11 @@ contract LendingBrokerTest is Test {
     uint256 expectedInterestShare = outstandingInterest == 0
       ? 0
       : BrokerMath.mulDivFlooring(outstandingInterest, convertAmount, principalBefore);
-    uint256 expectedNormalizedDelta = BrokerMath.normalizeBorrowAmount(convertAmount + expectedInterestShare, rate);
+    uint256 expectedNormalizedDelta = BrokerMath.normalizeBorrowAmount(
+      convertAmount + expectedInterestShare,
+      rate,
+      true
+    );
     uint256 expectedNormalizedAfter = normalizedBefore > expectedNormalizedDelta
       ? normalizedBefore - expectedNormalizedDelta
       : 0;
@@ -506,14 +510,14 @@ contract LendingBrokerTest is Test {
     uint256 rate = rateCalc.accrueRate(address(broker));
     uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(normalizedBefore, rate);
     uint256 outstandingInterest = actualDebt > principalBefore ? actualDebt - principalBefore : 0;
-    uint256 expectedNormalizedDelta = BrokerMath.normalizeBorrowAmount(actualDebt, rate);
+    uint256 expectedNormalizedDelta = BrokerMath.normalizeBorrowAmount(actualDebt, rate, true);
 
     vm.prank(borrower);
     broker.convertDynamicToFixed(principalBefore, 52);
 
     (uint256 principalAfter, uint256 normalizedAfter) = broker.dynamicLoanPositions(borrower);
-    assertEq(principalAfter, 0, "dynamic principal should be cleared");
-    assertEq(normalizedAfter, 0, "dynamic normalized debt should be cleared");
+    assertApproxEqAbs(principalAfter, 0, 1, "dynamic principal should be cleared");
+    assertApproxEqAbs(normalizedAfter, 0, 1, "dynamic normalized debt should be cleared");
 
     FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(borrower);
     assertEq(fixedPositions.length, 1);

@@ -171,7 +171,7 @@ contract LendingBroker is
     // get updated rate
     uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
     // calc. normalized debt
-    uint256 normalizedDebt = BrokerMath.normalizeBorrowAmount(amount, rate);
+    uint256 normalizedDebt = BrokerMath.normalizeBorrowAmount(amount, rate, true);
     // update user's dynamic position
     DynamicLoanPosition storage position = dynamicLoanPositions[user];
     position.principal += amount;
@@ -257,7 +257,7 @@ contract LendingBroker is
     IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), repayInterestAmt);
     // update position
     position.normalizedDebt = position.normalizedDebt.zeroFloorSub(
-      BrokerMath.normalizeBorrowAmount(repayInterestAmt, rate)
+      BrokerMath.normalizeBorrowAmount(repayInterestAmt, rate, false)
     );
     // supply interest to moolah vault
     _supplyToMoolahVault(repayInterestAmt);
@@ -270,7 +270,7 @@ contract LendingBroker is
         // update position
         position.principal = position.principal.zeroFloorSub(principalRepaid);
         position.normalizedDebt = position.normalizedDebt.zeroFloorSub(
-          BrokerMath.normalizeBorrowAmount(principalRepaid, rate)
+          BrokerMath.normalizeBorrowAmount(principalRepaid, rate, false)
         );
         totalRepaid += principalRepaid;
       }
@@ -393,7 +393,9 @@ contract LendingBroker is
       _supplyToMoolahVault(interestToRepay);
     }
 
-    position.normalizedDebt = position.normalizedDebt.zeroFloorSub(BrokerMath.normalizeBorrowAmount(amount, rate));
+    position.normalizedDebt = position.normalizedDebt.zeroFloorSub(
+      BrokerMath.normalizeBorrowAmount(amount, rate, false)
+    );
     position.principal -= amount;
 
     if (position.principal == 0 && position.normalizedDebt == 0) {
@@ -746,7 +748,7 @@ contract LendingBroker is
       // get updated rate
       uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
       // calc. normalized debt (principal + interest)
-      uint256 normalizedDebt = BrokerMath.normalizeBorrowAmount(_principal + _interest, rate);
+      uint256 normalizedDebt = BrokerMath.normalizeBorrowAmount(_principal + _interest, rate, true);
       // update user's dynamic position
       DynamicLoanPosition storage position = dynamicLoanPositions[user];
       position.principal += _principal;

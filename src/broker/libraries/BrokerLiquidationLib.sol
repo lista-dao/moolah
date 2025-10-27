@@ -43,7 +43,7 @@ library BrokerLiquidationLib {
     if (interestPaid > 0) {
       position.normalizedDebt = UtilsLib.zeroFloorSub(
         position.normalizedDebt,
-        BrokerMath.normalizeBorrowAmount(interestPaid, rate)
+        BrokerMath.normalizeBorrowAmount(interestPaid, rate, false)
       );
       interestToDeduct -= interestPaid;
     }
@@ -54,7 +54,7 @@ library BrokerLiquidationLib {
       position.principal -= principalPaid;
       position.normalizedDebt = UtilsLib.zeroFloorSub(
         position.normalizedDebt,
-        BrokerMath.normalizeBorrowAmount(principalPaid, rate)
+        BrokerMath.normalizeBorrowAmount(principalPaid, rate, false)
       );
       principalToDeduct -= principalPaid;
     }
