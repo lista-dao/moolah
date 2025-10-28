@@ -58,6 +58,7 @@ contract CreateMarketDeploy is Script {
   address Take = 0xE747E54783Ba3F77a8E5251a3cBA19EBe9C0E197;
   address wsrUSD = 0x4809010926aec940b550D34a46A52739f996D75D;
   address CDL = 0x84575b87395c970F1F48E87d87a8dB36Ed653716;
+  address ptUSDe5FEB2026 = 0x6254500243135573A948d7a5F90c307Cd7973f43;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
@@ -75,6 +76,8 @@ contract CreateMarketDeploy is Script {
   address ptUSR27NOV2025USDTOracle = 0x01ccc0f0ae8907bD3EFA947B2Ce841082Bcce29f;
   address ptSatUSD18DEC2025USD1Oracle = 0x0Ed93c1BF6F81cEd3d5D83b884Fe403A8cb9072E;
   address ptSatUSD18DEC2025USDTOracle = 0xe98E6D103347fcCB97861DA5071fDAc408fD991A;
+  address ptUSDe5FEB2026USD1Oracle = 0x1d25Dd52fd8A509719cBb983f04FAe5B7D00eC86;
+  address ptUSDe5FEB2026USDTOracle = 0x155e987d0d48Ac35D3C2F2c3B16664944D918bA5;
 
   address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
   address alphaIrm = 0x5F9f9173B405C6CEAfa7f98d09e4B8447e9797E6;
@@ -97,21 +100,25 @@ contract CreateMarketDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams[] memory params = new MarketParams[](4);
-    params[0] = MarketParams({ loanToken: CDL, collateralToken: BTCB, oracle: multiOracle, irm: irm, lltv: lltv50 });
-    params[1] = MarketParams({ loanToken: CDL, collateralToken: Aster, oracle: multiOracle, irm: irm, lltv: lltv50 });
-    params[2] = MarketParams({ loanToken: CDL, collateralToken: USDT, oracle: multiOracle, irm: irm, lltv: lltv50 });
-    params[3] = MarketParams({
-      loanToken: USDT,
-      collateralToken: wsrUSD,
-      oracle: multiOracle,
+    MarketParams[] memory params = new MarketParams[](2);
+    params[0] = MarketParams({
+      loanToken: USD1,
+      collateralToken: ptUSDe5FEB2026,
+      oracle: ptUSDe5FEB2026USD1Oracle,
       irm: irm,
-      lltv: lltv915
+      lltv: lltv965
+    });
+    params[1] = MarketParams({
+      loanToken: USDT,
+      collateralToken: ptUSDe5FEB2026,
+      oracle: ptUSDe5FEB2026USDTOracle,
+      irm: irm,
+      lltv: lltv965
     });
 
     // create market
     vm.startBroadcast(deployerPrivateKey);
-    for (uint256 i = 0; i < 4; i++) {
+    for (uint256 i = 0; i < 2; i++) {
       Id id = params[i].id();
       console.log("market id:");
       console.logBytes32(Id.unwrap(id));
