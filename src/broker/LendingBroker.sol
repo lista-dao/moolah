@@ -181,6 +181,8 @@ contract LendingBroker is
     _borrowFromMoolah(user, amount);
     // transfer loan token to user
     IERC20(LOAN_TOKEN).safeTransfer(user, amount);
+    // validate positions
+    _validatePositions(user);
     // emit event
     emit DynamicLoanPositionBorrowed(user, amount, position.principal);
   }
@@ -223,6 +225,8 @@ contract LendingBroker is
     );
     // transfer loan token to user
     IERC20(LOAN_TOKEN).safeTransfer(user, amount);
+    // validate positions
+    _validatePositions(user);
     // emit event
     emit FixedLoanPositionCreated(user, amount, start, end, term.apr, termId);
   }
@@ -280,6 +284,9 @@ contract LendingBroker is
         delete dynamicLoanPositions[onBehalf];
       }
     }
+
+    // validate positions
+    _validatePositions(onBehalf);
 
     emit DynamicLoanPositionRepaid(onBehalf, totalRepaid, position.principal);
   }
@@ -353,6 +360,9 @@ contract LendingBroker is
       _updateFixedPosition(onBehalf, position);
     }
 
+    // validate positions
+    _validatePositions(onBehalf);
+
     // emit event
     emit RepaidFixedLoanPosition(
       onBehalf,
@@ -421,6 +431,9 @@ contract LendingBroker is
         principalRepaid: 0
       })
     );
+
+    // validate positions
+    _validatePositions(user);
 
     emit FixedLoanPositionCreated(user, amount, start, end, term.apr, termId);
   }
@@ -917,6 +930,17 @@ contract LendingBroker is
     return BrokerMath.getPenaltyForFixedPosition(position, repayAmt);
   }
 
+  /**
+   * @dev Validate that the user's positions meet the minimum loan requirement
+   * @param user The address of the user
+   */
+  function _validatePositions(address user) internal view {
+    require(
+      BrokerMath.checkPositionsMeetsMinLoan(user, address(MOOLAH), rateCalculator),
+      "broker/positions-below-min-loan"
+    );
+  }
+
   ///////////////////////////////////////
   /////       Admin functions       /////
   ///////////////////////////////////////
@@ -941,43 +965,36 @@ contract LendingBroker is
   }
 
   /**
-   * @dev Set a fixed term and rate for borrowing
-   * @param termId The ID of the fixed term
-   * @param duration The duration of the fixed term (in seconds)
-   * @param apr The percentage rate for the fixed term
+   * @dev Add, update or remove a fixed term and rate for borrowing
+   * @param term The fixed term and rate scheme
+   * @param removeTerm True to remove the term, false to add or update
    */
-  function setFixedTermAndRate(uint256 termId, uint256 duration, uint256 apr) external onlyRole(MANAGER) {
-    require(termId > 0, "broker/invalid-term-id");
-    require(duration > 0, "broker/invalid-duration");
-    require(apr >= RATE_SCALE, "broker/invalid-apr");
-    FixedTermAndRate memory _term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr });
-    // emit event first
-    emit FixedTermAndRateUpdated(termId, duration, apr);
+  function updateFixedTermAndRate(FixedTermAndRate calldata term, bool removeTerm) external onlyRole(MANAGER) {
+    require(term.termId > 0, "broker/invalid-term-id");
+    require(term.duration > 0, "broker/invalid-duration");
+    require(term.apr >= RATE_SCALE, "broker/invalid-apr");
     // update term if it exists
     for (uint256 i = 0; i < fixedTerms.length; i++) {
-      if (fixedTerms[i].termId == termId) {
-        fixedTerms[i] = _term;
+      // term found
+      if (fixedTerms[i].termId == term.termId) {
+        // remove term
+        if (removeTerm) {
+          fixedTerms[i] = fixedTerms[fixedTerms.length - 1];
+          fixedTerms.pop();
+        } else {
+          fixedTerms[i] = term;
+          emit FixedTermAndRateUpdated(term.termId, term.duration, term.apr);
+        }
         return;
       }
     }
-    // does not exist, add it
-    fixedTerms.push(_term);
-  }
-
-  /**
-   * @dev Remove a fixed term and rate for borrowing
-   * @param termId The ID of the fixed term to remove
-   */
-  function removeFixedTermAndRate(uint256 termId) external onlyRole(MANAGER) {
-    require(termId > 0, "broker/invalid-term-id");
-    for (uint256 i = 0; i < fixedTerms.length; i++) {
-      if (fixedTerms[i].termId == termId) {
-        fixedTerms[i] = fixedTerms[fixedTerms.length - 1];
-        fixedTerms.pop();
-        return;
-      }
+    // item not found
+    // adding new term
+    if (!removeTerm) {
+      fixedTerms.push(term);
+    } else {
+      revert("broker/term-not-found");
     }
-    revert("broker/term-not-found");
   }
 
   /**

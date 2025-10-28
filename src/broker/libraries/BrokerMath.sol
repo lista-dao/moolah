@@ -12,6 +12,7 @@ import { IBroker, FixedLoanPosition, DynamicLoanPosition, LiquidationContext } f
 import { IOracle } from "../../moolah/interfaces/IOracle.sol";
 import { IRateCalculator } from "../interfaces/IRateCalculator.sol";
 import { PriceLib } from "../../moolah/libraries/PriceLib.sol";
+import { IRateCalculator } from "../interfaces/IRateCalculator.sol";
 
 uint256 constant RATE_SCALE = 10 ** 27;
 uint256 constant LISUSD_PRICE = 1e8;
@@ -88,6 +89,46 @@ library BrokerMath {
       );
       price = deduction >= collateralPrice ? 0 : (collateralPrice - deduction);
       return price;
+    }
+  }
+
+  /**
+   * @dev Ensure every position either cleared or larger than Moolah.minLoan
+   * @param user The address of the user
+   * @param moolah The address of the Moolah contract
+   * @param rateCalculator The address of the rate calculator
+   */
+  function checkPositionsMeetsMinLoan(
+    address user,
+    address moolah,
+    address rateCalculator
+  ) public view returns (bool isValid) {
+    // get current rate
+    uint256 currentRate = IRateCalculator(rateCalculator).getRate(address(this));
+    // get positions
+    IBroker broker = IBroker(address(this));
+    FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(user);
+    DynamicLoanPosition memory dynamicPosition = broker.userDynamicPosition(user);
+    // assume valid first
+    isValid = true;
+    IMoolah _moolah = IMoolah(moolah);
+    uint256 minLoan = _moolah.minLoan(_moolah.idToMarketParams(IBroker(address(this)).MARKET_ID()));
+    // ensure each position either zero or larger than minLoan
+    // check dynamic position
+    uint256 dynamicDebt = denormalizeBorrowAmount(dynamicPosition.normalizedDebt, currentRate);
+    if (dynamicDebt > 0 && dynamicDebt < minLoan) {
+      isValid = false;
+    }
+    // check fixed positions
+    for (uint256 i = 0; i < fixedPositions.length; i++) {
+      FixedLoanPosition memory _fixedPos = fixedPositions[i];
+      uint256 fixedPosDebt = _fixedPos.principal -
+        _fixedPos.principalRepaid +
+        getAccruedInterestForFixedPosition(_fixedPos) -
+        _fixedPos.interestRepaid;
+      if (fixedPosDebt > 0 && fixedPosDebt < minLoan) {
+        isValid = false;
+      }
     }
   }
 
