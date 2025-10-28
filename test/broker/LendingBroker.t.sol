@@ -822,19 +822,31 @@ contract LendingBrokerTest is Test {
   //////////////////////////////////////////////////////
   ///////////////// Liquidation Tests //////////////////
   //////////////////////////////////////////////////////
+  function test_liquidation_fullClearsPrincipal_andSuppliesInterest_seizeCollateral() public {
+    test_liquidation(100 * 1e8, true);
+  }
+
+  function test_liquidation_halfClearsPrincipal_andSuppliesInterest_seizeCollateral() public {
+    test_liquidation(50 * 1e8, true);
+  }
+
+  function test_liquidation_tinyClearsPrincipal_andSuppliesInterest_seizeCollateral() public {
+    test_liquidation(1, true);
+  }
+
   function test_liquidation_fullClearsPrincipal_andSuppliesInterest() public {
-    test_liquidation(100 * 1e8);
+    test_liquidation(100 * 1e8, false);
   }
 
   function test_liquidation_halfClearsPrincipal_andSuppliesInterest() public {
-    test_liquidation(50 * 1e8);
+    test_liquidation(50 * 1e8, false);
   }
 
   function test_liquidation_tinyClearsPrincipal_andSuppliesInterest() public {
-    test_liquidation(3 * 1e8);
+    test_liquidation(1, false);
   }
 
-  function test_liquidation(uint256 percentageToLiquidate) internal {
+  function test_liquidation(uint256 percentageToLiquidate, bool repayBySeizedCollateral) internal {
     _prepareLiquidatablePosition();
 
     /*
@@ -846,7 +858,11 @@ contract LendingBrokerTest is Test {
     */
 
     console.log("====== Liquidation Test Start percentage %s % =======", percentageToLiquidate / 1e8);
-
+    console.log(
+      repayBySeizedCollateral
+        ? "======== [Repay by seized collateral] ========"
+        : "========= [Repay by borrow shares] ========="
+    );
     // get user's borrow shares
     Position memory posBefore = moolah.position(marketParams.id(), borrower);
 
@@ -868,7 +884,6 @@ contract LendingBrokerTest is Test {
     console.log("[Preview] seized assets: ", seizedAssets);
     console.log("[Preview] repaid shares: ", repaidShares);
     console.log("[Preview] repaid assets: ", repaidAssets);
-    // healthStatus(borrower);
 
     uint256 interestBefore = _totalInterestAtBroker(borrower);
     console.log("[Before] interest at broker: ", interestBefore);
@@ -894,7 +909,13 @@ contract LendingBrokerTest is Test {
     vm.startPrank(address(liquidator));
     // as liquidator don't know how much to approve, just approve max
     LISUSD.approve(address(broker), type(uint256).max);
-    broker.liquidate(marketParams, borrower, 0, userBorrowShares, abi.encode(""));
+    broker.liquidate(
+      marketParams,
+      borrower,
+      repayBySeizedCollateral ? seizedAssets : 0,
+      repayBySeizedCollateral ? 0 : repaidShares,
+      abi.encode("")
+    );
     vm.stopPrank();
 
     uint256 vaultSharesAfter = moolah.position(id, address(vault)).supplyShares;
