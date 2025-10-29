@@ -103,7 +103,7 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
    * @param _ratePerSecond The interest rate per second
    */
   function setRatePerSecond(address _broker, uint256 _ratePerSecond) external onlyRole(BOT) {
-    return _setRatePerSecond(_broker, _ratePerSecond);
+    _setRatePerSecond(_broker, _ratePerSecond);
   }
 
   ///////////////////////////////////////
