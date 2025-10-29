@@ -31,7 +31,7 @@ library PriceLib {
     // if market has broker and user address is non-zero
     if (broker != address(0) && user != address(0)) {
       // get price from broker
-      // price deviatiates with user's position at broker
+      // price deviates with user's position at broker
       IBrokerBase _broker = IBrokerBase(broker);
       basePrice = _broker.peek(marketParams.collateralToken, user);
       quotePrice = _broker.peek(marketParams.loanToken, user);
