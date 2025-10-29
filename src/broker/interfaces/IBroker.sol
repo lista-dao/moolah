@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
+import { Id, MarketParams, IMoolah } from "moolah/interfaces/IMoolah.sol";
 
 struct FixedTermAndRate {
   uint256 termId;
@@ -40,6 +40,8 @@ interface IBrokerBase {
   function COLLATERAL_TOKEN() external view returns (address);
   /// @dev the market id of the broker
   function MARKET_ID() external view returns (Id);
+  /// @dev the Moolah contract
+  function MOOLAH() external view returns (IMoolah);
 
   /// @dev peek the price of the token per user
   ///      decreasing according to the accruing interest for collateral token

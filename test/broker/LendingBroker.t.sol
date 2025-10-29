@@ -203,10 +203,21 @@ contract LendingBrokerTest is Test {
   function _totalPrincipalAtBroker(address user) internal view returns (uint256 totalPrincipal) {
     DynamicLoanPosition memory dyn = broker.userDynamicPosition(user);
     totalPrincipal += dyn.principal;
-
+    console.log("[_totalPrincipalAtBroker]  dynamic principal: ", dyn.principal);
     FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(user);
     for (uint256 i = 0; i < fixedPositions.length; i++) {
       totalPrincipal += fixedPositions[i].principal - fixedPositions[i].principalRepaid;
+      console.log(
+        "[_totalPrincipalAtBroker] fixed pos [%s] principal: %s repaid: %s",
+        i,
+        fixedPositions[i].principal,
+        fixedPositions[i].principalRepaid
+      );
+      console.log(
+        "[_totalPrincipalAtBroker] interestRepaid: %s accruedInterest: %s",
+        fixedPositions[i].interestRepaid,
+        BrokerMath.getAccruedInterestForFixedPosition(fixedPositions[i])
+      );
     }
   }
 
@@ -226,7 +237,7 @@ contract LendingBrokerTest is Test {
     // [2] total debt from dynamic position
     totalDebt += BrokerMath.denormalizeBorrowAmount(dynamicPosition.normalizedDebt, currentRate);
 
-    totalInterest = totalDebt - _principalAtMoolah(user);
+    totalInterest = totalDebt - _totalPrincipalAtBroker(user);
   }
 
   function _principalAtMoolah(address user) internal view returns (uint256) {
@@ -249,7 +260,7 @@ contract LendingBrokerTest is Test {
 
   uint256 internal nextTermId;
 
-  function _prepareLiquidatablePosition() internal {
+  function _prepareLiquidatablePosition(bool badDebt) internal {
     uint256 termId = ++nextTermId;
 
     FixedTermAndRate memory term = FixedTermAndRate({
@@ -274,7 +285,7 @@ contract LendingBrokerTest is Test {
 
     skip(30 days);
     // slash collateral price to drive the position underwater
-    oracle.setPrice(address(BTCB), 100000e8);
+    oracle.setPrice(address(BTCB), badDebt ? 80000e8 : 100000e8);
   }
 
   // -----------------------------
@@ -822,42 +833,67 @@ contract LendingBrokerTest is Test {
   //////////////////////////////////////////////////////
   ///////////////// Liquidation Tests //////////////////
   //////////////////////////////////////////////////////
+
+  // --------------- BAD DEBT LIQUIDATIONS ---------------
+  function test_badDebt_liquidation_fullClearsPrincipal_andSuppliesInterest_seizeCollateral() public {
+    test_liquidation(100 * 1e8, true, true, true);
+  }
+
+  function test_badDebt_liquidation_halfClearsPrincipal_andSuppliesInterest_seizeCollateral() public {
+    test_liquidation(50 * 1e8, true, true, false);
+  }
+
+  function test_badDebt_liquidation_tinyClearsPrincipal_andSuppliesInterest_seizeCollateral() public {
+    test_liquidation(1, true, true, false);
+  }
+
+  function test_badDebt_liquidation_fullClearsPrincipal_andSuppliesInterest_repayByShares() public {
+    test_liquidation(100 * 1e8, false, true, true);
+  }
+
+  function test_badDebt_liquidation_halfClearsPrincipal_andSuppliesInterest_repayByShares() public {
+    test_liquidation(50 * 1e8, false, true, false);
+  }
+
+  function test_badDebt_liquidation_tinyClearsPrincipal_andSuppliesInterest_repayByShares() public {
+    test_liquidation(1, false, true, false);
+  }
+
+  // --------------- NORMAL LIQUIDATIONS ---------------
   function test_liquidation_fullClearsPrincipal_andSuppliesInterest_seizeCollateral() public {
-    test_liquidation(100 * 1e8, true);
+    test_liquidation(100 * 1e8, true, false, false);
   }
 
   function test_liquidation_halfClearsPrincipal_andSuppliesInterest_seizeCollateral() public {
-    test_liquidation(50 * 1e8, true);
+    test_liquidation(50 * 1e8, true, false, false);
   }
 
   function test_liquidation_tinyClearsPrincipal_andSuppliesInterest_seizeCollateral() public {
-    test_liquidation(1, true);
+    test_liquidation(1, true, false, false);
   }
 
-  function test_liquidation_fullClearsPrincipal_andSuppliesInterest() public {
-    test_liquidation(100 * 1e8, false);
+  function test_liquidation_fullClearsPrincipal_andSuppliesInterest_repayByShares() public {
+    test_liquidation(100 * 1e8, false, false, false);
   }
 
-  function test_liquidation_halfClearsPrincipal_andSuppliesInterest() public {
-    test_liquidation(50 * 1e8, false);
+  function test_liquidation_halfClearsPrincipal_andSuppliesInterest_repayByShares() public {
+    test_liquidation(50 * 1e8, false, false, false);
   }
 
-  function test_liquidation_tinyClearsPrincipal_andSuppliesInterest() public {
-    test_liquidation(1, false);
+  function test_liquidation_tinyClearsPrincipal_andSuppliesInterest_repayByShares() public {
+    test_liquidation(1, false, false, false);
   }
 
-  function test_liquidation(uint256 percentageToLiquidate, bool repayBySeizedCollateral) internal {
-    _prepareLiquidatablePosition();
-
-    /*
-    console.log("Broker address: ", address(broker));
-    console.log("Moolah address: ", address(moolah));
-    console.log("collateral token address: ", address(BTCB));
-    console.log("loan token address: ", address(LISUSD));
-    console.log("liquidator address: ", address(liquidator));
-    */
+  function test_liquidation(
+    uint256 percentageToLiquidate,
+    bool repayBySeizedCollateral,
+    bool isBadDebt,
+    bool expectRevert
+  ) internal {
+    _prepareLiquidatablePosition(isBadDebt);
 
     console.log("====== Liquidation Test Start percentage %s % =======", percentageToLiquidate / 1e8);
+    console.log(isBadDebt ? "======== [Bad Debt Scenario] ========" : "======== [Normal Liquidation] ========");
     console.log(
       repayBySeizedCollateral
         ? "======== [Repay by seized collateral] ========"
@@ -866,10 +902,11 @@ contract LendingBrokerTest is Test {
     // get user's borrow shares
     Position memory posBefore = moolah.position(marketParams.id(), borrower);
 
-    uint256 userBorrowShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, percentageToLiquidate, 100 * 1e8);
+    uint256 userRepayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, percentageToLiquidate, 100 * 1e8);
     uint256 userCollateralBefore = posBefore.collateral;
 
-    console.log("[Before] user borrow shares before: ", userBorrowShares);
+    console.log("[Before] user borrow shares before: ", posBefore.borrowShares);
+    console.log("[Before] user repay shares: ", userRepayShares);
     console.log("[Before] user collateral before: ", userCollateralBefore);
 
     uint256 brokerCollateralBalBefore = BTCB.balanceOf(address(broker));
@@ -878,7 +915,7 @@ contract LendingBrokerTest is Test {
       marketParams,
       moolah.market(marketParams.id()),
       0,
-      userBorrowShares,
+      userRepayShares,
       moolah._getPrice(marketParams, borrower)
     );
     console.log("[Preview] seized assets: ", seizedAssets);
@@ -909,6 +946,12 @@ contract LendingBrokerTest is Test {
     vm.startPrank(address(liquidator));
     // as liquidator don't know how much to approve, just approve max
     LISUSD.approve(address(broker), type(uint256).max);
+    if (expectRevert) {
+      // under rapid price dropping scenario
+      // full repay share cause seized collateral > user collateral
+      // OR seized collateral too larger
+      vm.expectRevert();
+    }
     broker.liquidate(
       marketParams,
       borrower,
@@ -925,7 +968,9 @@ contract LendingBrokerTest is Test {
       marketAfter.totalSupplyShares
     );
     console.log("[After] vault assets: ", vaultAssetsAfter);
-    assertGt(vaultSharesAfter, vaultSharesBefore, "interest not supplied to vault");
+    if (!expectRevert) {
+      assertGt(vaultSharesAfter, vaultSharesBefore, "interest not supplied to vault");
+    }
 
     uint256 principalAfterBroker = _totalPrincipalAtBroker(borrower);
     uint256 principalAfterMoolah = _principalAtMoolah(borrower);

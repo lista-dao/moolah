@@ -9,7 +9,6 @@ import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 import { IBroker, FixedLoanPosition, DynamicLoanPosition, FixedTermAndRate, LiquidationContext } from "./interfaces/IBroker.sol";
 import { IRateCalculator } from "./interfaces/IRateCalculator.sol";
@@ -469,13 +468,12 @@ contract LendingBroker is
     // fetch positions
     DynamicLoanPosition storage dynamicPosition = dynamicLoanPositions[borrower];
     FixedLoanPosition[] memory fixedPositions = fixedLoanPositions[borrower];
+    Market memory market = MOOLAH.market(id);
     // [1] calculate total outstanding debt before liquidation (principal + interest)
     uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
     uint256 totalDebtAtBroker = BrokerMath.getTotalDebt(fixedPositions, dynamicPosition, rate);
     // [2] calculate actual debt at Moolah after liquidation
-    Market memory market = MOOLAH.market(id);
-    Position memory mPos = MOOLAH.position(id, borrower);
-    uint256 debtAtMoolah = uint256(mPos.borrowShares).toAssetsUp(market.totalBorrowAssets, market.totalBorrowShares);
+    uint256 debtAtMoolah = BrokerMath.getDebtAtMoolah(borrower);
 
     // [3] calculate the loan token amount to repay to moolah
     uint256 repaidAssets;
@@ -498,10 +496,7 @@ contract LendingBroker is
       _supplyToMoolahVault(interestToBroker);
     }
 
-    // [6] init liquidation context
-    //  - must call this before call moolah.liquidate()
-    //  - moolah will call peek() to get a lowered price during liquidation
-    //    in order to get correct seized assets
+    // [6] init liquidation context for onMoolahLiquidate() Callback
     uint256 collateralTokenPrebalance = IERC20(COLLATERAL_TOKEN).balanceOf(address(this));
     liquidationContext = LiquidationContext({
       active: true,
@@ -522,29 +517,34 @@ contract LendingBroker is
       );
     }
 
-    if (repaidAssets == 0 && interestToBroker == 0) return;
-
-    // [8] deduct interest and principal from positions
-    // deduct from dynamic position and returns the leftover assets to deduct
-    (uint256 interestLeftover, uint256 principalLeftover) = _deductDynamicPositionDebt(
-      borrower,
-      dynamicPosition,
-      interestToBroker,
-      repaidAssets,
-      rate
-    );
-    // deduct from fixed positions
-    if ((principalLeftover > 0 || interestLeftover > 0) && fixedPositions.length > 0) {
-      // sort fixed positions from earliest end time to latest, filter out fully repaid positions
-      // positions with earlier end time will be deducted first
-      FixedLoanPosition[] memory sorted = BrokerMath.sortAndFilterFixedPositions(fixedPositions);
-      if (sorted.length > 0) {
-        _deductFixedPositionsDebt(borrower, sorted, interestLeftover, principalLeftover);
-      }
-    }
-
     // must clear liquidation context after liquidation
     delete liquidationContext;
+
+    // [8] edge case: bad debt/full liquidation so that borrow share debt is zero
+    if (BrokerMath.getDebtAtMoolah(borrower) == 0) {
+      // clear all positions
+      delete dynamicLoanPositions[borrower];
+      delete fixedLoanPositions[borrower];
+    } else {
+      // [9] deduct interest and principal from positions
+      // deduct from dynamic position and returns the leftover assets to deduct
+      (uint256 interestLeftover, uint256 principalLeftover) = _deductDynamicPositionDebt(
+        borrower,
+        dynamicPosition,
+        interestToBroker,
+        repaidAssets,
+        rate
+      );
+      // deduct from fixed positions
+      if ((principalLeftover > 0 || interestLeftover > 0) && fixedPositions.length > 0) {
+        // sort fixed positions from earliest end time to latest, filter out fully repaid positions
+        // positions with earlier end time will be deducted first
+        FixedLoanPosition[] memory sorted = BrokerMath.sortAndFilterFixedPositions(fixedPositions);
+        if (sorted.length > 0) {
+          _deductFixedPositionsDebt(borrower, sorted, interestLeftover, principalLeftover);
+        }
+      }
+    }
 
     // emit event
     emit Liquidated(borrower, totalDebtAtBroker.zeroFloorSub(debtAtMoolah));
@@ -741,44 +741,20 @@ contract LendingBroker is
     uint256[] calldata posIds
   ) external override whenNotPaused nonReentrant marketIdSet onlyRole(BOT) {
     require(posIds.length > 0, "Broker/zero-positions");
-    // the additional principal will be add into the dynamic position
-    uint256 _principal = 0;
-    uint256 _interest = 0;
-    // calculate principal to be refinanced one by one
-    for (uint256 i = 0; i < posIds.length; i++) {
-      uint256 posId = posIds[i];
-      // get all fixed positions of the user
-      FixedLoanPosition[] memory positions = fixedLoanPositions[user];
-      // fetch fixed position and make sure it's matured
-      FixedLoanPosition memory position;
-      for (uint256 i = 0; i < positions.length; i++) {
-        if (positions[i].posId == posId) {
-          position = positions[i];
-          break;
-        }
-      }
-      // skip if position not found
-      if (position.posId == 0) continue;
-      require(block.timestamp >= position.end, "Broker/position-not-expired");
-      // Debt of a fixed loan position consist of (1) and (2)
-      // (1) net principal
-      _principal += position.principal - position.principalRepaid;
-      // (2) get outstanding interest
-      _interest += _getAccruedInterestForFixedPosition(position) - position.interestRepaid;
-      // remove the fixed position
-      _removeFixedPositionByPosId(user, posId);
-    }
-    if (_principal > 0) {
-      // get updated rate
-      uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
-      // calc. normalized debt (principal + interest)
-      uint256 normalizedDebt = BrokerMath.normalizeBorrowAmount(_principal + _interest, rate, true);
-      // update user's dynamic position
-      DynamicLoanPosition storage position = dynamicLoanPositions[user];
-      position.principal += _principal;
-      position.normalizedDebt += normalizedDebt;
-      // emit the same event as borrow with dynamic position
-      emit DynamicLoanPositionBorrowed(user, _principal, position.principal);
+    // update rate
+    uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
+    // get refinanced positions and updated dynamic position
+    (
+      FixedLoanPosition[] memory updatedFixedPos,
+      DynamicLoanPosition memory updatedDynPos,
+      uint256 refinancedPrincipal
+    ) = BrokerMath.refinanceMaturedFixedPositions(user, rate, posIds);
+    // update fixed positions
+    fixedLoanPositions[user] = updatedFixedPos;
+    // update dynamic position if changed
+    if (refinancedPrincipal > 0) {
+      dynamicLoanPositions[user] = updatedDynPos;
+      emit DynamicLoanPositionBorrowed(user, refinancedPrincipal, updatedDynPos.principal);
     }
   }
 

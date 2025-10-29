@@ -259,6 +259,82 @@ library BrokerMath {
     }
   }
 
+  /**
+   * @dev Refinance matured fixed positions into dynamic position
+   * @param user The address of the user
+   * @param rate The current interest rate
+   * @param posIds The IDs of the fixed positions to refinance
+   */
+  function refinanceMaturedFixedPositions(
+    address user,
+    uint256 rate,
+    uint256[] calldata posIds
+  ) public view returns (FixedLoanPosition[] memory, DynamicLoanPosition memory, uint256) {
+    IBroker broker = IBroker(address(this));
+    uint256[] memory posIdToRemove = new uint256[](posIds.length);
+    // the additional principal will be add into the dynamic position
+    uint256 _principal = 0;
+    uint256 _interest = 0;
+    // calculate principal to be refinanced one by one
+    for (uint256 i = 0; i < posIds.length; i++) {
+      uint256 posId = posIds[i];
+      // get all fixed positions of the user
+      FixedLoanPosition[] memory _positions = broker.userFixedPositions(user);
+      // fetch fixed position and make sure it's matured
+      FixedLoanPosition memory position;
+      for (uint256 i = 0; i < _positions.length; i++) {
+        if (_positions[i].posId == posId) {
+          position = _positions[i];
+          break;
+        }
+      }
+      // skip if position not found
+      if (position.posId == 0) continue;
+      require(block.timestamp >= position.end, "Broker/position-not-expired");
+      // Debt of a fixed loan position consist of (1) and (2)
+      // (1) net principal
+      _principal += position.principal - position.principalRepaid;
+      // (2) get outstanding interest
+      _interest += getAccruedInterestForFixedPosition(position) - position.interestRepaid;
+      // save it and remove later
+      posIdToRemove[i] = posId;
+    }
+    //
+    FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(user);
+    // container for leftover positions
+    FixedLoanPosition[] memory filteredPositions = new FixedLoanPosition[](fixedPositions.length);
+    // remove fixed positions if it exists in posIdToRemove
+    uint256 count = 0;
+    for (uint256 i = 0; i < fixedPositions.length; i++) {
+      FixedLoanPosition memory p = fixedPositions[i];
+      bool toRemove = false;
+      for (uint256 j = 0; j < posIdToRemove.length; j++) {
+        if (p.posId == posIdToRemove[j]) {
+          toRemove = true;
+          break;
+        }
+      }
+      if (!toRemove) {
+        filteredPositions[count] = p;
+        count++;
+      }
+    }
+    // trim filteredPositions to count
+    assembly {
+      mstore(filteredPositions, count)
+    }
+
+    // deduct the refinanced amount into dynamic position
+    DynamicLoanPosition memory dynPosition = broker.userDynamicPosition(user);
+    if (_principal > 0) {
+      // calc. normalized debt (principal + interest)
+      uint256 normalizedDebt = normalizeBorrowAmount(_principal + _interest, rate, true);
+      dynPosition.principal += _principal;
+      dynPosition.normalizedDebt += normalizedDebt;
+    }
+    return (filteredPositions, dynPosition, _principal);
+  }
+
   // =========================== //
   //         Dynamic Loan        //
   // =========================== //
@@ -353,6 +429,19 @@ library BrokerMath {
   // =========================== //
   //      Liquidation Helper     //
   // =========================== //
+
+  /**
+   * @dev Get the debt at Moolah for a user
+   * @param user The address of the user
+   */
+  function getDebtAtMoolah(address user) public view returns (uint256) {
+    IBroker broker = IBroker(address(this));
+    IMoolah moolah = broker.MOOLAH();
+    Id marketId = broker.MARKET_ID();
+    Position memory position = moolah.position(marketId, user);
+    Market memory market = moolah.market(marketId);
+    return uint256(position.borrowShares).toAssetsUp(market.totalBorrowAssets, market.totalBorrowShares);
+  }
 
   /**
    * @dev Deduct the debt from a dynamic loan position
