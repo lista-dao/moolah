@@ -15,7 +15,7 @@ contract MoolahVaultConfigDeploy is Script {
   uint256 fee = 50 * 1e16;
   address feeRecipient = 0x2E2Eed557FAb1d2E11fEA1E1a23FF8f1b23551f3;
   address skimRecipient = 0x1d60bBBEF79Fb9540D271Dbb01925380323A8f66;
-  address TakeWhiteList = 0x44a26069A57f61f290B49c8848f1F43786446976;
+  address TakeWhiteList = 0x5f05B9A7f1Cfe1bb3abd7B699460186D481D7939;
   address EGL1WhiteList = 0xf4780c9929E713D0b0C6F6bcA3c2f94461106717;
 
   address ETH = 0x2170Ed0880ac9A755fd29B2688956BD959F933F8;
