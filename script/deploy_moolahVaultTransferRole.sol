@@ -5,10 +5,11 @@ import "forge-std/Script.sol";
 import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 
 contract MoolahVaultTransferRoleDeploy is Script {
-  MoolahVault vault = MoolahVault(0x6d6783C146F2B0B2774C1725297f1845dc502525);
+  MoolahVault vault = MoolahVault(0x384729E442b7636709896e9a3bEf63EF70C22FB0);
   address admin = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253; // timelock
   address manager = 0x2e2807F88C381Cb0CC55c808a751fC1E3fcCbb85; // timelock
   address allocator = 0x85CE862C5BB61938FFcc97DA4A80C8aaE43C6A27;
+  address allocator2 = 0x0e21985e453177336bD7A22F4928F6689a100043;
   address curator = 0x2e2807F88C381Cb0CC55c808a751fC1E3fcCbb85;
 
   bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
@@ -27,6 +28,7 @@ contract MoolahVaultTransferRoleDeploy is Script {
     vault.grantRole(DEFAULT_ADMIN_ROLE, admin);
     vault.grantRole(MANAGER, manager);
     vault.grantRole(ALLOCATOR, allocator);
+    vault.grantRole(ALLOCATOR, allocator2);
     vault.grantRole(CURATOR, curator);
 
     vault.revokeRole(CURATOR, deployer);

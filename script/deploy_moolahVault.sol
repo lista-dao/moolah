@@ -9,11 +9,11 @@ import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 contract MoolahVaultDeploy is Script {
   address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
 
-  address asset = 0x000Ae314E2A2172a039B26378814C252734f556A; // Aster
+  address CDL = 0x84575b87395c970F1F48E87d87a8dB36Ed653716; // CDL
 
   MoolahVault impl = MoolahVault(0xA1f832c7C7ECf91A53b4ff36E0ABdb5133C15982);
-  string name = "Aster Vault";
-  string symbol = "Aster";
+  string name = "CDL Vault";
+  string symbol = "CDL";
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -24,7 +24,7 @@ contract MoolahVaultDeploy is Script {
     // Deploy Moolah proxy
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, asset, name, symbol)
+      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, CDL, name, symbol)
     );
     console.log("MoolahVault proxy: ", address(proxy));
     vm.stopBroadcast();
