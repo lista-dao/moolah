@@ -102,18 +102,18 @@ contract CreateMarketDeploy is Script {
 
     MarketParams[] memory params = new MarketParams[](2);
     params[0] = MarketParams({
-      loanToken: USD1,
-      collateralToken: ptUSDe5FEB2026,
-      oracle: ptUSDe5FEB2026USD1Oracle,
-      irm: irm,
-      lltv: lltv965
+      loanToken: Take,
+      collateralToken: BTCB,
+      oracle: multiOracle,
+      irm: alphaIrm,
+      lltv: lltv50
     });
     params[1] = MarketParams({
-      loanToken: USDT,
-      collateralToken: ptUSDe5FEB2026,
-      oracle: ptUSDe5FEB2026USDTOracle,
-      irm: irm,
-      lltv: lltv965
+      loanToken: Take,
+      collateralToken: USDT,
+      oracle: multiOracle,
+      irm: alphaIrm,
+      lltv: lltv50
     });
 
     // create market
