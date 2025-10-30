@@ -40,10 +40,7 @@ contract StableSwapLPCollateral is ERC20Upgradeable, UUPSUpgradeable, AccessCont
   ) external initializer {
     require(_admin != address(0) && _minter != address(0), "Zero address");
 
-    string memory name = string.concat(_name, " - Collateral");
-    string memory symbol = string.concat(_symbol, "-C");
-
-    __ERC20_init(name, symbol);
+    __ERC20_init(_name, _symbol);
     __AccessControl_init();
 
     _grantRole(DEFAULT_ADMIN_ROLE, _admin);
