@@ -388,6 +388,21 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     return IMoolah(MOOLAH).liquidate(params, borrower, seizedAssets, 0, abi.encode(callback));
   }
 
+  /// @dev redeems smart collateral LP tokens.
+  /// @param smartProvider The address of the smart collateral provider.
+  /// @param lpAmount The amount of LP collateral tokens to redeem.
+  /// @param minToken0Amt The minimum amount of token0 to receive.
+  /// @param minToken1Amt The minimum amount of token1 to receive.
+  /// @return The amount of token0 and token1 redeemed.
+  function redeemSmartCollateral(
+    address smartProvider,
+    uint256 lpAmount,
+    uint256 minToken0Amt,
+    uint256 minToken1Amt
+  ) external onlyRole(BOT) returns (uint256, uint256) {
+    return ISmartProvider(smartProvider).redeemLpCollateral(lpAmount, minToken0Amt, minToken1Amt);
+  }
+
   /// @dev the function will be called by the Moolah contract when liquidate.
   /// @param repaidAssets The amount of assets repaid.
   /// @param data The callback data.
