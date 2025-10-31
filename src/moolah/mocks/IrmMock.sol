@@ -23,3 +23,15 @@ contract IrmMock is IIrm {
     return borrowRateView(marketParams, market);
   }
 }
+
+contract IrmMockZero is IIrm {
+  using MathLib for uint128;
+
+  function borrowRateView(MarketParams memory, Market memory) public pure returns (uint256) {
+    return 0;
+  }
+
+  function borrowRate(MarketParams memory marketParams, Market memory market) external pure returns (uint256) {
+    return borrowRateView(marketParams, market);
+  }
+}
