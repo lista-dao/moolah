@@ -27,6 +27,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   mapping(address => bool) public tokenWhitelist;
   mapping(bytes32 => bool) public marketWhitelist;
   mapping(address => bool) public pairWhitelist;
+  mapping(address => bool) public smartProviders;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // manager role
@@ -35,6 +36,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   event TokenWhitelistChanged(address indexed token, bool added);
   event MarketWhitelistChanged(bytes32 id, bool added);
   event PairWhitelistChanged(address pair, bool added);
+  event SmartProvidersChanged(address provider, bool added);
   event SellToken(address pair, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin);
   event SmartLiquidation(
     bytes32 indexed id,
@@ -106,6 +108,17 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     for (uint256 i = 0; i < ids.length; i++) {
       bytes32 id = ids[i];
       _setMarketWhitelist(id, status);
+    }
+  }
+
+  /// @dev sets the smart collateral providers.
+  /// @param providers The array of smart collateral providers.
+  /// @param status The status of the providers.
+  function batchSetSmartProviders(address[] calldata providers, bool status) external onlyRole(MANAGER) {
+    for (uint256 i = 0; i < providers.length; i++) {
+      address provider = providers[i];
+      smartProviders[provider] = status;
+      emit SmartProvidersChanged(provider, status);
     }
   }
 
@@ -295,6 +308,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     uint256 repaidShares,
     bytes memory payload
   ) external onlyRole(BOT) returns (uint256, uint256) {
+    require(smartProviders[smartProvider], NotWhitelisted());
     address lpToken = ISmartProvider(smartProvider).dexLP();
     require(marketWhitelist[id], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
@@ -361,6 +375,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     bytes calldata swapToken1Data,
     bytes memory payload
   ) external onlyRole(BOT) returns (uint256, uint256) {
+    require(smartProviders[smartProvider], NotWhitelisted());
     require(marketWhitelist[id], NotWhitelisted());
     require(pairWhitelist[token0Pair], NotWhitelisted());
     require(pairWhitelist[token1Pair], NotWhitelisted());
@@ -400,6 +415,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     uint256 minToken0Amt,
     uint256 minToken1Amt
   ) external onlyRole(BOT) returns (uint256, uint256) {
+    require(smartProviders[smartProvider], NotWhitelisted());
     return ISmartProvider(smartProvider).redeemLpCollateral(lpAmount, minToken0Amt, minToken1Amt);
   }
 
