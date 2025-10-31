@@ -622,7 +622,7 @@ contract LendingBroker is
   ) internal {
     uint256 len = sortedFixedPositions.length;
     for (uint256 i = 0; i < len; i++) {
-      if (principalToDeduct == 0) break;
+      if (principalToDeduct == 0 && interestToDeduct == 0) break;
       FixedLoanPosition memory p = sortedFixedPositions[i];
       // call BrokerMath to process deduction one by one
       // will return leftover interest/principal to deduct and the updated position
