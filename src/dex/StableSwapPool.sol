@@ -36,7 +36,7 @@ contract StableSwapPool is
   uint256 public constant MIN_BNB_GAS = 2300;
   uint256 public constant MAX_BNB_GAS = 23000;
 
-  uint256 public constant ADMIN_ACTIONS_DELAY = 3 days;
+  uint256 public constant ADMIN_ACTIONS_DELAY = 1 days;
   uint256 public constant MIN_RAMP_TIME = 1 days;
   uint256 public constant A_PRECISION = 100;
 
