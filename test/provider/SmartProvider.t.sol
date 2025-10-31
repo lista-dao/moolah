@@ -393,9 +393,14 @@ contract SmartProviderTest is Test {
 
     vm.stopPrank();
 
-    vm.prank(manager);
+    vm.startPrank(manager);
     moolah.addProvider(marketParams.id(), address(smartProvider));
+    address[] memory providers = new address[](1);
+    providers[0] = address(smartProvider);
+    liquidator.batchSetSmartProviders(providers, true);
     assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
+    assertTrue(liquidator.smartProviders(address(smartProvider)));
+    vm.stopPrank();
 
     uint256 usdtBefore = IERC20(USDT).balanceOf(address(liquidator));
     vm.startPrank(bot);
@@ -506,6 +511,9 @@ contract SmartProviderTest is Test {
     vm.startPrank(manager);
     liquidator.setPairWhitelist(token0Pair, true);
     liquidator.setPairWhitelist(token1Pair, true);
+    address[] memory providers = new address[](1);
+    providers[0] = address(smartProvider);
+    liquidator.batchSetSmartProviders(providers, true);
     vm.stopPrank();
     bytes memory swapToken0Data = abi.encodeWithSelector(
       MockOneInch.swap.selector,
@@ -583,12 +591,28 @@ contract SmartProviderTest is Test {
     assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
 
     uint256 usdtBefore = IERC20(USDT).balanceOf(address(liquidator));
-    vm.startPrank(bot);
+
     // step 1: liquidate
+    vm.startPrank(bot);
     liquidator.liquidate(Id.unwrap(marketParams.id()), user2, user2Collateral, 0);
     uint256 _repaidAssets = usdtBefore - IERC20(USDT).balanceOf(address(liquidator));
 
     // step 2: redeem token0 and token1
+    vm.expectRevert("NotWhitelisted()");
+    liquidator.redeemSmartCollateral(
+      address(smartProvider),
+      user2Collateral, // lpAmount
+      minAmount0,
+      minAmount1
+    );
+    vm.stopPrank();
+    address[] memory providers = new address[](1);
+    providers[0] = address(smartProvider);
+    vm.prank(manager);
+    liquidator.batchSetSmartProviders(providers, true);
+    assertTrue(liquidator.smartProviders(address(smartProvider)));
+
+    vm.prank(bot);
     liquidator.redeemSmartCollateral(
       address(smartProvider),
       user2Collateral, // lpAmount
