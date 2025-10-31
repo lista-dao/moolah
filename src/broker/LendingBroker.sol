@@ -227,7 +227,7 @@ contract LendingBroker is
     // validate positions
     _validatePositions(user);
     // emit event
-    emit FixedLoanPositionCreated(user, amount, start, end, term.apr, termId);
+    emit FixedLoanPositionCreated(user, fixedPosUuid, amount, start, end, term.apr, termId);
   }
 
   /**
@@ -365,6 +365,7 @@ contract LendingBroker is
     // emit event
     emit RepaidFixedLoanPosition(
       onBehalf,
+      posId,
       position.principal,
       position.start,
       position.end,
@@ -434,7 +435,7 @@ contract LendingBroker is
     // validate positions
     _validatePositions(user);
 
-    emit FixedLoanPositionCreated(user, amount, start, end, term.apr, termId);
+    emit FixedLoanPositionCreated(user, fixedPosUuid, amount, start, end, term.apr, termId);
   }
 
   ///////////////////////////////////////
@@ -670,7 +671,7 @@ contract LendingBroker is
   function peek(address token, address user) public view override marketIdSet returns (uint256 price) {
     require(user != address(0), "broker/zero-address");
     require(token == COLLATERAL_TOKEN || token == LOAN_TOKEN, "broker/unsupported-token");
-    price = BrokerMath.peek(token, user, address(MOOLAH), rateCalculator, address(ORACLE), liquidationContext);
+    price = BrokerMath.peek(token, user, address(MOOLAH), rateCalculator, address(ORACLE));
   }
 
   /**
@@ -849,6 +850,7 @@ contract LendingBroker is
         // remove position
         positions[i] = positions[positions.length - 1];
         positions.pop();
+        emit FixedLoanPositionRemoved(user, posId);
         return;
       }
     }

@@ -73,6 +73,7 @@ interface IBroker is IBrokerBase {
   event DynamicLoanPositionRepaid(address indexed user, uint256 repaid, uint256 principalLeft);
   event FixedLoanPositionCreated(
     address indexed user,
+    uint256 posId,
     uint256 principal,
     uint256 start,
     uint256 end,
@@ -81,6 +82,7 @@ interface IBroker is IBrokerBase {
   );
   event RepaidFixedLoanPosition(
     address indexed user,
+    uint256 posId,
     uint256 principal,
     uint256 start,
     uint256 end,
@@ -88,6 +90,7 @@ interface IBroker is IBrokerBase {
     uint256 principalRepaid,
     bool fullyRepaid
   );
+  event FixedLoanPositionRemoved(address indexed user, uint256 posId);
   event MaxFixedLoanPositionsUpdated(uint256 oldMax, uint256 newMax);
   event FixedTermAndRateUpdated(uint256 termId, uint256 duration, uint256 apr);
   event Liquidated(address indexed user, uint256 principalToDeduct);

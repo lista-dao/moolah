@@ -30,8 +30,7 @@ library BrokerMath {
     address user,
     address moolah,
     address rateCalculator,
-    address oracle,
-    LiquidationContext memory liqCtx
+    address oracle
   ) public view returns (uint256 price) {
     IBroker broker = IBroker(address(this));
     address loanToken = broker.LOAN_TOKEN();

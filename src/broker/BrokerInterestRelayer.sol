@@ -15,7 +15,9 @@ import { IBrokerInterestRelayer } from "./interfaces/IBrokerInterestRelayer.sol"
 
 /// @title Broker Interest Relayer
 /// @author Lista DAO
-/// @notice This contract allows users to borrow token(LisUSD in general) by depositing collateral to moolah
+/// @notice This contract act as a relayer between LendingBrokers and Moolah vaults
+///         Brokers can transfer interest to this contract,
+///         and this contract will supply to the Moolah vault when the balance exceeds Moolah's minLoan requirement
 contract BrokerInterestRelayer is
   UUPSUpgradeable,
   AccessControlEnumerableUpgradeable,
