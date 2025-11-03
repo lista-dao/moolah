@@ -49,10 +49,8 @@ struct Signature {
 /// @dev This interface is used for factorizing IMoolahStaticTyping and IMoolah.
 /// @dev Consider using the IMoolah interface instead of this one.
 interface IMoolahBase {
-  /// @notice The EIP-712 domain separator.
-  /// @dev Warning: Every EIP-712 signed message based on this domain separator can be reused on chains sharing the
-  /// same chain id and on forks because the domain separator would be the same.
-  function DOMAIN_SEPARATOR() external view returns (bytes32);
+  /// @notice The EIP-712 domain separator used in the encoding of the signatures for `setAuthorizationWithSig`.
+  function domainSeparator() external view returns (bytes32);
 
   /// @notice The fee recipient of all markets.
   /// @dev The recipient receives the fees of a given market through a supply position on that market.

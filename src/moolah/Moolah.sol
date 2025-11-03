@@ -23,7 +23,6 @@ import { MathLib, WAD } from "./libraries/MathLib.sol";
 import { SharesMathLib } from "./libraries/SharesMathLib.sol";
 import { MarketParamsLib } from "./libraries/MarketParamsLib.sol";
 import { SafeTransferLib } from "./libraries/SafeTransferLib.sol";
-import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import { IProvider } from "../provider/interfaces/IProvider.sol";
 
 /// @title Moolah
@@ -43,11 +42,6 @@ contract Moolah is
   using SafeTransferLib for IERC20;
   using MarketParamsLib for MarketParams;
   using EnumerableSet for EnumerableSet.AddressSet;
-
-  /* IMMUTABLES */
-
-  /// @inheritdoc IMoolahBase
-  bytes32 public immutable DOMAIN_SEPARATOR;
 
   /* STORAGE */
 
@@ -89,7 +83,6 @@ contract Moolah is
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor() {
     _disableInitializers();
-    DOMAIN_SEPARATOR = keccak256(abi.encode(DOMAIN_TYPEHASH, block.chainid, address(this)));
   }
 
   /// @param admin The new admin of the contract.
@@ -552,7 +545,7 @@ contract Moolah is
     // `repaidAssets` may be greater than `totalBorrowAssets` by 1.
     emit EventsLib.Liquidate(
       id,
-      msg.sender,
+      msg.sender, // payable
       borrower,
       repaidAssets,
       repaidShares,
@@ -612,7 +605,7 @@ contract Moolah is
     require(authorization.nonce == nonce[authorization.authorizer]++, ErrorsLib.INVALID_NONCE);
 
     bytes32 hashStruct = keccak256(abi.encode(AUTHORIZATION_TYPEHASH, authorization));
-    bytes32 digest = keccak256(bytes.concat("\x19\x01", DOMAIN_SEPARATOR, hashStruct));
+    bytes32 digest = keccak256(bytes.concat("\x19\x01", _buildDomainSeparator(), hashStruct));
     address signatory = ecrecover(digest, signature.v, signature.r, signature.s);
 
     require(signatory != address(0) && authorization.authorizer == signatory, ErrorsLib.INVALID_SIGNATURE);
@@ -671,6 +664,15 @@ contract Moolah is
 
     // Safe "unchecked" cast.
     market[id].lastUpdate = uint128(block.timestamp);
+  }
+
+  function _buildDomainSeparator() private view returns (bytes32) {
+    return keccak256(abi.encode(DOMAIN_TYPEHASH, block.chainid, address(this)));
+  }
+
+  /// @dev Returns the domain separator for the current chain.
+  function domainSeparator() external view returns (bytes32) {
+    return _buildDomainSeparator();
   }
 
   /* HEALTH CHECK */

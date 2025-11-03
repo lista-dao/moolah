@@ -1,0 +1,59 @@
+pragma solidity 0.8.28;
+
+address constant MOOLAH = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
+
+address constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+
+address constant SLISBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B;
+
+address constant BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
+
+address constant SOLVBTC = 0x4aae823a6a0b376De6A78e74eCC5b079d38cBCf7;
+
+address constant SS_FACTORY = 0xDE9c8E1536989d8c3817afDabC37C0fb44cB49b4;
+
+address constant SS_INFO = 0x73D2623C8497421B55234e6B25fB744625557a1A;
+
+address constant RESILIENT_ORACLE = 0xf3afD82A4071f272F403dC176916141f44E6c750;
+
+// slisbnb <> bnb ss pool
+address constant DEX_BNB_SLISBNB = 0x3DcEA6AFBA8af84b25F1f8947058AF1ac4c06131;
+
+// slisBnb <> bnb lp collateral
+address constant COLLATERAL_SLISBNB_BNB = 0x719f6445cdAC08B84611D0F19d733F57214bcfee;
+
+// btcb <> solvbtc ss pool
+address constant DEX_BTCB_SOLVBTC = 0x45409865870f0CBC71c01CC00fF8c0b2DE3EB7D9;
+
+// solvBTC <> btcb lp collateral
+address constant COLLATERAL_SOLVBTC_BTCB = 0x6f4d7532A402D76F552E1F047Ff7e23bFe1A9f03;
+
+// Bnb/slisBnb SmartProvider
+address constant SMART_PROVIDER_BNB_SLISBNB = 0xC3be83DE4b19aFC4F6021Ea5011B75a3542024dE;
+
+// BTCB/solvBTC SmartProvider
+address constant SMART_PROVIDER_BTCB_SOLVBTC = 0xA5F53ca56d87d7d4fEC508665D23f29bfb2749DB;
+
+// ADMIN
+address constant ADMIN_ADDR = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253;
+
+// MANAGER
+address constant MANAGER_ADDR = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
+
+// PAUSER
+address constant PAUSER_ADDR = 0xEEfebb1546d88EA0909435DF6f615084DD3c5Bd8;
+
+// Lista USD1 vault
+address constant USD1_VAULT = 0xfa27f172e0b6ebcEF9c51ABf817E2cb142FbE627;
+
+// Lista BNB vault
+address constant BNB_VAULT = 0x57134a64B7cD9F9eb72F8255A671F5Bf2fe3E2d0;
+
+// USD1 token
+address constant USD1 = 0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d;
+
+// WBNB token
+address constant WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
+
+// IRM
+address constant IRM = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;

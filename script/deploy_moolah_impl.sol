@@ -8,7 +8,7 @@ import { Moolah } from "moolah/Moolah.sol";
 
 contract MoolahImplDeploy is Script {
   function run() public {
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY_TESTNET");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
