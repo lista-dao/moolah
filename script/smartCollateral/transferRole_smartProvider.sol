@@ -21,11 +21,11 @@ contract TransferRole is Script {
     SmartProvider provider1 = SmartProvider(payable(SMART_PROVIDER_BTCB_SOLVBTC));
     SmartProvider provider2 = SmartProvider(payable(SMART_PROVIDER_BNB_SLISBNB));
 
-    provider1.grantRole(DEFAULT_ADMIN_ROLE, ADMIN);
+    provider1.grantRole(DEFAULT_ADMIN_ROLE, ADMIN_ADDR);
     provider1.revokeRole(DEFAULT_ADMIN_ROLE, deployer);
     console.log("Transferred role for SMART_PROVIDER_BTCB_SOLVBTC: ", SMART_PROVIDER_BTCB_SOLVBTC);
 
-    provider2.grantRole(DEFAULT_ADMIN_ROLE, ADMIN);
+    provider2.grantRole(DEFAULT_ADMIN_ROLE, ADMIN_ADDR);
     provider2.revokeRole(DEFAULT_ADMIN_ROLE, deployer);
     console.log("Transferred role for SMART_PROVIDER_BNB_SLISBNB: ", SMART_PROVIDER_BNB_SLISBNB);
 
