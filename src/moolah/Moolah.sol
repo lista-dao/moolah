@@ -70,6 +70,9 @@ contract Moolah is
   /// if whitelist is set, only whitelisted addresses can supply, supply collateral, borrow
   mapping(Id => EnumerableSet.AddressSet) private whiteList;
 
+  /// @inheritdoc IMoolahBase
+  mapping(address => bool) public flashLoanTokenBlacklist;
+
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant PAUSER = keccak256("PAUSER"); // pauser role
   bytes32 public constant OPERATOR = keccak256("OPERATOR"); // operator role
@@ -229,6 +232,14 @@ contract Moolah is
     delete providers[id][token];
 
     emit EventsLib.RemoveProvider(id, token, provider);
+  }
+
+  function setFlashLoanTokenBlacklist(address token, bool isBlacklisted) external onlyRole(MANAGER) {
+    require(flashLoanTokenBlacklist[token] != isBlacklisted, ErrorsLib.ALREADY_SET);
+
+    flashLoanTokenBlacklist[token] = isBlacklisted;
+
+    emit EventsLib.SetFlashLoanTokenBlacklist(token, isBlacklisted);
   }
 
   /* MARKET CREATION */
@@ -562,6 +573,7 @@ contract Moolah is
 
   /// @inheritdoc IMoolahBase
   function flashLoan(address token, uint256 assets, bytes calldata data) external whenNotPaused {
+    require(!flashLoanTokenBlacklist[token], ErrorsLib.TOKEN_BLACKLISTED);
     require(assets != 0, ErrorsLib.ZERO_ASSETS);
 
     emit EventsLib.FlashLoan(msg.sender, token, assets);

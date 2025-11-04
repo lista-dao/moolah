@@ -324,6 +324,12 @@ interface IMoolahBase {
 
   /// @notice Remove `account` from the whitelist of the market `id`.
   function removeWhiteList(Id id, address account) external;
+
+  /// @notice Returns whether `token` is blacklisted for flash loans.
+  function flashLoanTokenBlacklist(address token) external view returns (bool);
+
+  /// @notice Sets the flash loan token blacklist status.
+  function setFlashLoanTokenBlacklist(address token, bool isBlacklisted) external;
 }
 
 /// @dev This interface is inherited by Moolah so that function signatures are checked by the compiler.

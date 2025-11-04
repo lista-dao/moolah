@@ -886,4 +886,15 @@ contract SmartProviderTest is Test {
     assertGe(token0.balanceOf(user2), amounts[0] + amount0Before);
     assertGe(user2.balance, amounts[1] + amount1Before);
   }
+
+  function test_flashloan_token_blacklist() public {
+    vm.startPrank(manager);
+    moolah.setFlashLoanTokenBlacklist(address(lpCollateral), true);
+    assertTrue(moolah.flashLoanTokenBlacklist(address(lpCollateral)));
+    vm.stopPrank();
+
+    vm.prank(user2);
+    vm.expectRevert("token blacklisted");
+    moolah.flashLoan(address(lpCollateral), 100 ether, "");
+  }
 }

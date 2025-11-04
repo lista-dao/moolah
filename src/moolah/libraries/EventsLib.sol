@@ -177,4 +177,9 @@ library EventsLib {
   /// @param token The token that was removed.
   /// @param provider The provider that was removed.
   event RemoveProvider(Id id, address token, address provider);
+
+  /// @notice Emitted when setting flash loan blacklists.
+  /// @param token The token.
+  /// @param isBlacklisted The new blacklist status.
+  event SetFlashLoanTokenBlacklist(address indexed token, bool isBlacklisted);
 }
