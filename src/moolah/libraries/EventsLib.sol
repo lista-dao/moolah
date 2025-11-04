@@ -181,4 +181,9 @@ library EventsLib {
   /// @notice Emitted when setting the default market fee.
   /// @param fee The new default market fee.
   event SetDefaultMarketFee(uint256 fee);
+
+  /// @notice Emitted when setting flash loan blacklists.
+  /// @param token The token.
+  /// @param isBlacklisted The new blacklist status.
+  event SetFlashLoanTokenBlacklist(address indexed token, bool isBlacklisted);
 }

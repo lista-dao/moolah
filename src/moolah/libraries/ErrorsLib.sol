@@ -91,4 +91,6 @@ library ErrorsLib {
   string internal constant REMAIN_SUPPLY_TOO_LOW = "remain supply too low";
 
   string internal constant REMAIN_BORROW_TOO_LOW = "remain borrow too low";
+
+  string internal constant FLASHLOAN_BLACKLISTED = "flashloan blacklisted";
 }

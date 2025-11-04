@@ -21,11 +21,11 @@ contract TransferRole is Script {
     StableSwapLPCollateral collateral1 = StableSwapLPCollateral(COLLATERAL_SOLVBTC_BTCB);
     StableSwapLPCollateral collateral2 = StableSwapLPCollateral(COLLATERAL_SLISBNB_BNB);
 
-    collateral1.grantRole(DEFAULT_ADMIN_ROLE, ADMIN);
+    collateral1.grantRole(DEFAULT_ADMIN_ROLE, ADMIN_ADDR);
     collateral1.revokeRole(DEFAULT_ADMIN_ROLE, deployer);
     console.log("Transferred role for COLLATERAL_SOLVBTC_BTCB: ", COLLATERAL_SOLVBTC_BTCB);
 
-    collateral2.grantRole(DEFAULT_ADMIN_ROLE, ADMIN);
+    collateral2.grantRole(DEFAULT_ADMIN_ROLE, ADMIN_ADDR);
     collateral2.revokeRole(DEFAULT_ADMIN_ROLE, deployer);
     console.log("Transferred role for COLLATERAL_SLISBNB_BNB: ", COLLATERAL_SLISBNB_BNB);
 

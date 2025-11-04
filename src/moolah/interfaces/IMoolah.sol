@@ -328,8 +328,14 @@ interface IMoolahBase {
   /// @notice Returns the default market fee.
   function defaultMarketFee() external view returns (uint256);
 
+  /// @notice Returns whether `token` is blacklisted for flash loans.
+  function flashLoanTokenBlacklist(address token) external view returns (bool);
+
   /// @notice Set the default market fee for new markets.
   function setDefaultMarketFee(uint256 newFee) external;
+
+  /// @notice Sets the flash loan token blacklist status.
+  function setFlashLoanTokenBlacklist(address token, bool isBlacklisted) external;
 }
 
 /// @dev This interface is inherited by Moolah so that function signatures are checked by the compiler.
