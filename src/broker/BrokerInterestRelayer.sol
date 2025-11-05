@@ -46,6 +46,10 @@ contract BrokerInterestRelayer is
     _;
   }
 
+  constructor() {
+    _disableInitializers();
+  }
+
   /**
    * @dev Initialize the LendingBroker contract
    * @param _admin The address of the admin
