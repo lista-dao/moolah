@@ -519,7 +519,7 @@ contract LendingBrokerTest is Test {
     uint256 convertAmount = 400 ether;
     uint256 expectedInterestShare = outstandingInterest == 0
       ? 0
-      : BrokerMath.mulDivFlooring(outstandingInterest, convertAmount, principalBefore);
+      : BrokerMath.mulDivCeiling(outstandingInterest, convertAmount, principalBefore);
     uint256 expectedNormalizedDelta = BrokerMath.normalizeBorrowAmount(
       convertAmount + expectedInterestShare,
       rate,

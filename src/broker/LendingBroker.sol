@@ -405,7 +405,7 @@ contract LendingBroker is
     }
 
     position.normalizedDebt = position.normalizedDebt.zeroFloorSub(
-      BrokerMath.normalizeBorrowAmount(amount, rate, false)
+      BrokerMath.normalizeBorrowAmount(amount + interestToRepay, rate, false)
     );
     position.principal -= amount;
 
@@ -422,7 +422,7 @@ contract LendingBroker is
     fixedLoanPositions[user].push(
       FixedLoanPosition({
         posId: fixedPosUuid,
-        principal: amount,
+        principal: amount + interestToRepay,
         apr: term.apr,
         start: start,
         end: end,
