@@ -7,7 +7,6 @@ import { UtilsLib } from "../../moolah/libraries/UtilsLib.sol";
 import { MathLib, WAD } from "../../moolah/libraries/MathLib.sol";
 import { SharesMathLib } from "../../moolah/libraries/SharesMathLib.sol";
 import { Id, IMoolah, MarketParams, Market, Position } from "../../moolah/interfaces/IMoolah.sol";
-import { ORACLE_PRICE_SCALE, LIQUIDATION_CURSOR, MAX_LIQUIDATION_INCENTIVE_FACTOR } from "../../moolah/libraries/ConstantsLib.sol";
 import { IBroker, FixedLoanPosition, DynamicLoanPosition, LiquidationContext } from "../interfaces/IBroker.sol";
 import { IOracle } from "../../moolah/interfaces/IOracle.sol";
 import { IRateCalculator } from "../interfaces/IRateCalculator.sol";
@@ -565,38 +564,5 @@ library BrokerMath {
       mstore(filtered, count)
     }
     return filtered;
-  }
-
-  /// @dev Preview the liquidation repayment amounts
-  /// @dev cloned from Moolah.sol
-  function previewLiquidationRepayment(
-    MarketParams memory marketParams,
-    Market memory market,
-    uint256 seizedAssets,
-    uint256 repaidShares,
-    uint256 collateralPrice
-  ) public pure returns (uint256, uint256, uint256) {
-    // The liquidation incentive factor is min(maxLiquidationIncentiveFactor, 1/(1 - cursor*(1 - lltv))).
-    uint256 liquidationIncentiveFactor = UtilsLib.min(
-      MAX_LIQUIDATION_INCENTIVE_FACTOR,
-      WAD.wDivDown(WAD - LIQUIDATION_CURSOR.wMulDown(WAD - marketParams.lltv))
-    );
-
-    if (seizedAssets > 0) {
-      uint256 seizedAssetsQuoted = seizedAssets.mulDivUp(collateralPrice, ORACLE_PRICE_SCALE);
-
-      repaidShares = seizedAssetsQuoted.wDivUp(liquidationIncentiveFactor).toSharesUp(
-        market.totalBorrowAssets,
-        market.totalBorrowShares
-      );
-    } else {
-      seizedAssets = repaidShares
-        .toAssetsDown(market.totalBorrowAssets, market.totalBorrowShares)
-        .wMulDown(liquidationIncentiveFactor)
-        .mulDivDown(ORACLE_PRICE_SCALE, collateralPrice);
-    }
-    uint256 repaidAssets = repaidShares.toAssetsUp(market.totalBorrowAssets, market.totalBorrowShares);
-
-    return (seizedAssets, repaidShares, repaidAssets);
   }
 }

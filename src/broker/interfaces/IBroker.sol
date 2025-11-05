@@ -28,7 +28,10 @@ struct DynamicLoanPosition {
 struct LiquidationContext {
   address liquidator; // the address of the liquidator(for onMoolahLiquidate callback)
   bool active; // indecates if liquidation is in progress
+  uint256 interestToBroker; // interest amount to broker calculated during liquidation
+  uint256 debtAtMoolah; // debt at Moolah before liquidation
   uint256 preCollateral; // pre-balance of collateral token before liquidation
+  address borrower; // the borrower being liquidated
 }
 
 /// @dev Broker Base interface
@@ -93,7 +96,7 @@ interface IBroker is IBrokerBase {
   event FixedLoanPositionRemoved(address indexed user, uint256 posId);
   event MaxFixedLoanPositionsUpdated(uint256 oldMax, uint256 newMax);
   event FixedTermAndRateUpdated(uint256 termId, uint256 duration, uint256 apr);
-  event Liquidated(address indexed user, uint256 principalToDeduct);
+  event Liquidated(address indexed user, uint256 principalCleared, uint256 interestCleared);
   event MarketIdSet(Id marketId);
   event BorrowPaused(bool paused);
   event AddedLiquidationWhitelist(address indexed account);

@@ -26,6 +26,8 @@ import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
 import { MathLib, WAD } from "moolah/libraries/MathLib.sol";
 import { UtilsLib } from "moolah/libraries/UtilsLib.sol";
 import { IMoolahLiquidateCallback } from "../../src/moolah/interfaces/IMoolahCallbacks.sol";
+import { MockLiquidator } from "./MockLiquidator.sol";
+import { ORACLE_PRICE_SCALE, LIQUIDATION_CURSOR, MAX_LIQUIDATION_INCENTIVE_FACTOR } from "moolah/libraries/ConstantsLib.sol";
 
 contract LendingBrokerTest is Test {
   using MarketParamsLib for MarketParams;
@@ -50,7 +52,7 @@ contract LendingBrokerTest is Test {
   IrmMockZero public irm; // unused in fork path
   address supplier = address(0x201);
   address borrower = address(0x202);
-  LiquidationCallbackMock public liquidator;
+  MockLiquidator public liquidator;
 
   uint256 constant LTV = 0.8e18;
   uint256 constant SUPPLY_LIQ = 1_000_000 ether;
@@ -176,7 +178,12 @@ contract LendingBrokerTest is Test {
     LISUSD.approve(address(broker), type(uint256).max);
 
     // deploy liquidator contract
-    liquidator = new LiquidationCallbackMock();
+    MockLiquidator mockLiqImpl = new MockLiquidator(address(moolah));
+    ERC1967Proxy mockLiqProxy = new ERC1967Proxy(
+      address(mockLiqImpl),
+      abi.encodeWithSelector(MockLiquidator.initialize.selector, ADMIN, MANAGER, BOT)
+    );
+    liquidator = MockLiquidator(address(mockLiqProxy));
 
     // whitelist lendingbroker as liquidator in moolah
     vm.prank(MANAGER);
@@ -189,6 +196,10 @@ contract LendingBrokerTest is Test {
     // add broker into relayer
     vm.prank(MANAGER);
     relayer.addBroker(address(broker));
+
+    // add brokers mapping in liquidator
+    vm.prank(MANAGER);
+    liquidator.setBroker(Id.unwrap(id), address(broker), true);
   }
 
   function _snapshot(address user) internal view returns (Market memory market, Position memory pos) {
@@ -904,23 +915,20 @@ contract LendingBrokerTest is Test {
 
     uint256 userRepayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, percentageToLiquidate, 100 * 1e8);
     uint256 userCollateralBefore = posBefore.collateral;
-
-    console.log("[Before] user borrow shares before: ", posBefore.borrowShares);
-    console.log("[Before] user repay shares: ", userRepayShares);
-    console.log("[Before] user collateral before: ", userCollateralBefore);
-
-    uint256 brokerCollateralBalBefore = BTCB.balanceOf(address(broker));
-
-    (uint256 seizedAssets, uint256 repaidShares, uint256 repaidAssets) = BrokerMath.previewLiquidationRepayment(
+    uint256 seizedAssets = _previewLiquidationRepayment(
       marketParams,
       moolah.market(marketParams.id()),
       0,
       userRepayShares,
       moolah._getPrice(marketParams, borrower)
     );
-    console.log("[Preview] seized assets: ", seizedAssets);
-    console.log("[Preview] repaid shares: ", repaidShares);
-    console.log("[Preview] repaid assets: ", repaidAssets);
+
+    console.log("[Preview] collateral to be seized: ", seizedAssets);
+    console.log("[Before] user borrow shares before: ", posBefore.borrowShares);
+    console.log("[Before] user repay shares: ", userRepayShares);
+    console.log("[Before] user collateral before: ", userCollateralBefore);
+
+    uint256 brokerCollateralBalBefore = BTCB.balanceOf(address(broker));
 
     uint256 interestBefore = _totalInterestAtBroker(borrower);
     console.log("[Before] interest at broker: ", interestBefore);
@@ -943,21 +951,18 @@ contract LendingBrokerTest is Test {
     console.log("[Before] liquidator loanToken balance: ", LISUSD.balanceOf(address(liquidator)));
     console.log("[Before] liquidator collateral balance: ", BTCB.balanceOf(address(liquidator)));
 
-    vm.startPrank(address(liquidator));
-    // as liquidator don't know how much to approve, just approve max
-    LISUSD.approve(address(broker), type(uint256).max);
+    vm.startPrank(BOT);
     if (expectRevert) {
       // under rapid price dropping scenario
       // full repay share cause seized collateral > user collateral
       // OR seized collateral too larger
       vm.expectRevert();
     }
-    broker.liquidate(
-      marketParams,
+    liquidator.liquidate(
+      Id.unwrap(id),
       borrower,
       repayBySeizedCollateral ? seizedAssets : 0,
-      repayBySeizedCollateral ? 0 : repaidShares,
-      abi.encode("")
+      repayBySeizedCollateral ? 0 : userRepayShares
     );
     vm.stopPrank();
 
@@ -991,6 +996,37 @@ contract LendingBrokerTest is Test {
     console.log("[After] user borrow shares: ", userBorrowSharesAfter);
     console.log("[After] user collateral: ", userCollateralAfter);
     console.log("[After] user supply shares: ", userSupplySharesAfter);
+  }
+
+  function _previewLiquidationRepayment(
+    MarketParams memory marketParams,
+    Market memory market,
+    uint256 seizedAssets,
+    uint256 repaidShares,
+    uint256 collateralPrice
+  ) internal pure returns (uint256) {
+    // The liquidation incentive factor is min(maxLiquidationIncentiveFactor, 1/(1 - cursor*(1 - lltv))).
+    uint256 liquidationIncentiveFactor = UtilsLib.min(
+      MAX_LIQUIDATION_INCENTIVE_FACTOR,
+      WAD.wDivDown(WAD - LIQUIDATION_CURSOR.wMulDown(WAD - marketParams.lltv))
+    );
+
+    if (seizedAssets > 0) {
+      uint256 seizedAssetsQuoted = seizedAssets.mulDivUp(collateralPrice, ORACLE_PRICE_SCALE);
+
+      repaidShares = seizedAssetsQuoted.wDivUp(liquidationIncentiveFactor).toSharesUp(
+        market.totalBorrowAssets,
+        market.totalBorrowShares
+      );
+    } else {
+      seizedAssets = repaidShares
+        .toAssetsDown(market.totalBorrowAssets, market.totalBorrowShares)
+        .wMulDown(liquidationIncentiveFactor)
+        .mulDivDown(ORACLE_PRICE_SCALE, collateralPrice);
+    }
+    uint256 repaidAssets = repaidShares.toAssetsUp(market.totalBorrowAssets, market.totalBorrowShares);
+
+    return seizedAssets;
   }
 
   function test_provisioning_and_allocation() public {

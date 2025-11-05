@@ -538,7 +538,6 @@ contract Moolah is
     require(_checkLiquidationWhiteList(id, msg.sender), ErrorsLib.NOT_LIQUIDATION_WHITELIST);
     require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
     require(UtilsLib.exactlyOneZero(seizedAssets, repaidShares), ErrorsLib.INCONSISTENT_INPUT);
-
     _accrueInterest(marketParams, id);
 
     {
@@ -567,7 +566,6 @@ contract Moolah is
       }
     }
     uint256 repaidAssets = repaidShares.toAssetsUp(market[id].totalBorrowAssets, market[id].totalBorrowShares);
-
     position[id][borrower].borrowShares -= repaidShares.toUint128();
     market[id].totalBorrowShares -= repaidShares.toUint128();
     market[id].totalBorrowAssets = UtilsLib.zeroFloorSub(market[id].totalBorrowAssets, repaidAssets).toUint128();
