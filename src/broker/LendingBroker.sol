@@ -203,8 +203,6 @@ contract LendingBroker is
     require(amount > 0, "broker/amount-zero");
     address user = msg.sender;
     require(fixedLoanPositions[user].length < maxFixedLoanPositions, "broker/exceed-max-fixed-positions");
-    // borrow from moolah
-    _borrowFromMoolah(user, amount);
     // get term by Id
     FixedTermAndRate memory term = _getTermById(termId);
     // prepare position info
@@ -225,6 +223,8 @@ contract LendingBroker is
         principalRepaid: 0
       })
     );
+    // borrow from moolah
+    _borrowFromMoolah(user, amount);
     // transfer loan token to user
     IERC20(LOAN_TOKEN).safeTransfer(user, amount);
     // validate positions
