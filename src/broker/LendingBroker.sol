@@ -50,6 +50,9 @@ contract LendingBroker is
   IMoolah public immutable MOOLAH;
   address public immutable RELAYER;
   IOracle public immutable ORACLE;
+  uint256 public constant MAX_FIXED_TERM_APR = 31 * RATE_SCALE; // 30%
+  uint256 public constant MIN_FIXED_TERM_APR = 2 * RATE_SCALE; // 1%
+
   address public LOAN_TOKEN;
   address public COLLATERAL_TOKEN;
   Id public MARKET_ID;
@@ -934,13 +937,14 @@ contract LendingBroker is
 
   /**
    * @dev Add, update or remove a fixed term and rate for borrowing
+   * @notice updated by BOT role from time to time
    * @param term The fixed term and rate scheme
    * @param removeTerm True to remove the term, false to add or update
    */
-  function updateFixedTermAndRate(FixedTermAndRate calldata term, bool removeTerm) external onlyRole(MANAGER) {
+  function updateFixedTermAndRate(FixedTermAndRate calldata term, bool removeTerm) external onlyRole(BOT) {
     require(term.termId > 0, "broker/invalid-term-id");
     require(term.duration > 0, "broker/invalid-duration");
-    require(term.apr >= RATE_SCALE, "broker/invalid-apr");
+    require(term.apr >= MIN_FIXED_TERM_APR && term.apr <= MAX_FIXED_TERM_APR, "broker/invalid-apr");
     // update term if it exists
     for (uint256 i = 0; i < fixedTerms.length; i++) {
       // term found

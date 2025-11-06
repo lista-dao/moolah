@@ -277,10 +277,10 @@ contract LendingBrokerTest is Test {
     FixedTermAndRate memory term = FixedTermAndRate({
       termId: termId,
       duration: 30 days,
-      apr: RATE_SCALE + 30300 * 10 ** 14 // 10% APR
+      apr: RATE_SCALE * 2 + 30300 * 10 ** 14 // 10% APR
     });
 
-    vm.prank(MANAGER);
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term, false);
 
     vm.startPrank(borrower);
@@ -496,8 +496,8 @@ contract LendingBrokerTest is Test {
   // Dynamic → Fixed conversion
   // -----------------------------
   function test_convertDynamicToFixed_partialAmount() public {
-    FixedTermAndRate memory term = FixedTermAndRate({ termId: 51, duration: 45 days, apr: RATE_SCALE + 2 });
-    vm.prank(MANAGER);
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: 51, duration: 45 days, apr: RATE_SCALE * 3 });
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term, false);
 
     uint256 borrowAmt = 1_000 ether;
@@ -544,8 +544,8 @@ contract LendingBrokerTest is Test {
   }
 
   function test_convertDynamicToFixed_fullAmountClearsDynamic() public {
-    FixedTermAndRate memory term = FixedTermAndRate({ termId: 52, duration: 30 days, apr: RATE_SCALE + 1 });
-    vm.prank(MANAGER);
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: 52, duration: 30 days, apr: RATE_SCALE * 3 });
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term, false);
 
     uint256 borrowAmt = 750 ether;
@@ -591,11 +591,11 @@ contract LendingBrokerTest is Test {
     // Setup a fixed term product
     uint256 termId = 1;
     uint256 duration = 30 days;
-    uint256 apr = RATE_SCALE; // treat as 1x over the term -> zero interest growth component
+    uint256 apr = RATE_SCALE * 3; // treat as 1x over the term -> zero interest growth component
 
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr });
 
-    vm.prank(MANAGER);
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term, false);
 
     // Borrow fixed
@@ -656,9 +656,9 @@ contract LendingBrokerTest is Test {
     FixedTermAndRate memory term = FixedTermAndRate({
       termId: 21,
       duration: 45 days,
-      apr: RATE_SCALE + 5e24 // 5% APR
+      apr: RATE_SCALE * 2 + 5e24 // 5% APR
     });
-    vm.prank(MANAGER);
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term, false);
 
     uint256 fixedAmt = 300 ether;
@@ -729,9 +729,9 @@ contract LendingBrokerTest is Test {
     FixedTermAndRate memory term = FixedTermAndRate({
       termId: 22,
       duration: 30 days,
-      apr: RATE_SCALE + 3e24 // 3% APR
+      apr: RATE_SCALE * 2 + 3e24 // 3% APR
     });
-    vm.prank(MANAGER);
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term, false);
 
     uint256 fixedAmt = 350 ether;
@@ -796,8 +796,8 @@ contract LendingBrokerTest is Test {
 
   function test_fixedRepayOverpayDoesNotTouchDynamicPosition() public {
     uint256 termId = 77;
-    FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: 45 days, apr: RATE_SCALE });
-    vm.prank(MANAGER);
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: 45 days, apr: RATE_SCALE * 2 });
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term, false);
 
     uint256 dynamicBorrow = 10 ether;
@@ -813,9 +813,17 @@ contract LendingBrokerTest is Test {
     FixedLoanPosition[] memory fixedBefore = broker.userFixedPositions(borrower);
     assertEq(fixedBefore.length, 1, "expected one fixed position");
     uint256 posId = fixedBefore[0].posId;
-
+    uint256 interestRepaid = BrokerMath.getAccruedInterestForFixedPosition(fixedBefore[0]) -
+      fixedBefore[0].interestRepaid;
     uint256 borrowerBalanceBefore = LISUSD.balanceOf(borrower);
     uint256 overpayAmount = fixedBorrow + 10 ether;
+
+    uint256 penalty = BrokerMath.getPenaltyForFixedPosition(
+      fixedBefore[0],
+      (overpayAmount - interestRepaid) > fixedBefore[0].principal - fixedBefore[0].principalRepaid
+        ? fixedBefore[0].principal - fixedBefore[0].principalRepaid
+        : (overpayAmount - interestRepaid)
+    );
 
     vm.prank(borrower);
     broker.repay(overpayAmount, posId, borrower);
@@ -838,7 +846,7 @@ contract LendingBrokerTest is Test {
     assertApproxEqAbs(borrowAssetsAfter, dynamicBorrow, 1, "unexpected borrow assets after overpay");
 
     uint256 borrowerBalanceAfter = LISUSD.balanceOf(borrower);
-    assertEq(borrowerBalanceBefore - borrowerBalanceAfter, fixedBorrow, "incorrect token spend");
+    assertEq(borrowerBalanceBefore - borrowerBalanceAfter, fixedBorrow + penalty, "incorrect token spend");
   }
 
   //////////////////////////////////////////////////////
@@ -1079,11 +1087,11 @@ contract LendingBrokerTest is Test {
   }
 
   function test_borrowFixed_whenPaused_reverts() public {
-    FixedTermAndRate memory term = FixedTermAndRate({ termId: 111, duration: 30 days, apr: RATE_SCALE });
-    vm.startPrank(MANAGER);
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: 111, duration: 30 days, apr: RATE_SCALE * 3 });
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term, false);
+    vm.prank(MANAGER);
     broker.setBorrowPaused(true);
-    vm.stopPrank();
 
     vm.expectRevert(bytes("Broker/borrow-paused"));
     vm.prank(borrower);
@@ -1111,11 +1119,11 @@ contract LendingBrokerTest is Test {
   }
 
   function test_setMaxFixedLoanPositions_Enforced() public {
-    FixedTermAndRate memory term = FixedTermAndRate({ termId: 11, duration: 60 days, apr: RATE_SCALE });
-    vm.startPrank(MANAGER);
-    broker.setMaxFixedLoanPositions(1);
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: 11, duration: 60 days, apr: RATE_SCALE * 3 });
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term, false);
-    vm.stopPrank();
+    vm.prank(MANAGER);
+    broker.setMaxFixedLoanPositions(1);
 
     vm.startPrank(borrower);
     broker.borrow(1 ether, 11);
@@ -1130,9 +1138,9 @@ contract LendingBrokerTest is Test {
   }
 
   function test_peekCollateralReducedWithFixedInterest() public {
-    FixedTermAndRate memory term = FixedTermAndRate({ termId: 77, duration: 30 days, apr: RATE_SCALE + 5e24 });
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: 77, duration: 30 days, apr: RATE_SCALE * 2 + 5e24 });
     // Set a fixed term, borrow fixed, wait, then check price reduces
-    vm.prank(MANAGER);
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term, false);
     // initial price from oracle
     uint256 p0 = broker.peek(address(BTCB), borrower);
@@ -1174,62 +1182,62 @@ contract LendingBrokerTest is Test {
   }
 
   function test_setFixedTerm_validations_revert() public {
-    FixedTermAndRate memory term1 = FixedTermAndRate({ termId: 0, duration: 30 days, apr: RATE_SCALE });
-    FixedTermAndRate memory term2 = FixedTermAndRate({ termId: 1, duration: 0, apr: RATE_SCALE + 1 });
+    FixedTermAndRate memory term1 = FixedTermAndRate({ termId: 0, duration: 30 days, apr: RATE_SCALE * 3 });
+    FixedTermAndRate memory term2 = FixedTermAndRate({ termId: 1, duration: 0, apr: RATE_SCALE * 3 });
     FixedTermAndRate memory term3 = FixedTermAndRate({ termId: 2, duration: 90 days, apr: 0 });
     // termId = 0
     vm.expectRevert(bytes("broker/invalid-term-id"));
-    vm.prank(MANAGER);
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term1, false);
     // duration = 0
     vm.expectRevert(bytes("broker/invalid-duration"));
-    vm.prank(MANAGER);
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term2, false);
     // apr < RATE_SCALE
     vm.expectRevert(bytes("broker/invalid-apr"));
-    vm.prank(MANAGER);
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term3, false);
   }
 
   function test_removeFixedTerm_success_and_notFound_revert() public {
-    FixedTermAndRate memory term = FixedTermAndRate({ termId: 3, duration: 10 days, apr: RATE_SCALE });
-    vm.prank(MANAGER);
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: 3, duration: 10 days, apr: RATE_SCALE * 3 });
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term, false);
     // ensure added
     FixedTermAndRate[] memory terms = broker.getFixedTerms();
     assertEq(terms.length, 1);
     assertEq(terms[0].termId, 3);
     // remove
-    vm.prank(MANAGER);
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term, true);
     terms = broker.getFixedTerms();
     assertEq(terms.length, 0);
     // remove again -> revert
     vm.expectRevert(bytes("broker/term-not-found"));
-    vm.prank(MANAGER);
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term, true);
   }
 
   function test_getFixedTerms_update_inPlace() public {
-    FixedTermAndRate memory term = FixedTermAndRate({ termId: 5, duration: 7 days, apr: RATE_SCALE });
-    FixedTermAndRate memory updatedTerm = FixedTermAndRate({ termId: 5, duration: 14 days, apr: RATE_SCALE + 1 });
-    vm.prank(MANAGER);
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: 5, duration: 7 days, apr: RATE_SCALE * 3 });
+    FixedTermAndRate memory updatedTerm = FixedTermAndRate({ termId: 5, duration: 14 days, apr: RATE_SCALE * 4 });
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term, false);
-    vm.prank(MANAGER);
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(updatedTerm, false);
     FixedTermAndRate[] memory terms = broker.getFixedTerms();
     assertEq(terms.length, 1);
     assertEq(terms[0].termId, 5);
     assertEq(terms[0].duration, 14 days);
-    assertEq(terms[0].apr, RATE_SCALE + 1);
+    assertEq(terms[0].apr, RATE_SCALE * 4);
   }
 
   function test_refinance_matured_success() public {
-    FixedTermAndRate memory term1 = FixedTermAndRate({ termId: 100, duration: 1 hours, apr: RATE_SCALE });
-    FixedTermAndRate memory term2 = FixedTermAndRate({ termId: 101, duration: 2 hours, apr: RATE_SCALE + 1 });
-    FixedTermAndRate memory term3 = FixedTermAndRate({ termId: 102, duration: 3 hours, apr: RATE_SCALE + 1 });
+    FixedTermAndRate memory term1 = FixedTermAndRate({ termId: 100, duration: 1 hours, apr: RATE_SCALE * 3 });
+    FixedTermAndRate memory term2 = FixedTermAndRate({ termId: 101, duration: 2 hours, apr: RATE_SCALE * 4 });
+    FixedTermAndRate memory term3 = FixedTermAndRate({ termId: 102, duration: 3 hours, apr: RATE_SCALE * 5 });
     // create a short-term fixed position
-    vm.startPrank(MANAGER);
+    vm.startPrank(BOT);
     broker.updateFixedTermAndRate(term1, false);
     broker.updateFixedTermAndRate(term2, false);
     broker.updateFixedTermAndRate(term3, false);
@@ -1275,9 +1283,9 @@ contract LendingBrokerTest is Test {
   }
 
   function test_checkPositionsBelowMinLoanDynamic_reverts() public {
-    FixedTermAndRate memory term = FixedTermAndRate({ termId: 100, duration: 1 hours, apr: RATE_SCALE });
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: 100, duration: 1 hours, apr: RATE_SCALE * 3 });
     // create a short-term fixed position
-    vm.prank(MANAGER);
+    vm.prank(BOT);
     broker.updateFixedTermAndRate(term, false);
 
     vm.prank(MANAGER);
