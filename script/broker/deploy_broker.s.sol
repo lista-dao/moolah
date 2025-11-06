@@ -7,7 +7,7 @@ import { LendingBroker } from "../../src/broker/LendingBroker.sol";
 
 contract DeployLendingBroker is Script {
   address moolah;
-  address vault;
+  address interestRelayer;
   address oracle;
   address timelock;
   address manager;
@@ -18,7 +18,7 @@ contract DeployLendingBroker is Script {
 
   function setUp() public {
     moolah = vm.envAddress("MOOLAH");
-    vault = vm.envAddress("VAULT");
+    interestRelayer = vm.envAddress("INTEREST_RELAYER");
     oracle = vm.envAddress("ORACLE");
     timelock = vm.envAddress("TIMELOCK");
     manager = vm.envAddress("MANAGER");
@@ -35,7 +35,7 @@ contract DeployLendingBroker is Script {
     vm.startBroadcast(deployerPrivateKey);
 
     // Deploy LendingBroker implementation
-    LendingBroker impl = new LendingBroker(moolah, vault, oracle);
+    LendingBroker impl = new LendingBroker(moolah, interestRelayer, oracle);
     console.log("LendingBroker implementation: ", address(impl));
 
     // Deploy LendingBroker proxy
