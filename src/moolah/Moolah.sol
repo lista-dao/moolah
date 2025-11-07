@@ -262,7 +262,7 @@ contract Moolah is
 
     emit EventsLib.SetFlashLoanTokenBlacklist(token, isBlacklisted);
   }
-  
+
   /// @inheritdoc IMoolahBase
   function setMarketBroker(Id id, address broker, bool isAddition) external onlyRole(MANAGER) {
     require(broker != address(0), ErrorsLib.ZERO_ADDRESS);

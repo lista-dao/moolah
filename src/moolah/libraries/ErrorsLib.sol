@@ -96,7 +96,7 @@ library ErrorsLib {
   string internal constant REMAIN_BORROW_TOO_LOW = "remain borrow too low";
 
   string internal constant TOKEN_BLACKLISTED = "token blacklisted";
-  
+
   /// @notice Thrown when broker's loan token or collateral token is invalid.
   string internal constant INVALID_BROKER = "invalid broker";
 

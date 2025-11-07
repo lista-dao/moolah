@@ -339,7 +339,7 @@ interface IMoolahBase {
 
   /// @notice Sets the flash loan token blacklist status.
   function setFlashLoanTokenBlacklist(address token, bool isBlacklisted) external;
-  
+
   /// @notice Set/Remove the market broker for the market `id`.
   function setMarketBroker(Id id, address broker, bool isAddition) external;
 }

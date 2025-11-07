@@ -88,7 +88,22 @@ contract MockLiquidator is UUPSUpgradeable, AccessControlUpgradeable {
         seizedAssets,
         repaidShares,
         abi.encode(
-          ILiquidator.MoolahLiquidateData(params.collateralToken, params.loanToken, seizedAssets, address(0), "", false)
+          ILiquidator.MoolahLiquidateData(
+            params.collateralToken,
+            params.loanToken,
+            seizedAssets,
+            address(0),
+            "",
+            false,
+            false,
+            address(0),
+            0,
+            0,
+            address(0),
+            address(0),
+            "",
+            ""
+          )
         )
       );
     } else {
@@ -99,7 +114,22 @@ contract MockLiquidator is UUPSUpgradeable, AccessControlUpgradeable {
         seizedAssets,
         repaidShares,
         abi.encode(
-          ILiquidator.MoolahLiquidateData(params.collateralToken, params.loanToken, seizedAssets, address(0), "", false)
+          ILiquidator.MoolahLiquidateData(
+            params.collateralToken,
+            params.loanToken,
+            seizedAssets,
+            address(0),
+            "",
+            false,
+            false,
+            address(0),
+            0,
+            0,
+            address(0),
+            address(0),
+            "",
+            ""
+          )
         )
       );
     }
@@ -112,18 +142,18 @@ contract MockLiquidator is UUPSUpgradeable, AccessControlUpgradeable {
     require(msg.sender == MOOLAH || brokers[msg.sender], OnlyMoolahOrBroker());
     console.log("[MockLiquidator] onMoolahLiquidate called. repaidAssets: ", repaidAssets);
     ILiquidator.MoolahLiquidateData memory arb = abi.decode(data, (ILiquidator.MoolahLiquidateData));
-    if (arb.swap) {
+    if (arb.swapCollateral) {
       uint256 before = SafeTransferLib.balanceOf(arb.loanToken, address(this));
 
-      SafeTransferLib.safeApprove(arb.collateralToken, arb.pair, arb.seized);
-      (bool success, ) = arb.pair.call(arb.swapData);
+      SafeTransferLib.safeApprove(arb.collateralToken, arb.collateralPair, arb.seized);
+      (bool success, ) = arb.collateralPair.call(arb.swapCollateralData);
       require(success, SwapFailed());
 
       uint256 out = SafeTransferLib.balanceOf(arb.loanToken, address(this)) - before;
 
       if (out < repaidAssets) revert NoProfit();
 
-      SafeTransferLib.safeApprove(arb.collateralToken, arb.pair, 0);
+      SafeTransferLib.safeApprove(arb.collateralToken, arb.collateralPair, 0);
     }
 
     SafeTransferLib.safeApprove(arb.loanToken, msg.sender, repaidAssets);
