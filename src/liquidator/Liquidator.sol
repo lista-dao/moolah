@@ -13,6 +13,7 @@ import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
 
 contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   using MarketParamsLib for IMoolah.MarketParams;
+  using SafeTransferLib for address;
 
   /// @dev Thrown when passing the zero address.
   string internal constant ZERO_ADDRESS = "zero address";
@@ -77,12 +78,12 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   /// @param token The address of the token.
   /// @param amount The amount to withdraw.
   function withdrawERC20(address token, uint256 amount) external onlyRole(MANAGER) {
-    SafeTransferLib.safeTransfer(token, msg.sender, amount);
+    token.safeTransfer(msg.sender, amount);
   }
   /// @dev withdraws ETH.
   /// @param amount The amount to withdraw.
   function withdrawETH(uint256 amount) external onlyRole(MANAGER) {
-    SafeTransferLib.safeTransferETH(msg.sender, amount);
+    msg.sender.safeTransferETH(amount);
   }
 
   /// @dev sets the token whitelist.
@@ -159,17 +160,17 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     require(pairWhitelist[pair], NotWhitelisted());
     require(amountIn > 0, "amountIn zero");
 
-    require(SafeTransferLib.balanceOf(tokenIn, address(this)) >= amountIn, ExceedAmount());
+    require(tokenIn.balanceOf(address(this)) >= amountIn, ExceedAmount());
 
-    uint256 beforeTokenIn = SafeTransferLib.balanceOf(tokenIn, address(this));
-    uint256 beforeTokenOut = SafeTransferLib.balanceOf(tokenOut, address(this));
+    uint256 beforeTokenIn = tokenIn.balanceOf(address(this));
+    uint256 beforeTokenOut = tokenOut.balanceOf(address(this));
 
-    SafeTransferLib.safeApprove(tokenIn, pair, amountIn);
+    tokenIn.safeApprove(pair, amountIn);
     (bool success, ) = pair.call(swapData);
     require(success, SwapFailed());
 
-    uint256 actualAmountIn = beforeTokenIn - SafeTransferLib.balanceOf(tokenIn, address(this));
-    uint256 actualAmountOut = SafeTransferLib.balanceOf(tokenOut, address(this)) - beforeTokenOut;
+    uint256 actualAmountIn = beforeTokenIn - tokenIn.balanceOf(address(this));
+    uint256 actualAmountOut = tokenOut.balanceOf(address(this)) - beforeTokenOut;
 
     require(actualAmountIn <= amountIn, ExceedAmount());
     require(actualAmountOut >= amountOutMin, NoProfit());
@@ -198,13 +199,13 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     require(address(this).balance >= amountIn, ExceedAmount());
 
     uint256 beforeTokenIn = address(this).balance;
-    uint256 beforeTokenOut = SafeTransferLib.balanceOf(tokenOut, address(this));
+    uint256 beforeTokenOut = tokenOut.balanceOf(address(this));
 
     (bool success, ) = pair.call{ value: amountIn }(swapData);
     require(success, SwapFailed());
 
     uint256 actualAmountIn = beforeTokenIn - address(this).balance;
-    uint256 actualAmountOut = SafeTransferLib.balanceOf(tokenOut, address(this)) - beforeTokenOut;
+    uint256 actualAmountOut = tokenOut.balanceOf(address(this)) - beforeTokenOut;
 
     require(actualAmountIn <= amountIn, ExceedAmount());
     require(actualAmountOut >= amountOutMin, NoProfit());
@@ -423,17 +424,17 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     MoolahLiquidateData memory arb = abi.decode(data, (MoolahLiquidateData));
     if (arb.swapCollateral) {
       require(!arb.swapSmartCollateral, "only swap collateral or smart collateral");
-      uint256 before = SafeTransferLib.balanceOf(arb.loanToken, address(this));
+      uint256 before = arb.loanToken.balanceOf(address(this));
 
-      SafeTransferLib.safeApprove(arb.collateralToken, arb.collateralPair, arb.seized);
+      arb.collateralToken.safeApprove(arb.collateralPair, arb.seized);
       (bool success, ) = arb.collateralPair.call(arb.swapCollateralData);
       require(success, SwapFailed());
 
-      uint256 out = SafeTransferLib.balanceOf(arb.loanToken, address(this)) - before;
+      uint256 out = arb.loanToken.balanceOf(address(this)) - before;
 
       if (out < repaidAssets) revert NoProfit();
 
-      SafeTransferLib.safeApprove(arb.collateralToken, arb.collateralPair, 0);
+      arb.collateralToken.safeApprove(arb.collateralPair, 0);
     } else if (arb.swapSmartCollateral) {
       // redeem lp
       (uint256 amount0, uint256 amount1) = ISmartProvider(arb.smartProvider).redeemLpCollateral(
@@ -446,28 +447,28 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
       address token1 = ISmartProvider(arb.smartProvider).token(1);
 
       // swap token0 and token1 to loanToken
-      uint256 before = SafeTransferLib.balanceOf(arb.loanToken, address(this));
+      uint256 before = arb.loanToken.balanceOf(address(this));
       if (amount0 > 0) {
-        if (token0 != BNB_ADDRESS) SafeTransferLib.safeApprove(token0, arb.token0Pair, amount0);
+        if (token0 != BNB_ADDRESS) token0.safeApprove(arb.token0Pair, amount0);
         uint256 _value = token0 == BNB_ADDRESS ? amount0 : 0;
         (bool success, ) = arb.token0Pair.call{ value: _value }(arb.swapToken0Data);
         require(success, SwapFailed());
       }
 
       if (amount1 > 0) {
-        if (token1 != BNB_ADDRESS) SafeTransferLib.safeApprove(token1, arb.token1Pair, amount1);
+        if (token1 != BNB_ADDRESS) token1.safeApprove(arb.token1Pair, amount1);
         uint256 _value = token1 == BNB_ADDRESS ? amount1 : 0;
         (bool success, ) = arb.token1Pair.call{ value: _value }(arb.swapToken1Data);
         require(success, SwapFailed());
       }
-      uint256 out = SafeTransferLib.balanceOf(arb.loanToken, address(this)) - before;
+      uint256 out = arb.loanToken.balanceOf(address(this)) - before;
 
       if (out < repaidAssets) revert NoProfit();
-      if (token0 != BNB_ADDRESS) SafeTransferLib.safeApprove(token0, arb.token0Pair, 0);
-      if (token1 != BNB_ADDRESS) SafeTransferLib.safeApprove(token1, arb.token1Pair, 0);
+      if (token0 != BNB_ADDRESS) token0.safeApprove(arb.token0Pair, 0);
+      if (token1 != BNB_ADDRESS) token1.safeApprove(arb.token1Pair, 0);
     }
 
-    SafeTransferLib.safeApprove(arb.loanToken, MOOLAH, repaidAssets);
+    arb.loanToken.safeApprove(MOOLAH, repaidAssets);
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
