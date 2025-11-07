@@ -19,6 +19,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   using MarketParamsLib for IMoolah.MarketParams;
   using MathLib for uint256;
   using SharesMathLib for uint256;
+  using SafeTransferLib for address;
 
   /// @dev Thrown when passing the zero address.
   string internal constant ZERO_ADDRESS = "zero address";
@@ -129,7 +130,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     // calculate how much loan token to repay
     uint256 repayAmount = loanTokenAmountNeed(id, seizedAssets, 0);
     // pre-balance of loan token
-    uint256 loanTokenBalanceBefore = SafeTransferLib.balanceOf(params.loanToken, address(this));
+    uint256 loanTokenBalanceBefore = params.loanToken.balanceOf(address(this));
     // liquidate borrower's position
     IMoolah(MOOLAH).liquidate(
       params,
@@ -156,11 +157,11 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
       )
     );
     // post-balance of loan token
-    uint256 loanTokenBalanceAfter = SafeTransferLib.balanceOf(params.loanToken, address(this));
+    uint256 loanTokenBalanceAfter = params.loanToken.balanceOf(address(this));
     // check if the liquidator made a profit
     if (loanTokenBalanceAfter <= loanTokenBalanceBefore) revert NoProfit();
     // transfer profit to the liquidator
-    SafeTransferLib.safeTransfer(params.loanToken, msg.sender, loanTokenBalanceAfter - loanTokenBalanceBefore);
+    params.loanToken.safeTransfer(msg.sender, loanTokenBalanceAfter - loanTokenBalanceBefore);
     // remove user from whitelist
     postLiquidate(params, id, borrower);
     // broadcast event
@@ -200,7 +201,9 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     // calculate how much loan token to repay
     uint256 repayAmount = loanTokenAmountNeed(id, seizedAssets, 0);
     // pre-balance of loan token
-    uint256 loanTokenBalanceBefore = SafeTransferLib.balanceOf(params.loanToken, address(this));
+    uint256 loanTokenAmount = params.loanToken.balanceOf(address(this));
+    // pre-balance of token0 and token1
+    (uint256 token0Bal, uint256 token1Bal) = _liquidityBalances(smartProvider);
     // liquidate borrower's position
     MoolahLiquidateData memory callback = MoolahLiquidateData(
       params.collateralToken,
@@ -218,24 +221,21 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
       swapToken0Data,
       swapToken1Data
     );
-    (uint256 _seizedAssets, uint256 _repaidAssets) = IMoolah(MOOLAH).liquidate(
-      params,
-      borrower,
-      seizedAssets,
-      0,
-      abi.encode(callback)
-    );
+    (uint256 _seizedAssets, ) = IMoolah(MOOLAH).liquidate(params, borrower, seizedAssets, 0, abi.encode(callback));
     // post-balance of loan token
-    uint256 loanTokenBalanceAfter = SafeTransferLib.balanceOf(params.loanToken, address(this));
+    uint256 loanTokenBalanceAfter = params.loanToken.balanceOf(address(this));
     // check if the liquidator made a profit
-    if (loanTokenBalanceAfter <= loanTokenBalanceBefore) revert NoProfit();
+    if (loanTokenBalanceAfter <= loanTokenAmount) revert NoProfit();
     // transfer profit to the liquidator
-    SafeTransferLib.safeTransfer(params.loanToken, msg.sender, loanTokenBalanceAfter - loanTokenBalanceBefore);
+    params.loanToken.safeTransfer(msg.sender, loanTokenBalanceAfter - loanTokenAmount);
+
+    // return excess token0 and token1 to msg.sender if any
+    _sendExcessLiquidityTokens(smartProvider, token0Bal, token1Bal, msg.sender);
     // remove user from whitelist
     postLiquidate(params, id, borrower);
     // broadcast event
     emit Liquidated(id, borrower, seizedAssets, repayAmount, 0, msg.sender);
-    return (_seizedAssets, _repaidAssets);
+    return (_seizedAssets, repayAmount);
   }
 
   /// @dev liquidates a position.
@@ -252,12 +252,12 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     // calculate how much loan token to transfer
     uint256 loanTokenAmount = loanTokenAmountNeed(id, seizedAssets, repaidShares);
     // transfer loan token to this contract
-    SafeTransferLib.safeTransferFrom(params.loanToken, msg.sender, address(this), loanTokenAmount);
+    params.loanToken.safeTransferFrom(msg.sender, address(this), loanTokenAmount);
 
     // pre-balance of loan token
-    uint256 loanTokenBalanceBefore = SafeTransferLib.balanceOf(params.loanToken, address(this));
+    uint256 loanTokenBalanceBefore = params.loanToken.balanceOf(address(this));
     // pre-balance of collateral token
-    uint256 collateralTokenBalanceBefore = SafeTransferLib.balanceOf(params.collateralToken, address(this));
+    uint256 collateralTokenBalanceBefore = params.collateralToken.balanceOf(address(this));
     // liquidate borrower's position
     IMoolah(MOOLAH).liquidate(
       params,
@@ -284,20 +284,16 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
       )
     );
     // post-balance of collateral token
-    uint256 collateralTokenBalanceAfter = SafeTransferLib.balanceOf(params.collateralToken, address(this));
+    uint256 collateralTokenBalanceAfter = params.collateralToken.balanceOf(address(this));
     // post-balance of loan token
-    uint256 loanTokenBalanceAfter = SafeTransferLib.balanceOf(params.loanToken, address(this));
+    uint256 loanTokenBalanceAfter = params.loanToken.balanceOf(address(this));
     // check if the liquidator made a profit
     if (collateralTokenBalanceAfter <= collateralTokenBalanceBefore) revert NoProfit();
     // transfer bid collateral to the liquidator
-    SafeTransferLib.safeTransfer(
-      params.collateralToken,
-      msg.sender,
-      collateralTokenBalanceAfter - collateralTokenBalanceBefore
-    );
+    params.collateralToken.safeTransfer(msg.sender, collateralTokenBalanceAfter - collateralTokenBalanceBefore);
     // transfer unused loan token back to the liquidator
     if (loanTokenBalanceAfter > loanTokenBalanceBefore) {
-      SafeTransferLib.safeTransfer(params.loanToken, msg.sender, loanTokenBalanceAfter - loanTokenBalanceBefore);
+      params.loanToken.safeTransfer(msg.sender, loanTokenBalanceAfter - loanTokenBalanceBefore);
     }
     // remove user from whitelist
     postLiquidate(params, id, borrower);
@@ -331,12 +327,12 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     // calculate how much loan token to transfer
     uint256 loanTokenAmount = loanTokenAmountNeed(id, seizedAssets, repaidShares);
     // transfer loan token to this contract
-    SafeTransferLib.safeTransferFrom(params.loanToken, msg.sender, address(this), loanTokenAmount);
+    params.loanToken.safeTransferFrom(msg.sender, address(this), loanTokenAmount);
 
     // pre-balance of loan token
-    uint256 loanTokenBalanceBefore = SafeTransferLib.balanceOf(params.loanToken, address(this));
+    uint256 loanTokenBalanceBefore = params.loanToken.balanceOf(address(this));
     // pre-balance of collateral token
-    uint256 collateralTokenBalanceBefore = SafeTransferLib.balanceOf(params.collateralToken, address(this));
+    uint256 collateralTokenBalanceBefore = params.collateralToken.balanceOf(address(this));
     // liquidate borrower's position
     (uint256 minAmount0, uint256 minAmount1) = abi.decode(payload, (uint256, uint256));
     (uint256 _seizedAssets, uint256 _repaidAssets) = IMoolah(MOOLAH).liquidate(
@@ -364,9 +360,9 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
       )
     );
     // post-balance of collateral token
-    uint256 collateralTokenBalanceAfter = SafeTransferLib.balanceOf(params.collateralToken, address(this));
+    uint256 collateralTokenBalanceAfter = params.collateralToken.balanceOf(address(this));
     // post-balance of loan token
-    uint256 loanTokenBalanceAfter = SafeTransferLib.balanceOf(params.loanToken, address(this));
+    uint256 loanTokenBalanceAfter = params.loanToken.balanceOf(address(this));
     // check if the liquidator made a profit
     if (collateralTokenBalanceAfter <= collateralTokenBalanceBefore) revert NoProfit();
 
@@ -381,24 +377,24 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     if (token0Amount > 0) {
       address token0 = ISmartProvider(smartProvider).token(0);
       if (token0 == BNB_ADDRESS) {
-        SafeTransferLib.safeTransferETH(msg.sender, token0Amount);
+        msg.sender.safeTransferETH(token0Amount);
       } else {
-        SafeTransferLib.safeTransfer(token0, msg.sender, token0Amount);
+        token0.safeTransfer(msg.sender, token0Amount);
       }
     }
     // transfer redeemed token1 to msg.sender
     if (token1Amount > 0) {
       address token1 = ISmartProvider(smartProvider).token(1);
       if (token1 == BNB_ADDRESS) {
-        SafeTransferLib.safeTransferETH(msg.sender, token1Amount);
+        msg.sender.safeTransferETH(token1Amount);
       } else {
-        SafeTransferLib.safeTransfer(token1, msg.sender, token1Amount);
+        token1.safeTransfer(msg.sender, token1Amount);
       }
     }
 
     // transfer unused loan token back to the liquidator
     if (loanTokenBalanceAfter > loanTokenBalanceBefore) {
-      SafeTransferLib.safeTransfer(params.loanToken, msg.sender, loanTokenBalanceAfter - loanTokenBalanceBefore);
+      params.loanToken.safeTransfer(msg.sender, loanTokenBalanceAfter - loanTokenBalanceBefore);
     }
     // remove user from whitelist
     postLiquidate(params, id, borrower);
@@ -462,18 +458,18 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     MoolahLiquidateData memory arb = abi.decode(data, (MoolahLiquidateData));
     if (arb.swapCollateral) {
       require(!arb.swapSmartCollateral, "only swap collateral or smart collateral");
-      uint256 before = SafeTransferLib.balanceOf(arb.loanToken, address(this));
+      uint256 before = arb.loanToken.balanceOf(address(this));
 
-      SafeTransferLib.safeApprove(arb.collateralToken, arb.collateralPair, arb.seized);
+      arb.collateralToken.safeApprove(arb.collateralPair, arb.seized);
       (bool success, ) = arb.collateralPair.call(arb.swapCollateralData);
       require(success, SwapFailed());
 
-      uint256 out = SafeTransferLib.balanceOf(arb.loanToken, address(this)) - before;
+      uint256 out = arb.loanToken.balanceOf(address(this)) - before;
 
       if (out < repaidAssets) revert NoProfit();
 
       // revoke approval for the pair
-      SafeTransferLib.safeApprove(arb.collateralToken, arb.collateralPair, 0);
+      arb.collateralToken.safeApprove(arb.collateralPair, 0);
     } else if (arb.swapSmartCollateral) {
       // redeem lp
       (uint256 amount0, uint256 amount1) = ISmartProvider(arb.smartProvider).redeemLpCollateral(
@@ -486,28 +482,70 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
       address token1 = ISmartProvider(arb.smartProvider).token(1);
 
       // swap token0 and token1 to loanToken
-      uint256 before = SafeTransferLib.balanceOf(arb.loanToken, address(this));
+      uint256 before = arb.loanToken.balanceOf(address(this));
       if (amount0 > 0) {
-        if (token0 != BNB_ADDRESS) SafeTransferLib.safeApprove(token0, arb.token0Pair, amount0);
+        if (token0 != BNB_ADDRESS) token0.safeApprove(arb.token0Pair, amount0);
         uint256 _value = token0 == BNB_ADDRESS ? amount0 : 0;
         (bool success, ) = arb.token0Pair.call{ value: _value }(arb.swapToken0Data);
         require(success, SwapFailed());
       }
 
       if (amount1 > 0) {
-        if (token1 != BNB_ADDRESS) SafeTransferLib.safeApprove(token1, arb.token1Pair, amount1);
+        if (token1 != BNB_ADDRESS) token1.safeApprove(arb.token1Pair, amount1);
         uint256 _value = token1 == BNB_ADDRESS ? amount1 : 0;
         (bool success, ) = arb.token1Pair.call{ value: _value }(arb.swapToken1Data);
         require(success, SwapFailed());
       }
-      uint256 out = SafeTransferLib.balanceOf(arb.loanToken, address(this)) - before;
+      uint256 out = arb.loanToken.balanceOf(address(this)) - before;
 
       if (out < repaidAssets) revert NoProfit();
-      if (token0 != BNB_ADDRESS) SafeTransferLib.safeApprove(token0, arb.token0Pair, 0);
-      if (token1 != BNB_ADDRESS) SafeTransferLib.safeApprove(token1, arb.token1Pair, 0);
+      if (token0 != BNB_ADDRESS) token0.safeApprove(arb.token0Pair, 0);
+      if (token1 != BNB_ADDRESS) token1.safeApprove(arb.token1Pair, 0);
     }
 
-    SafeTransferLib.safeApprove(arb.loanToken, MOOLAH, repaidAssets);
+    arb.loanToken.safeApprove(MOOLAH, repaidAssets);
+  }
+
+  /// @dev return excess liquidity tokens back to liquidator
+  function _sendExcessLiquidityTokens(
+    address _smartProvider,
+    uint256 beforeToken0Bal,
+    uint256 beforeToken1Bal,
+    address _liquidator
+  ) internal {
+    (uint256 token0Bal, uint256 token1Bal) = _liquidityBalances(_smartProvider);
+
+    uint256 token0Leftover = token0Bal - beforeToken0Bal;
+    if (token0Leftover > 0) {
+      address token0 = ISmartProvider(_smartProvider).token(0);
+      if (token0 == BNB_ADDRESS) {
+        _liquidator.safeTransferETH(token0Leftover);
+      } else {
+        token0.safeTransfer(_liquidator, token0Leftover);
+      }
+    }
+
+    uint256 token1Leftover = token1Bal - beforeToken1Bal;
+    if (token1Leftover > 0) {
+      address token1 = ISmartProvider(_smartProvider).token(1);
+      if (token1 == BNB_ADDRESS) {
+        _liquidator.safeTransferETH(token1Leftover);
+      } else {
+        token1.safeTransfer(_liquidator, token1Leftover);
+      }
+    }
+  }
+
+  function _liquidityBalances(address _smartProvider) internal view returns (uint256, uint256) {
+    address token0 = ISmartProvider(_smartProvider).token(0);
+    address token1 = ISmartProvider(_smartProvider).token(1);
+    uint256 token0Bal = _getBalance(token0);
+    uint256 token1Bal = _getBalance(token1);
+    return (token0Bal, token1Bal);
+  }
+
+  function _getBalance(address _token) internal view returns (uint256) {
+    return _token == BNB_ADDRESS ? address(this).balance : _token.balanceOf(address(this));
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}

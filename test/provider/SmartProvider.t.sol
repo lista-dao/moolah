@@ -662,19 +662,20 @@ contract SmartProviderTest is Test {
 
     address token0Pair = address(new MockOneInch());
     address token1Pair = address(new MockOneInch());
+    uint256 token0_leftover = 100;
     bytes memory swapToken0Data = abi.encodeWithSelector(
       MockOneInch.swap.selector,
       address(token0),
       USDT,
-      amounts[0],
+      amounts[0] - token0_leftover,
       user2Debt / 2 // min USDT out
     );
-
+    uint256 token1_leftover = 200;
     bytes memory swapToken1Data = abi.encodeWithSelector(
       MockOneInch.swap.selector,
       BNB_ADDRESS,
       USDT,
-      amounts[1],
+      amounts[1] - token1_leftover,
       user2Debt / 2 // min USDT out
     );
 
@@ -729,6 +730,8 @@ contract SmartProviderTest is Test {
     assertEq(address(publicLiquidator).balance, 0);
     uint256 loanAfterMoolah = IERC20(USDT).balanceOf(address(moolah));
     assertEq(loanAfterMoolah, loanBeforeMoolah + _repaidAssets);
+    assertEq(token0_leftover, token0.balanceOf(user2));
+    assertEq(token1_leftover, user2.balance);
   }
 
   function test_repay_usdt() public {
