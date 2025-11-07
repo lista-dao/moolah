@@ -681,6 +681,7 @@ contract SmartProviderTest is Test {
     uint256 loanBefore = IERC20(USDT).balanceOf(user2);
     uint256 loanBeforeMoolah = IERC20(USDT).balanceOf(address(moolah));
     vm.startPrank(user2);
+    vm.expectRevert("NotWhitelisted()");
     (uint256 _seizedAssets, uint256 _repaidAssets) = publicLiquidator.flashLiquidateSmartCollateral(
       Id.unwrap(marketParams.id()),
       user2,
@@ -692,6 +693,29 @@ contract SmartProviderTest is Test {
       swapToken1Data,
       payload
     );
+    vm.stopPrank();
+
+    // whitelist pairs
+    vm.startPrank(manager);
+    publicLiquidator.setPairWhitelist(token0Pair, true);
+    publicLiquidator.setPairWhitelist(token1Pair, true);
+    vm.stopPrank();
+    assertTrue(publicLiquidator.pairWhitelist(token0Pair));
+    assertTrue(publicLiquidator.pairWhitelist(token1Pair));
+
+    vm.startPrank(user2);
+    (_seizedAssets, _repaidAssets) = publicLiquidator.flashLiquidateSmartCollateral(
+      Id.unwrap(marketParams.id()),
+      user2,
+      address(smartProvider),
+      user2Collateral,
+      token0Pair,
+      token1Pair,
+      swapToken0Data,
+      swapToken1Data,
+      payload
+    );
+
     assertEq(user2Collateral, _seizedAssets);
 
     assertEq(lpCollateral.balanceOf(address(moolah)), 0);

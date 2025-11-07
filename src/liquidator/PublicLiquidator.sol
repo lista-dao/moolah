@@ -32,6 +32,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   address public immutable MOOLAH;
   mapping(bytes32 => bool) public marketWhitelist;
   mapping(bytes32 => mapping(address => bool)) public marketUserWhitelist;
+  mapping(address => bool) public pairWhitelist;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // bot role
@@ -39,6 +40,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
 
   event MarketWhitelistChanged(bytes32 id, bool added);
   event MarketUserWhitelistChanged(bytes32 id, address user, bool added);
+  event PairWhitelistChanged(address pair, bool added);
   event Liquidated(
     bytes32 indexed id,
     address indexed borrower,
@@ -96,6 +98,16 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     emit MarketUserWhitelistChanged(id, user, status);
   }
 
+  /// @dev sets the pair whitelist.
+  /// @param pair The address of the pair.
+  /// @param status The status of the pair.
+  function setPairWhitelist(address pair, bool status) external onlyRole(MANAGER) {
+    require(pair != address(0), ZERO_ADDRESS);
+    require(pairWhitelist[pair] != status, WhitelistSameStatus());
+    pairWhitelist[pair] = status;
+    emit PairWhitelistChanged(pair, status);
+  }
+
   /// @dev flash liquidates a position.
   /// @param id The id of the market.
   /// @param borrower The address of the borrower.
@@ -109,6 +121,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     address pair,
     bytes calldata swapCollateralData
   ) external {
+    require(pairWhitelist[pair], NotWhitelisted());
     require(isLiquidatable(id, borrower), NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
     // calculate how much loan token to repay
@@ -174,6 +187,8 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     bytes calldata swapToken1Data,
     bytes memory payload
   ) external returns (uint256, uint256) {
+    require(pairWhitelist[token0Pair], NotWhitelisted());
+    require(pairWhitelist[token1Pair], NotWhitelisted());
     require(isLiquidatable(id, borrower), NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
     require(ISmartProvider(smartProvider).TOKEN() == params.collateralToken, "Invalid smart provider");

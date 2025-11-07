@@ -16,6 +16,7 @@ contract PublicLiquidatorTest is BaseTest {
   address BOT;
   MockOneInch oneInch;
   address USER;
+  address _MANAGER = makeAddr("Manager");
 
   function setUp() public override {
     super.setUp();
@@ -27,7 +28,7 @@ contract PublicLiquidatorTest is BaseTest {
     PublicLiquidator impl = new PublicLiquidator(address(moolah));
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, OWNER, OWNER, BOT)
+      abi.encodeWithSelector(impl.initialize.selector, OWNER, _MANAGER, BOT)
     );
     publicLiquidator = IPublicLiquidator(address(proxy));
   }
@@ -87,6 +88,29 @@ contract PublicLiquidatorTest is BaseTest {
     moolah.borrow(marketParams, 8e18, 0, address(this), address(this));
 
     oracle.setPrice(address(collateralToken), ORACLE_PRICE_SCALE / 10);
+
+    vm.startPrank(USER);
+    vm.expectRevert("NotWhitelisted()");
+    publicLiquidator.flashLiquidate(
+      Id.unwrap(marketParams.id()),
+      address(this),
+      collateralAmount,
+      address(oneInch),
+      abi.encodeWithSelector(
+        oneInch.swap.selector,
+        address(collateralToken),
+        address(loanToken),
+        collateralAmount,
+        8e18
+      )
+    );
+    vm.stopPrank();
+
+    // whitelist pair
+    vm.startPrank(_MANAGER);
+    publicLiquidator.setPairWhitelist(address(oneInch), true);
+    assertTrue(publicLiquidator.pairWhitelist(address(oneInch)), "pair not whitelisted");
+    vm.stopPrank();
 
     vm.startPrank(USER);
     publicLiquidator.flashLiquidate(

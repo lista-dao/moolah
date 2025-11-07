@@ -19,6 +19,8 @@ interface IPublicLiquidator {
     bytes swapToken1Data;
   }
 
+  function pairWhitelist(address pair) external view returns (bool);
+
   function flashLiquidate(
     bytes32 id,
     address borrower,
@@ -32,4 +34,6 @@ interface IPublicLiquidator {
   function setMarketWhitelist(bytes32 id, bool status) external;
 
   function setMarketUserWhitelist(bytes32 id, address user, bool status) external;
+
+  function setPairWhitelist(address pair, bool status) external;
 }
