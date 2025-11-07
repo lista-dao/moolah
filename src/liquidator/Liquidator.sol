@@ -258,12 +258,8 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   /// @param id The id of the market.
   /// @param borrower The address of the borrower.
   /// @param seizedAssets The amount of assets to seize.
-  function liquidate(
-    bytes32 id,
-    address borrower,
-    uint256 seizedAssets,
-    uint256 repaidShares
-  ) external payable onlyRole(BOT) {
+  /// @param repaidShares The amount of shares to repay.
+  function liquidate(bytes32 id, address borrower, uint256 seizedAssets, uint256 repaidShares) external onlyRole(BOT) {
     require(marketWhitelist[id], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
     IMoolah(MOOLAH).liquidate(
