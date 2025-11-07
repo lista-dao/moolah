@@ -124,6 +124,8 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     require(pairWhitelist[pair], NotWhitelisted());
     require(isLiquidatable(id, borrower), NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
+    // accrue interest for the market before calculate how much loan token is needed
+    IMoolah(MOOLAH).accrueInterest(params);
     // calculate how much loan token to repay
     uint256 repayAmount = loanTokenAmountNeed(id, seizedAssets, 0);
     // pre-balance of loan token
@@ -193,6 +195,8 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
     require(ISmartProvider(smartProvider).TOKEN() == params.collateralToken, "Invalid smart provider");
     (uint256 minAmount0, uint256 minAmount1) = abi.decode(payload, (uint256, uint256));
+    // accrue interest for the market before calculate how much loan token is needed
+    IMoolah(MOOLAH).accrueInterest(params);
     // calculate how much loan token to repay
     uint256 repayAmount = loanTokenAmountNeed(id, seizedAssets, 0);
     // pre-balance of loan token
