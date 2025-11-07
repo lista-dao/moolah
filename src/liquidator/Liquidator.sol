@@ -37,7 +37,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   event MarketWhitelistChanged(bytes32 id, bool added);
   event PairWhitelistChanged(address pair, bool added);
   event SmartProvidersChanged(address provider, bool added);
-  event SellToken(address pair, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin);
+  event SellToken(address pair, address tokenIn, address tokenOut, uint256 amountIn, uint256 actualAmoutOut);
   event SmartLiquidation(
     bytes32 indexed id,
     address indexed lpToken,
