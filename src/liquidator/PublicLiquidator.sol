@@ -251,11 +251,11 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     IMoolah(MOOLAH).accrueInterest(params);
     // calculate how much loan token to transfer
     uint256 loanTokenAmount = loanTokenAmountNeed(id, seizedAssets, repaidShares);
+    // pre-balance of loan token
+    uint256 loanTokenBalanceBefore = params.loanToken.balanceOf(address(this));
     // transfer loan token to this contract
     params.loanToken.safeTransferFrom(msg.sender, address(this), loanTokenAmount);
 
-    // pre-balance of loan token
-    uint256 loanTokenBalanceBefore = params.loanToken.balanceOf(address(this));
     // pre-balance of collateral token
     uint256 collateralTokenBalanceBefore = params.collateralToken.balanceOf(address(this));
     // liquidate borrower's position
@@ -326,11 +326,11 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     IMoolah(MOOLAH).accrueInterest(params);
     // calculate how much loan token to transfer
     uint256 loanTokenAmount = loanTokenAmountNeed(id, seizedAssets, repaidShares);
+    // pre-balance of loan token
+    uint256 loanTokenBalanceBefore = params.loanToken.balanceOf(address(this));
     // transfer loan token to this contract
     params.loanToken.safeTransferFrom(msg.sender, address(this), loanTokenAmount);
 
-    // pre-balance of loan token
-    uint256 loanTokenBalanceBefore = params.loanToken.balanceOf(address(this));
     // pre-balance of collateral token
     uint256 collateralTokenBalanceBefore = params.collateralToken.balanceOf(address(this));
     // liquidate borrower's position
