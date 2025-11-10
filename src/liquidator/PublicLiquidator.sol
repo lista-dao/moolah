@@ -34,7 +34,6 @@ contract PublicLiquidator is
   error WhitelistSameStatus();
   error NotWhitelisted();
   error SwapFailed();
-  error EitherOneZero();
 
   address public immutable MOOLAH;
   mapping(bytes32 => bool) public marketWhitelist;
@@ -286,7 +285,6 @@ contract PublicLiquidator is
     bool doTransferColl
   ) public nonReentrant {
     require(isLiquidatable(id, borrower), NotWhitelisted());
-    require(seizedAssets == 0 || repaidShares == 0, EitherOneZero());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
 
     // accrue interest for the market before calculate how much loan token is needed
@@ -366,7 +364,6 @@ contract PublicLiquidator is
   ) external nonReentrant returns (uint256, uint256) {
     require(isLiquidatable(id, borrower), NotWhitelisted());
     require(smartProviders[smartProvider], NotWhitelisted());
-    require(seizedAssets == 0 || repaidShares == 0, EitherOneZero());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
     require(ISmartProvider(smartProvider).TOKEN() == params.collateralToken, "Invalid smart provider");
 
