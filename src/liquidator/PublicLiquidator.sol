@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
+import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 
 import "./IPublicLiquidator.sol";
 
@@ -15,7 +16,12 @@ import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
 import "moolah/libraries/ConstantsLib.sol";
 import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
 
-contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IPublicLiquidator {
+contract PublicLiquidator is
+  ReentrancyGuardUpgradeable,
+  UUPSUpgradeable,
+  AccessControlEnumerableUpgradeable,
+  IPublicLiquidator
+{
   using MarketParamsLib for IMoolah.MarketParams;
   using MathLib for uint256;
   using SharesMathLib for uint256;
@@ -34,6 +40,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   mapping(bytes32 => bool) public marketWhitelist;
   mapping(bytes32 => mapping(address => bool)) public marketUserWhitelist;
   mapping(address => bool) public pairWhitelist;
+  mapping(address => bool) public smartProviders;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // bot role
@@ -42,6 +49,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   event MarketWhitelistChanged(bytes32 id, bool added);
   event MarketUserWhitelistChanged(bytes32 id, address user, bool added);
   event PairWhitelistChanged(address pair, bool added);
+  event SmartProvidersChanged(address provider, bool added);
   event Liquidated(
     bytes32 indexed id,
     address indexed borrower,
@@ -107,6 +115,17 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     require(pairWhitelist[pair] != status, WhitelistSameStatus());
     pairWhitelist[pair] = status;
     emit PairWhitelistChanged(pair, status);
+  }
+
+  /// @dev sets the smart collateral providers.
+  /// @param providers The array of smart collateral providers.
+  /// @param status The status of the providers.
+  function batchSetSmartProviders(address[] calldata providers, bool status) external onlyRole(MANAGER) {
+    for (uint256 i = 0; i < providers.length; i++) {
+      address provider = providers[i];
+      smartProviders[provider] = status;
+      emit SmartProvidersChanged(provider, status);
+    }
   }
 
   /// @dev flash liquidates a position.
@@ -192,6 +211,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   ) external nonReentrant returns (uint256, uint256) {
     require(pairWhitelist[token0Pair], NotWhitelisted());
     require(pairWhitelist[token1Pair], NotWhitelisted());
+    require(smartProviders[smartProvider], NotWhitelisted());
     require(isLiquidatable(id, borrower), NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
     require(ISmartProvider(smartProvider).TOKEN() == params.collateralToken, "Invalid smart provider");
@@ -238,11 +258,28 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     return (_seizedAssets, repayAmount);
   }
 
-  /// @dev liquidates a position.
+  /// @dev liquidates a position. The collateral will be transferred to the liquidator.
   /// @param id The id of the market.
   /// @param borrower The address of the borrower.
   /// @param seizedAssets The amount of assets to seize.
-  function liquidate(bytes32 id, address borrower, uint256 seizedAssets, uint256 repaidShares) external nonReentrant {
+  function liquidate(bytes32 id, address borrower, uint256 seizedAssets, uint256 repaidShares) external {
+    liquidateWithCollTransferOpt(id, borrower, seizedAssets, repaidShares, true);
+  }
+
+  /// @dev liquidates a position with option to transfer collateral to liquidator.
+  /// @param id The id of the market.
+  /// @param borrower The address of the borrower.
+  /// @param seizedAssets The amount of assets to seize.
+  /// @param repaidShares The amount of shares to repay.
+  /// @param doTransferColl Whether to transfer the seized collateral to the liquidator.
+  /// @notice For smart collateral, pass `false` to keep the collateral in the contract and do `redeemSmartCollateral` later.
+  function liquidateWithCollTransferOpt(
+    bytes32 id,
+    address borrower,
+    uint256 seizedAssets,
+    uint256 repaidShares,
+    bool doTransferColl
+  ) public nonReentrant {
     require(isLiquidatable(id, borrower), NotWhitelisted());
     require(seizedAssets == 0 || repaidShares == 0, EitherOneZero());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
@@ -290,7 +327,8 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     // check if the liquidator made a profit
     if (collateralTokenBalanceAfter <= collateralTokenBalanceBefore) revert NoProfit();
     // transfer bid collateral to the liquidator
-    params.collateralToken.safeTransfer(msg.sender, collateralTokenBalanceAfter - collateralTokenBalanceBefore);
+    if (doTransferColl)
+      params.collateralToken.safeTransfer(msg.sender, collateralTokenBalanceAfter - collateralTokenBalanceBefore);
     // transfer unused loan token back to the liquidator
     if (loanTokenBalanceAfter > loanTokenBalanceBefore) {
       params.loanToken.safeTransfer(msg.sender, loanTokenBalanceAfter - loanTokenBalanceBefore);
@@ -318,6 +356,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     bytes memory payload
   ) external nonReentrant returns (uint256, uint256) {
     require(isLiquidatable(id, borrower), NotWhitelisted());
+    require(smartProviders[smartProvider], NotWhitelisted());
     require(seizedAssets == 0 || repaidShares == 0, EitherOneZero());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
     require(ISmartProvider(smartProvider).TOKEN() == params.collateralToken, "Invalid smart provider");
@@ -401,6 +440,22 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     // broadcast event
     emit Liquidated(id, borrower, seizedAssets, loanTokenAmount, repaidShares, msg.sender);
     return (_seizedAssets, _repaidAssets);
+  }
+
+  /// @dev redeems smart collateral LP tokens.
+  /// @param smartProvider The address of the smart collateral provider.
+  /// @param lpAmount The amount of LP collateral tokens to redeem.
+  /// @param minToken0Amt The minimum amount of token0 to receive.
+  /// @param minToken1Amt The minimum amount of token1 to receive.
+  /// @return The amount of token0 and token1 redeemed.
+  function redeemSmartCollateral(
+    address smartProvider,
+    uint256 lpAmount,
+    uint256 minToken0Amt,
+    uint256 minToken1Amt
+  ) external nonReentrant returns (uint256, uint256) {
+    require(smartProviders[smartProvider], NotWhitelisted());
+    return ISmartProvider(smartProvider).redeemLpCollateral(lpAmount, minToken0Amt, minToken1Amt);
   }
 
   /// @dev calculates the amount of loan token needed to repay the shares.
