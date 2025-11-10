@@ -175,6 +175,8 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     require(actualAmountIn <= amountIn, ExceedAmount());
     require(actualAmountOut >= amountOutMin, NoProfit());
 
+    tokenIn.safeApprove(pair, 0);
+
     emit SellToken(pair, tokenIn, tokenOut, actualAmountIn, actualAmountOut);
   }
 
