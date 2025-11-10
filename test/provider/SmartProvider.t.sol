@@ -670,6 +670,7 @@ contract SmartProviderTest is Test {
     vm.startPrank(bot);
     publicLiquidator.liquidateWithCollTransferOpt(Id.unwrap(marketParams.id()), user2, user2Collateral, 0, false);
     uint256 _repaidAssets = usdtBefore - IERC20(USDT).balanceOf(address(publicLiquidator));
+    assertEq(publicLiquidator.lpCollaterals(bot, address(lpCollateral)), user2Collateral, "wrong lp collateral amount");
 
     // step 2: redeem token0 and token1
     vm.expectRevert("NotWhitelisted()");
@@ -686,6 +687,14 @@ contract SmartProviderTest is Test {
     publicLiquidator.batchSetSmartProviders(providers, true);
     assertTrue(publicLiquidator.smartProviders(address(smartProvider)));
 
+    vm.expectRevert("insufficient lp collateral");
+    vm.prank(user2);
+    publicLiquidator.redeemSmartCollateral(
+      address(smartProvider),
+      user2Collateral, // lpAmount
+      minAmount0,
+      minAmount1
+    );
     vm.prank(bot);
     publicLiquidator.redeemSmartCollateral(
       address(smartProvider),
@@ -693,7 +702,11 @@ contract SmartProviderTest is Test {
       minAmount0,
       minAmount1
     );
-
+    assertEq(
+      publicLiquidator.lpCollaterals(bot, address(lpCollateral)),
+      0,
+      "lp collateral should be zero after redeem"
+    );
     assertEq(lpCollateral.balanceOf(address(moolah)), 0);
     (, user2Debt, user2Collateral) = moolah.position(marketParams.id(), user2);
     assertEq(user2Debt, 0);
