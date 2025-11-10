@@ -121,7 +121,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     uint256 seizedAssets,
     address pair,
     bytes calldata swapCollateralData
-  ) external {
+  ) external nonReentrant {
     require(pairWhitelist[pair], NotWhitelisted());
     require(isLiquidatable(id, borrower), NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
@@ -189,7 +189,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     bytes calldata swapToken0Data,
     bytes calldata swapToken1Data,
     bytes memory payload
-  ) external returns (uint256, uint256) {
+  ) external nonReentrant returns (uint256, uint256) {
     require(pairWhitelist[token0Pair], NotWhitelisted());
     require(pairWhitelist[token1Pair], NotWhitelisted());
     require(isLiquidatable(id, borrower), NotWhitelisted());
@@ -242,7 +242,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   /// @param id The id of the market.
   /// @param borrower The address of the borrower.
   /// @param seizedAssets The amount of assets to seize.
-  function liquidate(bytes32 id, address borrower, uint256 seizedAssets, uint256 repaidShares) external {
+  function liquidate(bytes32 id, address borrower, uint256 seizedAssets, uint256 repaidShares) external nonReentrant {
     require(isLiquidatable(id, borrower), NotWhitelisted());
     require(seizedAssets == 0 || repaidShares == 0, EitherOneZero());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
@@ -316,7 +316,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     uint256 seizedAssets,
     uint256 repaidShares,
     bytes memory payload
-  ) external returns (uint256, uint256) {
+  ) external nonReentrant returns (uint256, uint256) {
     require(isLiquidatable(id, borrower), NotWhitelisted());
     require(seizedAssets == 0 || repaidShares == 0, EitherOneZero());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
