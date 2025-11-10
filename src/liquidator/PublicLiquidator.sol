@@ -551,16 +551,16 @@ contract PublicLiquidator is
       address token0 = ISmartProvider(arb.smartProvider).token(0);
       address token1 = ISmartProvider(arb.smartProvider).token(1);
 
-      // swap token0 and token1 to loanToken
+      // swap token0 and token1 to loanToken if needed
       uint256 before = arb.loanToken.balanceOf(address(this));
-      if (amount0 > 0) {
+      if (amount0 > 0 && token0 != arb.loanToken) {
         if (token0 != BNB_ADDRESS) token0.safeApprove(arb.token0Pair, amount0);
         uint256 _value = token0 == BNB_ADDRESS ? amount0 : 0;
         (bool success, ) = arb.token0Pair.call{ value: _value }(arb.swapToken0Data);
         require(success, SwapFailed());
       }
 
-      if (amount1 > 0) {
+      if (amount1 > 0 && token1 != arb.loanToken) {
         if (token1 != BNB_ADDRESS) token1.safeApprove(arb.token1Pair, amount1);
         uint256 _value = token1 == BNB_ADDRESS ? amount1 : 0;
         (bool success, ) = arb.token1Pair.call{ value: _value }(arb.swapToken1Data);
