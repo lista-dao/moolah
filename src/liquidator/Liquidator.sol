@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
+import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 
 import "./ILiquidator.sol";
 
@@ -11,7 +12,7 @@ import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
 
-contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
+contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   using MarketParamsLib for IMoolah.MarketParams;
   using SafeTransferLib for address;
 
@@ -154,7 +155,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     uint256 amountIn,
     uint256 amountOutMin,
     bytes calldata swapData
-  ) external onlyRole(BOT) {
+  ) external nonReentrant onlyRole(BOT) {
     require(tokenWhitelist[tokenIn], NotWhitelisted());
     require(tokenWhitelist[tokenOut], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());
@@ -192,7 +193,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     uint256 amountIn,
     uint256 amountOutMin,
     bytes calldata swapData
-  ) external onlyRole(BOT) {
+  ) external nonReentrant onlyRole(BOT) {
     require(tokenWhitelist[BNB_ADDRESS], NotWhitelisted());
     require(tokenWhitelist[tokenOut], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());
@@ -227,7 +228,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     uint256 seizedAssets,
     address pair,
     bytes calldata swapCollateralData
-  ) external onlyRole(BOT) {
+  ) external nonReentrant onlyRole(BOT) {
     require(marketWhitelist[id], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
@@ -262,7 +263,12 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   /// @param borrower The address of the borrower.
   /// @param seizedAssets The amount of assets to seize.
   /// @param repaidShares The amount of shares to repay.
-  function liquidate(bytes32 id, address borrower, uint256 seizedAssets, uint256 repaidShares) external onlyRole(BOT) {
+  function liquidate(
+    bytes32 id,
+    address borrower,
+    uint256 seizedAssets,
+    uint256 repaidShares
+  ) external nonReentrant onlyRole(BOT) {
     require(marketWhitelist[id], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
     IMoolah(MOOLAH).liquidate(
@@ -306,7 +312,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     uint256 seizedAssets,
     uint256 repaidShares,
     bytes memory payload
-  ) external onlyRole(BOT) returns (uint256, uint256) {
+  ) external nonReentrant onlyRole(BOT) returns (uint256, uint256) {
     require(smartProviders[smartProvider], NotWhitelisted());
     address lpToken = ISmartProvider(smartProvider).dexLP();
     require(marketWhitelist[id], NotWhitelisted());
@@ -373,7 +379,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     bytes calldata swapToken0Data,
     bytes calldata swapToken1Data,
     bytes memory payload
-  ) external onlyRole(BOT) returns (uint256, uint256) {
+  ) external nonReentrant onlyRole(BOT) returns (uint256, uint256) {
     require(smartProviders[smartProvider], NotWhitelisted());
     require(marketWhitelist[id], NotWhitelisted());
     require(pairWhitelist[token0Pair], NotWhitelisted());
@@ -413,7 +419,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     uint256 lpAmount,
     uint256 minToken0Amt,
     uint256 minToken1Amt
-  ) external onlyRole(BOT) returns (uint256, uint256) {
+  ) external nonReentrant onlyRole(BOT) returns (uint256, uint256) {
     require(smartProviders[smartProvider], NotWhitelisted());
     return ISmartProvider(smartProvider).redeemLpCollateral(lpAmount, minToken0Amt, minToken1Amt);
   }
