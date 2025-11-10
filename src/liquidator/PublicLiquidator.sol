@@ -42,6 +42,10 @@ contract PublicLiquidator is
   mapping(address => bool) public pairWhitelist;
   mapping(address => bool) public smartProviders;
 
+  /// @dev used to track lp collaterals liquidated but not yet redeemed
+  /// @dev liquidator address => lp collateral token address => amount
+  mapping(address => mapping(address => uint256)) public lpCollaterals;
+
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // bot role
   address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
@@ -273,6 +277,7 @@ contract PublicLiquidator is
   /// @param repaidShares The amount of shares to repay.
   /// @param doTransferColl Whether to transfer the seized collateral to the liquidator.
   /// @notice For smart collateral, pass `false` to keep the collateral in the contract and do `redeemSmartCollateral` later.
+  /// @notice For normal collateral, pass `true` to transfer the collateral to the liquidator. Otherwise, the collateral will be stuck in the contract.
   function liquidateWithCollTransferOpt(
     bytes32 id,
     address borrower,
@@ -326,9 +331,13 @@ contract PublicLiquidator is
     uint256 loanTokenBalanceAfter = params.loanToken.balanceOf(address(this));
     // check if the liquidator made a profit
     if (collateralTokenBalanceAfter <= collateralTokenBalanceBefore) revert NoProfit();
-    // transfer bid collateral to the liquidator
-    if (doTransferColl)
+    if (doTransferColl) {
+      // transfer bid collateral to the liquidator
       params.collateralToken.safeTransfer(msg.sender, collateralTokenBalanceAfter - collateralTokenBalanceBefore);
+    } else {
+      // track lp collateral for the liquidator
+      lpCollaterals[msg.sender][params.collateralToken] += collateralTokenBalanceAfter - collateralTokenBalanceBefore;
+    }
     // transfer unused loan token back to the liquidator
     if (loanTokenBalanceAfter > loanTokenBalanceBefore) {
       params.loanToken.safeTransfer(msg.sender, loanTokenBalanceAfter - loanTokenBalanceBefore);
@@ -455,6 +464,12 @@ contract PublicLiquidator is
     uint256 minToken1Amt
   ) external nonReentrant returns (uint256, uint256) {
     require(smartProviders[smartProvider], NotWhitelisted());
+    address lpCollateral = ISmartProvider(smartProvider).TOKEN();
+    require(lpCollaterals[msg.sender][lpCollateral] >= lpAmount, "insufficient lp collateral");
+
+    // decrease tracked lp collateral
+    lpCollaterals[msg.sender][lpCollateral] -= lpAmount;
+
     return ISmartProvider(smartProvider).redeemLpCollateral(lpAmount, minToken0Amt, minToken1Amt);
   }
 
