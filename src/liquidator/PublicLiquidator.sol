@@ -91,7 +91,7 @@ contract PublicLiquidator is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   function setMarketUserWhitelist(bytes32 id, address user, bool status) external onlyRole(BOT) {
     require(IMoolah(MOOLAH).idToMarketParams(id).loanToken != address(0), "Invalid market");
     require(
-      !marketWhitelist[id] || !IMoolah(MOOLAH).isLiquidationWhitelist(id, address(0)),
+      !marketWhitelist[id] && !IMoolah(MOOLAH).isLiquidationWhitelist(id, address(0)),
       "market is already open for liquidate"
     );
     require(marketUserWhitelist[id][user] != status, WhitelistSameStatus());
