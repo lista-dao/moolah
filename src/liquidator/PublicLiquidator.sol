@@ -136,7 +136,7 @@ contract PublicLiquidator is
   /// @param borrower The address of the borrower.
   /// @param seizedAssets The amount of assets to seize.
   /// @param pair The address of the pair.
-  /// @param swapCollateralData The swap data.
+  /// @param swapCollateralData The swap data passed to low level call for swapping collateral to loan. Should be obtained from aggregator API like 1inch with slippage considered.
   function flashLiquidate(
     bytes32 id,
     address borrower,
@@ -197,8 +197,8 @@ contract PublicLiquidator is
   /// @param seizedAssets The amount of assets to seize.
   /// @param token0Pair The address of the token0 pair.
   /// @param token1Pair The address of the token1 pair.
-  /// @param swapToken0Data The swap data for token0.
-  /// @param swapToken1Data The swap data for token1.
+  /// @param swapToken0Data The swap data passed to low level swap call for token0 swapping to loan token. Should be obtained from aggregator API like 1inch with slippage considered.
+  /// @param swapToken1Data The swap data passed to low level swap call for token1 swapping to loan token. Should be obtained from aggregator API like 1inch with slippage considered.
   /// @param payload The payload for the liquidation (min amounts for SmartProvider liquidation).
   /// @return The actual seized assets and repaid assets.
   function flashLiquidateSmartCollateral(
@@ -519,7 +519,7 @@ contract PublicLiquidator is
 
   /// @dev the function will be called by the Moolah contract when liquidate.
   /// @param repaidAssets The amount of assets repaid.
-  /// @param data The callback data.
+  /// @param data The callback data encoded with MoolahLiquidateData struct.
   function onMoolahLiquidate(uint256 repaidAssets, bytes calldata data) external {
     require(msg.sender == MOOLAH, OnlyMoolah());
     MoolahLiquidateData memory arb = abi.decode(data, (MoolahLiquidateData));

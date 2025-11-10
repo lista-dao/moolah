@@ -147,7 +147,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
   /// @param tokenOut The address of the output token.
   /// @param amountIn The amount to sell.
   /// @param amountOutMin The minimum amount to receive.
-  /// @param swapData The swap data.
+  /// @param swapData The swap data passed to low level swap call. Should be obtained from aggregator API like 1inch.
   function sellToken(
     address pair,
     address tokenIn,
@@ -186,7 +186,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
   /// @param tokenOut The address of the output token.
   /// @param amountIn The BNB amount to sell.
   /// @param amountOutMin The minimum amount to receive.
-  /// @param swapData The swap data.
+  /// @param swapData The swap data passed to low level swap call. Should be obtained from aggregator API like 1inch.
   function sellBNB(
     address pair,
     address tokenOut,
@@ -221,7 +221,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
   /// @param borrower The address of the borrower.
   /// @param seizedAssets The amount of assets to seize.
   /// @param pair The address of the pair.
-  /// @param swapCollateralData The swap data to swap collateral to loan token.
+  /// @param swapCollateralData The swap data passed to low level swap call for collateral swapping to loan token. Should be obtained from aggregator API like 1inch with slippage considered.
   function flashLiquidate(
     bytes32 id,
     address borrower,
@@ -365,8 +365,8 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
   /// @param seizedAssets The amount of assets to seize.
   /// @param token0Pair The address of the token0 pair.
   /// @param token1Pair The address of the token1 pair.
-  /// @param swapToken0Data The swap data for token0.
-  /// @param swapToken1Data The swap data for token1.
+  /// @param swapToken0Data The swap data passed to low level swap call for token0 swapping to loan token. Should be obtained from aggregator API like 1inch with slippage considered.
+  /// @param swapToken1Data The swap data passed to low level swap call for token1 swapping to loan token. Should be obtained from aggregator API like 1inch with slippage considered.
   /// @param payload The payload for the liquidation (min amounts for SmartProvider liquidation).
   /// @return The actual seized assets and repaid assets.
   function flashLiquidateSmartCollateral(
