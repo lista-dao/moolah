@@ -9,8 +9,7 @@ import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 contract MoolahVaultDeploy is Script {
   address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
 
-  address OIK = 0xB035723D62e0e2ea7499D76355c9D560f13ba404;
-  address EGL1 = 0xf4B385849f2e817E92bffBfB9AEb48F950Ff4444;
+  address Take = 0xE747E54783Ba3F77a8E5251a3cBA19EBe9C0E197;
 
   MoolahVault impl = MoolahVault(0xA1f832c7C7ECf91A53b4ff36E0ABdb5133C15982);
 
@@ -20,11 +19,9 @@ contract MoolahVaultDeploy is Script {
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
 
-    address abProxy = deployVault(deployer, OIK, "OIK Vault", "AB");
-    address bProxy = deployVault(deployer, EGL1, "EGL1 Vault", "B");
+    address takeProxy = deployVault(deployer, Take, "Take Vault", "Take");
 
-    console.log("OIK Vault proxy: ", abProxy);
-    console.log("EGL1 Vault proxy: ", bProxy);
+    console.log("Take Vault proxy: ", takeProxy);
     vm.stopBroadcast();
   }
 
