@@ -26,6 +26,7 @@ contract MoolahVaultConfigDeploy is Script {
   address SPA = 0x1A9Fd6eC3144Da3Dd6Ea13Ec1C25C58423a379b1;
   address Aster = 0x000Ae314E2A2172a039B26378814C252734f556A;
   address CDL = 0x84575b87395c970F1F48E87d87a8dB36Ed653716;
+  address AT = 0x9be61A38725b265BC3eb7Bfdf17AfDFc9d26C130;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
@@ -51,21 +52,21 @@ contract MoolahVaultConfigDeploy is Script {
     console.log("Deployer: ", deployer);
 
     MarketParams memory BTCBParams = MarketParams({
-      loanToken: CDL,
+      loanToken: AT,
       collateralToken: BTCB,
       oracle: multiOracle,
       irm: irm,
       lltv: lltv50
     });
     MarketParams memory AsterParams = MarketParams({
-      loanToken: CDL,
+      loanToken: AT,
       collateralToken: Aster,
       oracle: multiOracle,
       irm: irm,
       lltv: lltv50
     });
     MarketParams memory USDTParams = MarketParams({
-      loanToken: CDL,
+      loanToken: AT,
       collateralToken: USDT,
       oracle: multiOracle,
       irm: irm,
@@ -84,9 +85,9 @@ contract MoolahVaultConfigDeploy is Script {
 
     vault.setFee(fee);
 
-    vault.setCap(BTCBParams, 5_000_000 ether);
+    vault.setCap(BTCBParams, 4_000_000 ether);
     vault.setCap(AsterParams, 2_000_000 ether);
-    vault.setCap(USDTParams, 5_000_000 ether);
+    vault.setCap(USDTParams, 4_000_000 ether);
 
     Id BTCBId = BTCBParams.id();
     Id AsterId = AsterParams.id();
