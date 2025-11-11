@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
+import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 
 import "./ILiquidator.sol";
 
@@ -11,8 +12,9 @@ import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
 
-contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
+contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   using MarketParamsLib for IMoolah.MarketParams;
+  using SafeTransferLib for address;
 
   /// @dev Thrown when passing the zero address.
   string internal constant ZERO_ADDRESS = "zero address";
@@ -27,6 +29,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   mapping(address => bool) public tokenWhitelist;
   mapping(bytes32 => bool) public marketWhitelist;
   mapping(address => bool) public pairWhitelist;
+  mapping(address => bool) public smartProviders;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // manager role
@@ -35,7 +38,8 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   event TokenWhitelistChanged(address indexed token, bool added);
   event MarketWhitelistChanged(bytes32 id, bool added);
   event PairWhitelistChanged(address pair, bool added);
-  event SellToken(address pair, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin);
+  event SmartProvidersChanged(address provider, bool added);
+  event SellToken(address pair, address tokenIn, address tokenOut, uint256 amountIn, uint256 actualAmoutOut);
   event SmartLiquidation(
     bytes32 indexed id,
     address indexed lpToken,
@@ -75,12 +79,12 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   /// @param token The address of the token.
   /// @param amount The amount to withdraw.
   function withdrawERC20(address token, uint256 amount) external onlyRole(MANAGER) {
-    SafeTransferLib.safeTransfer(token, msg.sender, amount);
+    token.safeTransfer(msg.sender, amount);
   }
   /// @dev withdraws ETH.
   /// @param amount The amount to withdraw.
   function withdrawETH(uint256 amount) external onlyRole(MANAGER) {
-    SafeTransferLib.safeTransferETH(msg.sender, amount);
+    msg.sender.safeTransferETH(amount);
   }
 
   /// @dev sets the token whitelist.
@@ -109,6 +113,17 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     }
   }
 
+  /// @dev sets the smart collateral providers.
+  /// @param providers The array of smart collateral providers.
+  /// @param status The status of the providers.
+  function batchSetSmartProviders(address[] calldata providers, bool status) external onlyRole(MANAGER) {
+    for (uint256 i = 0; i < providers.length; i++) {
+      address provider = providers[i];
+      smartProviders[provider] = status;
+      emit SmartProvidersChanged(provider, status);
+    }
+  }
+
   function _setMarketWhitelist(bytes32 id, bool status) internal {
     require(IMoolah(MOOLAH).idToMarketParams(id).loanToken != address(0), "Invalid market");
     require(marketWhitelist[id] != status, WhitelistSameStatus());
@@ -132,7 +147,7 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   /// @param tokenOut The address of the output token.
   /// @param amountIn The amount to sell.
   /// @param amountOutMin The minimum amount to receive.
-  /// @param swapData The swap data.
+  /// @param swapData The swap data passed to low level swap call. Should be obtained from aggregator API like 1inch.
   function sellToken(
     address pair,
     address tokenIn,
@@ -140,26 +155,28 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     uint256 amountIn,
     uint256 amountOutMin,
     bytes calldata swapData
-  ) external onlyRole(BOT) {
+  ) external nonReentrant onlyRole(BOT) {
     require(tokenWhitelist[tokenIn], NotWhitelisted());
     require(tokenWhitelist[tokenOut], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());
     require(amountIn > 0, "amountIn zero");
 
-    require(SafeTransferLib.balanceOf(tokenIn, address(this)) >= amountIn, ExceedAmount());
+    require(tokenIn.balanceOf(address(this)) >= amountIn, ExceedAmount());
 
-    uint256 beforeTokenIn = SafeTransferLib.balanceOf(tokenIn, address(this));
-    uint256 beforeTokenOut = SafeTransferLib.balanceOf(tokenOut, address(this));
+    uint256 beforeTokenIn = tokenIn.balanceOf(address(this));
+    uint256 beforeTokenOut = tokenOut.balanceOf(address(this));
 
-    SafeTransferLib.safeApprove(tokenIn, pair, amountIn);
+    tokenIn.safeApprove(pair, amountIn);
     (bool success, ) = pair.call(swapData);
     require(success, SwapFailed());
 
-    uint256 actualAmountIn = beforeTokenIn - SafeTransferLib.balanceOf(tokenIn, address(this));
-    uint256 actualAmountOut = SafeTransferLib.balanceOf(tokenOut, address(this)) - beforeTokenOut;
+    uint256 actualAmountIn = beforeTokenIn - tokenIn.balanceOf(address(this));
+    uint256 actualAmountOut = tokenOut.balanceOf(address(this)) - beforeTokenOut;
 
     require(actualAmountIn <= amountIn, ExceedAmount());
     require(actualAmountOut >= amountOutMin, NoProfit());
+
+    tokenIn.safeApprove(pair, 0);
 
     emit SellToken(pair, tokenIn, tokenOut, actualAmountIn, actualAmountOut);
   }
@@ -169,14 +186,14 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   /// @param tokenOut The address of the output token.
   /// @param amountIn The BNB amount to sell.
   /// @param amountOutMin The minimum amount to receive.
-  /// @param swapData The swap data.
+  /// @param swapData The swap data passed to low level swap call. Should be obtained from aggregator API like 1inch.
   function sellBNB(
     address pair,
     address tokenOut,
     uint256 amountIn,
     uint256 amountOutMin,
     bytes calldata swapData
-  ) external onlyRole(BOT) {
+  ) external nonReentrant onlyRole(BOT) {
     require(tokenWhitelist[BNB_ADDRESS], NotWhitelisted());
     require(tokenWhitelist[tokenOut], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());
@@ -185,13 +202,13 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     require(address(this).balance >= amountIn, ExceedAmount());
 
     uint256 beforeTokenIn = address(this).balance;
-    uint256 beforeTokenOut = SafeTransferLib.balanceOf(tokenOut, address(this));
+    uint256 beforeTokenOut = tokenOut.balanceOf(address(this));
 
     (bool success, ) = pair.call{ value: amountIn }(swapData);
     require(success, SwapFailed());
 
     uint256 actualAmountIn = beforeTokenIn - address(this).balance;
-    uint256 actualAmountOut = SafeTransferLib.balanceOf(tokenOut, address(this)) - beforeTokenOut;
+    uint256 actualAmountOut = tokenOut.balanceOf(address(this)) - beforeTokenOut;
 
     require(actualAmountIn <= amountIn, ExceedAmount());
     require(actualAmountOut >= amountOutMin, NoProfit());
@@ -204,14 +221,14 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   /// @param borrower The address of the borrower.
   /// @param seizedAssets The amount of assets to seize.
   /// @param pair The address of the pair.
-  /// @param swapCollateralData The swap data to swap collateral to loan token.
+  /// @param swapCollateralData The swap data passed to low level swap call for collateral swapping to loan token. Should be obtained from aggregator API like 1inch with slippage considered.
   function flashLiquidate(
     bytes32 id,
     address borrower,
     uint256 seizedAssets,
     address pair,
     bytes calldata swapCollateralData
-  ) external onlyRole(BOT) {
+  ) external nonReentrant onlyRole(BOT) {
     require(marketWhitelist[id], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
@@ -245,12 +262,13 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   /// @param id The id of the market.
   /// @param borrower The address of the borrower.
   /// @param seizedAssets The amount of assets to seize.
+  /// @param repaidShares The amount of shares to repay.
   function liquidate(
     bytes32 id,
     address borrower,
     uint256 seizedAssets,
     uint256 repaidShares
-  ) external payable onlyRole(BOT) {
+  ) external nonReentrant onlyRole(BOT) {
     require(marketWhitelist[id], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
     IMoolah(MOOLAH).liquidate(
@@ -294,7 +312,8 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     uint256 seizedAssets,
     uint256 repaidShares,
     bytes memory payload
-  ) external onlyRole(BOT) returns (uint256, uint256) {
+  ) external nonReentrant onlyRole(BOT) returns (uint256, uint256) {
+    require(smartProviders[smartProvider], NotWhitelisted());
     address lpToken = ISmartProvider(smartProvider).dexLP();
     require(marketWhitelist[id], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
@@ -346,8 +365,8 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   /// @param seizedAssets The amount of assets to seize.
   /// @param token0Pair The address of the token0 pair.
   /// @param token1Pair The address of the token1 pair.
-  /// @param swapToken0Data The swap data for token0.
-  /// @param swapToken1Data The swap data for token1.
+  /// @param swapToken0Data The swap data passed to low level swap call for token0 swapping to loan token. Should be obtained from aggregator API like 1inch with slippage considered.
+  /// @param swapToken1Data The swap data passed to low level swap call for token1 swapping to loan token. Should be obtained from aggregator API like 1inch with slippage considered.
   /// @param payload The payload for the liquidation (min amounts for SmartProvider liquidation).
   /// @return The actual seized assets and repaid assets.
   function flashLiquidateSmartCollateral(
@@ -360,7 +379,8 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     bytes calldata swapToken0Data,
     bytes calldata swapToken1Data,
     bytes memory payload
-  ) external onlyRole(BOT) returns (uint256, uint256) {
+  ) external nonReentrant onlyRole(BOT) returns (uint256, uint256) {
+    require(smartProviders[smartProvider], NotWhitelisted());
     require(marketWhitelist[id], NotWhitelisted());
     require(pairWhitelist[token0Pair], NotWhitelisted());
     require(pairWhitelist[token1Pair], NotWhitelisted());
@@ -388,6 +408,22 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     return IMoolah(MOOLAH).liquidate(params, borrower, seizedAssets, 0, abi.encode(callback));
   }
 
+  /// @dev redeems smart collateral LP tokens.
+  /// @param smartProvider The address of the smart collateral provider.
+  /// @param lpAmount The amount of LP collateral tokens to redeem.
+  /// @param minToken0Amt The minimum amount of token0 to receive.
+  /// @param minToken1Amt The minimum amount of token1 to receive.
+  /// @return The amount of token0 and token1 redeemed.
+  function redeemSmartCollateral(
+    address smartProvider,
+    uint256 lpAmount,
+    uint256 minToken0Amt,
+    uint256 minToken1Amt
+  ) external nonReentrant onlyRole(BOT) returns (uint256, uint256) {
+    require(smartProviders[smartProvider], NotWhitelisted());
+    return ISmartProvider(smartProvider).redeemLpCollateral(lpAmount, minToken0Amt, minToken1Amt);
+  }
+
   /// @dev the function will be called by the Moolah contract when liquidate.
   /// @param repaidAssets The amount of assets repaid.
   /// @param data The callback data.
@@ -396,17 +432,17 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
     MoolahLiquidateData memory arb = abi.decode(data, (MoolahLiquidateData));
     if (arb.swapCollateral) {
       require(!arb.swapSmartCollateral, "only swap collateral or smart collateral");
-      uint256 before = SafeTransferLib.balanceOf(arb.loanToken, address(this));
+      uint256 before = arb.loanToken.balanceOf(address(this));
 
-      SafeTransferLib.safeApprove(arb.collateralToken, arb.collateralPair, arb.seized);
+      arb.collateralToken.safeApprove(arb.collateralPair, arb.seized);
       (bool success, ) = arb.collateralPair.call(arb.swapCollateralData);
       require(success, SwapFailed());
 
-      uint256 out = SafeTransferLib.balanceOf(arb.loanToken, address(this)) - before;
+      uint256 out = arb.loanToken.balanceOf(address(this)) - before;
 
       if (out < repaidAssets) revert NoProfit();
 
-      SafeTransferLib.safeApprove(arb.collateralToken, arb.collateralPair, 0);
+      arb.collateralToken.safeApprove(arb.collateralPair, 0);
     } else if (arb.swapSmartCollateral) {
       // redeem lp
       (uint256 amount0, uint256 amount1) = ISmartProvider(arb.smartProvider).redeemLpCollateral(
@@ -418,29 +454,29 @@ contract Liquidator is UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
       address token0 = ISmartProvider(arb.smartProvider).token(0);
       address token1 = ISmartProvider(arb.smartProvider).token(1);
 
-      // swap token0 and token1 to loanToken
-      uint256 before = SafeTransferLib.balanceOf(arb.loanToken, address(this));
-      if (amount0 > 0) {
-        if (token0 != BNB_ADDRESS) SafeTransferLib.safeApprove(token0, arb.token0Pair, amount0);
+      // swap token0 and token1 to loanToken if needed
+      uint256 before = arb.loanToken.balanceOf(address(this));
+      if (amount0 > 0 && token0 != arb.loanToken) {
+        if (token0 != BNB_ADDRESS) token0.safeApprove(arb.token0Pair, amount0);
         uint256 _value = token0 == BNB_ADDRESS ? amount0 : 0;
         (bool success, ) = arb.token0Pair.call{ value: _value }(arb.swapToken0Data);
         require(success, SwapFailed());
       }
 
-      if (amount1 > 0) {
-        if (token1 != BNB_ADDRESS) SafeTransferLib.safeApprove(token1, arb.token1Pair, amount1);
+      if (amount1 > 0 && token1 != arb.loanToken) {
+        if (token1 != BNB_ADDRESS) token1.safeApprove(arb.token1Pair, amount1);
         uint256 _value = token1 == BNB_ADDRESS ? amount1 : 0;
         (bool success, ) = arb.token1Pair.call{ value: _value }(arb.swapToken1Data);
         require(success, SwapFailed());
       }
-      uint256 out = SafeTransferLib.balanceOf(arb.loanToken, address(this)) - before;
+      uint256 out = arb.loanToken.balanceOf(address(this)) - before;
 
       if (out < repaidAssets) revert NoProfit();
-      if (token0 != BNB_ADDRESS) SafeTransferLib.safeApprove(token0, arb.token0Pair, 0);
-      if (token1 != BNB_ADDRESS) SafeTransferLib.safeApprove(token1, arb.token1Pair, 0);
+      if (token0 != BNB_ADDRESS) token0.safeApprove(arb.token0Pair, 0);
+      if (token1 != BNB_ADDRESS) token1.safeApprove(arb.token1Pair, 0);
     }
 
-    SafeTransferLib.safeApprove(arb.loanToken, MOOLAH, repaidAssets);
+    arb.loanToken.safeApprove(MOOLAH, repaidAssets);
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}

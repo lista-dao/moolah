@@ -10,7 +10,12 @@ contract MockOneInch is Test {
 
   function swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin) external payable {
     if (tokenIn == BNB_ADDRESS) {
-      require(msg.value == amountIn, "INCORRECT_MSG_VALUE");
+      require(msg.value >= amountIn, "INCORRECT_MSG_VALUE");
+      // Refund excess BNB
+      if (msg.value > amountIn) {
+        (bool success, ) = msg.sender.call{ value: msg.value - amountIn }("");
+        require(success, "BNB_REFUND_FAILED");
+      }
     } else {
       require(msg.value == 0, "MSG_VALUE_MUST_BE_0");
       IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
