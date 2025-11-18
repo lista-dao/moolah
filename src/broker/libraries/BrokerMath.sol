@@ -267,7 +267,7 @@ library BrokerMath {
     address user,
     uint256 rate,
     uint256[] calldata posIds
-  ) public view returns (FixedLoanPosition[] memory, DynamicLoanPosition memory, uint256) {
+  ) public returns (FixedLoanPosition[] memory, DynamicLoanPosition memory, uint256) {
     IBroker broker = IBroker(address(this));
     uint256[] memory posIdToRemove = new uint256[](posIds.length);
     // the additional principal will be add into the dynamic position
@@ -296,6 +296,15 @@ library BrokerMath {
       _interest += getAccruedInterestForFixedPosition(position) - position.interestRepaid;
       // save it and remove later
       posIdToRemove[i] = posId;
+      // broadcast event
+      emit IBroker.FixedPositionRefinanced(
+        user,
+        posId,
+        position.principal - position.principalRepaid,
+        position.start,
+        position.end,
+        position.apr
+      );
     }
     //
     FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(user);
