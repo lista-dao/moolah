@@ -166,8 +166,8 @@ contract InterestRateModelTest is Test {
     market.totalBorrowAssets = uint128(uint256(ConstantsLib.TARGET_UTILIZATION + 1 ether) / 2); // Error = 50%
     irm.borrowRate(marketParams, market);
 
-    // Expected rate: 4% * exp(50 * 45 / 365 * 50%) = 87.22%.
-    assertApproxEqRel(irm.rateAtTarget(marketParams.id()), int256(0.8722 ether) / 365 days, 0.005 ether);
+    // Expected rate: 30% / 4 = 7.5%.
+    assertApproxEqRel(irm.rateAtTarget(marketParams.id()), int256(0.3 ether) / 4 / 365 days, 0.005 ether);
   }
 
   function testRateAfter45DaysUtilizationAboveTargetPingEveryMinute() public {
@@ -199,8 +199,8 @@ contract InterestRateModelTest is Test {
     );
 
     int256 rateAtTarget = irm.rateAtTarget(marketParams.id());
-    // Expected rate: 4% * exp(50 * 45 / 365 * 50%) = 87.22%.
-    int256 expectedRateAtTarget = int256(0.8722 ether) / 365 days;
+    // Expected rate: 30% / 4 = 7.5%.
+    int256 expectedRateAtTarget = int256(0.3 ether) / 4 / 365 days;
     assertGe(rateAtTarget, expectedRateAtTarget);
     // The rate is tolerated to be +8% (relatively) because of the pings every minute.
     assertApproxEqRel(rateAtTarget, expectedRateAtTarget, 0.08 ether, "expectedRateAtTarget");
@@ -449,12 +449,15 @@ contract InterestRateModelTest is Test {
     int256 linearAdaptation = speed * int256(elapsed);
     int256 adaptationMultiplier = ExpLib.wExp(linearAdaptation);
     return
-      (rateAtTarget > 0)
-        ? rateAtTarget.wMulToZero(adaptationMultiplier).bound(
-          ConstantsLib.MIN_RATE_AT_TARGET,
-          ConstantsLib.MAX_RATE_AT_TARGET
-        )
-        : ConstantsLib.INITIAL_RATE_AT_TARGET;
+      min(
+        (rateAtTarget > 0)
+          ? rateAtTarget.wMulToZero(adaptationMultiplier).bound(
+            ConstantsLib.MIN_RATE_AT_TARGET,
+            ConstantsLib.MAX_RATE_AT_TARGET
+          )
+          : ConstantsLib.INITIAL_RATE_AT_TARGET,
+        ConstantsLib.DEFAULT_RATE_CAP / 4
+      );
   }
 
   function _expectedAvgRate(Id id, Market memory market) internal view returns (uint256) {
@@ -498,5 +501,9 @@ contract InterestRateModelTest is Test {
     } else {
       err = (utilization - ConstantsLib.TARGET_UTILIZATION).wDivToZero(ConstantsLib.TARGET_UTILIZATION);
     }
+  }
+
+  function min(int256 a, uint256 b) internal pure returns (int256) {
+    return a < int256(b) ? a : int256(b);
   }
 }
