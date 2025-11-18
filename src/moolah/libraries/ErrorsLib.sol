@@ -93,4 +93,6 @@ library ErrorsLib {
   string internal constant REMAIN_BORROW_TOO_LOW = "remain borrow too low";
 
   string internal constant TOKEN_BLACKLISTED = "token blacklisted";
+
+  string internal constant BLACKLISTED = "blacklisted";
 }
