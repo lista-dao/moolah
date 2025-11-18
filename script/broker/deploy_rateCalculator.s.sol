@@ -3,15 +3,19 @@ pragma solidity 0.8.28;
 
 import "forge-std/Script.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import { FixedRateIrm } from "../src/interest-rate-model/FixedRateIrm.sol";
+import { RateCalculator } from "../../src/broker/RateCalculator.sol";
 
-contract DeployFixedRateIRM is Script {
+contract DeployRateCalculator is Script {
   address timelock;
   address manager;
+  address pauser;
+  address bot;
 
   function setUp() public {
     timelock = vm.envAddress("TIMELOCK");
     manager = vm.envAddress("MANAGER");
+    pauser = vm.envAddress("PAUSER");
+    bot = vm.envAddress("BOT");
   }
 
   function run() public {
@@ -20,22 +24,22 @@ contract DeployFixedRateIRM is Script {
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
 
-    // Deploy FixedRateIRM implementation
-    FixedRateIrm impl = new FixedRateIrm();
-    console.log("FixedRateIRM implementation: ", address(impl));
+    // Deploy RateCalculator implementation
+    RateCalculator impl = new RateCalculator();
+    console.log("RateCalculator implementation: ", address(impl));
 
-    // Deploy FixedRateIRM proxy
+    // Deploy RateCalculator proxy
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer)
+      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, pauser, bot)
     );
-    console.log("FixedRateIRM proxy: ", address(proxy));
+    console.log("RateCalculator proxy: ", address(proxy));
 
     // grant roles to manager and admin
     bytes32 MANAGER = keccak256("MANAGER");
     bytes32 DEFAULT_ADMIN_ROLE = 0x0000000000000000000000000000000000000000000000000000000000000000;
-    FixedRateIrm(address(proxy)).grantRole(MANAGER, manager);
-    FixedRateIrm(address(proxy)).grantRole(DEFAULT_ADMIN_ROLE, timelock);
+    RateCalculator(address(proxy)).grantRole(MANAGER, manager);
+    RateCalculator(address(proxy)).grantRole(DEFAULT_ADMIN_ROLE, timelock);
 
     vm.stopBroadcast();
   }

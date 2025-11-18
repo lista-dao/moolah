@@ -23,7 +23,10 @@ import { MathLib, WAD } from "./libraries/MathLib.sol";
 import { SharesMathLib } from "./libraries/SharesMathLib.sol";
 import { MarketParamsLib } from "./libraries/MarketParamsLib.sol";
 import { SafeTransferLib } from "./libraries/SafeTransferLib.sol";
+import { PriceLib } from "./libraries/PriceLib.sol";
+import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import { IProvider } from "../provider/interfaces/IProvider.sol";
+import { IBrokerBase } from "../broker/interfaces/IBroker.sol";
 
 /// @title Moolah
 /// @author Lista DAO
@@ -76,6 +79,10 @@ contract Moolah is
 
   /// @inheritdoc IMoolahBase
   mapping(address => bool) public flashLoanTokenBlacklist;
+
+  /// @inheritdoc IMoolahBase
+  // fixed rate & fixed term brokers
+  mapping(Id => address) public brokers;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant PAUSER = keccak256("PAUSER"); // pauser role
@@ -256,6 +263,25 @@ contract Moolah is
     emit EventsLib.SetFlashLoanTokenBlacklist(token, isBlacklisted);
   }
 
+  /// @inheritdoc IMoolahBase
+  function setMarketBroker(Id id, address broker, bool isAddition) external onlyRole(MANAGER) {
+    require(broker != address(0), ErrorsLib.ZERO_ADDRESS);
+    if (isAddition) {
+      require(brokers[id] != broker, ErrorsLib.ALREADY_SET);
+      require(
+        IBrokerBase(broker).LOAN_TOKEN() == idToMarketParams[id].loanToken &&
+          IBrokerBase(broker).COLLATERAL_TOKEN() == idToMarketParams[id].collateralToken &&
+          Id.unwrap(IBrokerBase(broker).MARKET_ID()) == Id.unwrap(id),
+        ErrorsLib.INVALID_BROKER
+      );
+      brokers[id] = broker;
+    } else {
+      require(brokers[id] == broker, ErrorsLib.NOT_SET);
+      delete brokers[id];
+    }
+    emit EventsLib.SetMarketBroker(id, broker, isAddition);
+  }
+
   /* MARKET CREATION */
 
   /// @inheritdoc IMoolahBase
@@ -368,7 +394,11 @@ contract Moolah is
     require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
     // No need to verify that onBehalf != address(0) thanks to the following authorization check.
     address provider = providers[id][marketParams.loanToken];
-    if (provider == msg.sender) {
+    address broker = brokers[id];
+    // if broker exists, only broker can borrow
+    if (broker != address(0)) {
+      require(msg.sender == broker && receiver == broker, ErrorsLib.NOT_BROKER);
+    } else if (provider == msg.sender) {
       require(receiver == provider, ErrorsLib.NOT_PROVIDER);
     } else {
       require(_isSenderAuthorized(onBehalf), ErrorsLib.UNAUTHORIZED);
@@ -407,6 +437,12 @@ contract Moolah is
     require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
     require(UtilsLib.exactlyOneZero(assets, shares), ErrorsLib.INCONSISTENT_INPUT);
     require(onBehalf != address(0), ErrorsLib.ZERO_ADDRESS);
+
+    // if a broker is assigned for this market, only broker can repay
+    address broker = brokers[id];
+    if (broker != address(0)) {
+      require(msg.sender == broker, ErrorsLib.NOT_BROKER);
+    }
 
     _accrueInterest(marketParams, id);
 
@@ -502,11 +538,10 @@ contract Moolah is
     require(_checkLiquidationWhiteList(id, msg.sender), ErrorsLib.NOT_LIQUIDATION_WHITELIST);
     require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
     require(UtilsLib.exactlyOneZero(seizedAssets, repaidShares), ErrorsLib.INCONSISTENT_INPUT);
-
     _accrueInterest(marketParams, id);
 
     {
-      uint256 collateralPrice = getPrice(marketParams);
+      uint256 collateralPrice = _getPrice(marketParams, borrower);
 
       require(!_isHealthy(marketParams, id, borrower, collateralPrice), ErrorsLib.HEALTHY_POSITION);
 
@@ -531,7 +566,6 @@ contract Moolah is
       }
     }
     uint256 repaidAssets = repaidShares.toAssetsUp(market[id].totalBorrowAssets, market[id].totalBorrowShares);
-
     position[id][borrower].borrowShares -= repaidShares.toUint128();
     market[id].totalBorrowShares -= repaidShares.toUint128();
     market[id].totalBorrowAssets = UtilsLib.zeroFloorSub(market[id].totalBorrowAssets, repaidAssets).toUint128();
@@ -693,7 +727,7 @@ contract Moolah is
   /// @dev Assumes that the inputs `marketParams` and `id` match.
   function _isHealthy(MarketParams memory marketParams, Id id, address borrower) internal view returns (bool) {
     if (position[id][borrower].borrowShares == 0) return true;
-    uint256 collateralPrice = getPrice(marketParams);
+    uint256 collateralPrice = _getPrice(marketParams, borrower);
 
     return _isHealthy(marketParams, id, borrower, collateralPrice);
   }
@@ -725,15 +759,27 @@ contract Moolah is
     return maxBorrow >= borrowed;
   }
 
-  function getPrice(MarketParams memory marketParams) public view returns (uint256) {
-    IOracle _oracle = IOracle(marketParams.oracle);
-    uint256 baseTokenDecimals = IERC20Metadata(marketParams.collateralToken).decimals();
-    uint256 quotaTokenDecimals = IERC20Metadata(marketParams.loanToken).decimals();
-    uint256 basePrice = _oracle.peek(marketParams.collateralToken);
-    uint256 quotaPrice = _oracle.peek(marketParams.loanToken);
+  function getPrice(MarketParams memory marketParams) external view returns (uint256) {
+    return _getPrice(marketParams, address(0));
+  }
 
-    uint256 scaleFactor = 10 ** (36 + quotaTokenDecimals - baseTokenDecimals);
-    return scaleFactor.mulDivDown(basePrice, quotaPrice);
+  /// @dev Returns the price of the collateral asset in terms of the loan asset
+  /// @notice if there is a broker for the market and user address is non-zero
+  ///         will return a price which might deviates from the market price according to user's position
+  /// @param marketParams The market parameters
+  /// @param user The user address
+  /// @return The price of the collateral asset in terms of the loan asset
+  function _getPrice(MarketParams memory marketParams, address user) public view returns (uint256) {
+    address broker = brokers[marketParams.id()];
+
+    (uint256 basePrice, uint256 quotePrice, uint256 baseTokenDecimals, uint256 quoteTokenDecimals) = PriceLib._getPrice(
+      marketParams,
+      user,
+      broker
+    );
+
+    uint256 scaleFactor = 10 ** (36 + quoteTokenDecimals - baseTokenDecimals);
+    return scaleFactor.mulDivDown(basePrice, quotePrice);
   }
 
   /// @inheritdoc IMoolahBase
@@ -803,7 +849,7 @@ contract Moolah is
     if (borrowAssets >= minLoan(marketParams)) {
       return true;
     }
-    return _isHealthy(marketParams, marketParams.id(), account, getPrice(marketParams));
+    return _isHealthy(marketParams, marketParams.id(), account, _getPrice(marketParams, account));
   }
 
   /// @inheritdoc IMoolahBase
