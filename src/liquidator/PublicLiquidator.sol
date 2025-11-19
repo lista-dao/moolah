@@ -466,8 +466,33 @@ contract PublicLiquidator is
 
     // decrease tracked lp collateral
     lpCollaterals[msg.sender][lpCollateral] -= lpAmount;
+    (uint256 token0Amount, uint256 token1Amount) = ISmartProvider(smartProvider).redeemLpCollateral(
+      lpAmount,
+      minToken0Amt,
+      minToken1Amt
+    );
 
-    return ISmartProvider(smartProvider).redeemLpCollateral(lpAmount, minToken0Amt, minToken1Amt);
+    // transfer redeemed token0 to msg.sender
+    if (token0Amount > 0) {
+      address token0 = ISmartProvider(smartProvider).token(0);
+      if (token0 == BNB_ADDRESS) {
+        msg.sender.safeTransferETH(token0Amount);
+      } else {
+        token0.safeTransfer(msg.sender, token0Amount);
+      }
+    }
+
+    // transfer redeemed token1 to msg.sender
+    if (token1Amount > 0) {
+      address token1 = ISmartProvider(smartProvider).token(1);
+      if (token1 == BNB_ADDRESS) {
+        msg.sender.safeTransferETH(token1Amount);
+      } else {
+        token1.safeTransfer(msg.sender, token1Amount);
+      }
+    }
+
+    return (token0Amount, token1Amount);
   }
 
   /// @dev calculates the amount of loan token needed to repay the shares.
