@@ -444,6 +444,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
 
       arb.collateralToken.safeApprove(arb.collateralPair, 0);
     } else if (arb.swapSmartCollateral) {
+      uint256 before = arb.loanToken.balanceOf(address(this));
       // redeem lp
       (uint256 amount0, uint256 amount1) = ISmartProvider(arb.smartProvider).redeemLpCollateral(
         arb.seized,
@@ -455,7 +456,6 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
       address token1 = ISmartProvider(arb.smartProvider).token(1);
 
       // swap token0 and token1 to loanToken if needed
-      uint256 before = arb.loanToken.balanceOf(address(this));
       if (amount0 > 0 && token0 != arb.loanToken) {
         if (token0 != BNB_ADDRESS) token0.safeApprove(arb.token0Pair, amount0);
         uint256 _value = token0 == BNB_ADDRESS ? amount0 : 0;
