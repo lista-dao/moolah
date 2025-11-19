@@ -695,6 +695,9 @@ contract SmartProviderTest is Test {
       minAmount0,
       minAmount1
     );
+
+    uint256 beforeAmount0 = token0.balanceOf(bot);
+    uint256 beforeAmount1 = bot.balance;
     vm.prank(bot);
     publicLiquidator.redeemSmartCollateral(
       address(smartProvider),
@@ -712,8 +715,10 @@ contract SmartProviderTest is Test {
     assertEq(user2Debt, 0);
     assertEq(user2Collateral, 0);
     assertEq(lp.balanceOf(address(smartProvider)), 0); // all lp redeemed
-    assertApproxEqAbs(token0.balanceOf(address(publicLiquidator)), amounts[0], 2); // allow 2 wei difference due to rounding
-    assertApproxEqAbs(address(publicLiquidator).balance, amounts[1], 2); // allow 2 wei difference due to rounding
+    assertEq(token0.balanceOf(address(publicLiquidator)), 0);
+    assertEq(address(publicLiquidator).balance, 0);
+    assertApproxEqAbs(token0.balanceOf(bot) - beforeAmount0, amounts[0], 2); // allow 2 wei difference due to rounding
+    assertApproxEqAbs(bot.balance - beforeAmount1, amounts[1], 2); // allow 2 wei difference due to rounding
     uint256 usdtAfter = IERC20(USDT).balanceOf(address(publicLiquidator));
     assertEq(usdtAfter, usdtBefore - _repaidAssets);
   }
