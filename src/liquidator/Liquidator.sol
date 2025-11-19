@@ -458,14 +458,14 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
       // swap token0 and token1 to loanToken if needed
       if (amount0 > 0 && token0 != arb.loanToken) {
         if (token0 != BNB_ADDRESS) token0.safeApprove(arb.token0Pair, amount0);
-        uint256 _value = token0 == BNB_ADDRESS ? amount0 : 0;
+        uint256 _value = token0 == BNB_ADDRESS ? arb.minToken0Amt : 0;
         (bool success, ) = arb.token0Pair.call{ value: _value }(arb.swapToken0Data);
         require(success, SwapFailed());
       }
 
       if (amount1 > 0 && token1 != arb.loanToken) {
         if (token1 != BNB_ADDRESS) token1.safeApprove(arb.token1Pair, amount1);
-        uint256 _value = token1 == BNB_ADDRESS ? amount1 : 0;
+        uint256 _value = token1 == BNB_ADDRESS ? arb.minToken1Amt : 0;
         (bool success, ) = arb.token1Pair.call{ value: _value }(arb.swapToken1Data);
         require(success, SwapFailed());
       }
