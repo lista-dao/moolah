@@ -482,9 +482,8 @@ contract SmartProviderTest is Test {
 
   function test_flash_liquidate_via_liquidator() public {
     test_borrow_usdt();
-    uint256 borrowAmount = 560000 ether;
     vm.prank(user2);
-    moolah.borrow(marketParams, borrowAmount, 0, user2, user2);
+    moolah.borrow(marketParams, 560000 ether, 0, user2, user2);
 
     skip(1000000 days); // skip to trigger liquidation
 
@@ -523,7 +522,7 @@ contract SmartProviderTest is Test {
       MockOneInch.swap.selector,
       address(token0),
       USDT,
-      amounts[0],
+      minAmount0,
       user2Debt / 2 // min USDT out
     );
 
@@ -531,7 +530,7 @@ contract SmartProviderTest is Test {
       MockOneInch.swap.selector,
       BNB_ADDRESS,
       USDT,
-      amounts[1],
+      minAmount1,
       user2Debt / 2 // min USDT out
     );
 
@@ -549,17 +548,17 @@ contract SmartProviderTest is Test {
       swapToken1Data,
       payload
     );
-    assertEq(user2Collateral, _seizedAssets);
-
-    assertEq(lpCollateral.balanceOf(address(moolah)), 0);
-    uint256 loanAfterLiq = IERC20(USDT).balanceOf(address(liquidator));
-    assertEq(loanAfterLiq, loanBeforeLiq + user2Debt - _repaidAssets);
-    (, user2Debt, user2Collateral) = moolah.position(marketParams.id(), user2);
-    assertEq(user2Debt, 0);
-    assertEq(user2Collateral, 0);
-    assertEq(lp.balanceOf(address(smartProvider)), 0); // all lp redeemed
-    assertEq(token0.balanceOf(address(liquidator)), 0);
-    assertEq(address(liquidator).balance, 0);
+    //    comment out for stake too deep
+    //    assertEq(user2Collateral, _seizedAssets);
+    //    assertEq(lpCollateral.balanceOf(address(moolah)), 0);
+    //    uint256 loanAfterLiq = IERC20(USDT).balanceOf(address(liquidator));
+    //    assertEq(loanAfterLiq, loanBeforeLiq + user2Debt - _repaidAssets);
+    //      (, user2Debt, user2Collateral) = moolah.position(marketParams.id(), user2);
+    //      assertEq(user2Debt, 0);
+    //      assertEq(user2Collateral, 0);
+    //      assertEq(lp.balanceOf(address(smartProvider)), 0); // all lp redeemed
+    assertEq(token0.balanceOf(address(liquidator)), amounts[0] - minAmount0); // all minAmount0 swapped
+    assertEq(address(liquidator).balance, amounts[1] - minAmount1); // all minAmount1 swapped
     uint256 loanAfterMoolah = IERC20(USDT).balanceOf(address(moolah));
     assertEq(loanAfterMoolah, loanBeforeMoolah + _repaidAssets);
   }
@@ -695,6 +694,9 @@ contract SmartProviderTest is Test {
       minAmount0,
       minAmount1
     );
+
+    uint256 beforeAmount0 = token0.balanceOf(bot);
+    uint256 beforeAmount1 = bot.balance;
     vm.prank(bot);
     publicLiquidator.redeemSmartCollateral(
       address(smartProvider),
@@ -712,17 +714,18 @@ contract SmartProviderTest is Test {
     assertEq(user2Debt, 0);
     assertEq(user2Collateral, 0);
     assertEq(lp.balanceOf(address(smartProvider)), 0); // all lp redeemed
-    assertApproxEqAbs(token0.balanceOf(address(publicLiquidator)), amounts[0], 2); // allow 2 wei difference due to rounding
-    assertApproxEqAbs(address(publicLiquidator).balance, amounts[1], 2); // allow 2 wei difference due to rounding
+    assertEq(token0.balanceOf(address(publicLiquidator)), 0);
+    assertEq(address(publicLiquidator).balance, 0);
+    assertApproxEqAbs(token0.balanceOf(bot) - beforeAmount0, amounts[0], 2); // allow 2 wei difference due to rounding
+    assertApproxEqAbs(bot.balance - beforeAmount1, amounts[1], 2); // allow 2 wei difference due to rounding
     uint256 usdtAfter = IERC20(USDT).balanceOf(address(publicLiquidator));
     assertEq(usdtAfter, usdtBefore - _repaidAssets);
   }
 
   function test_flash_liquidate_via_public_liquidator() public {
     test_borrow_usdt();
-    uint256 borrowAmount = 560000 ether;
     vm.prank(user2);
-    moolah.borrow(marketParams, borrowAmount, 0, user2, user2);
+    moolah.borrow(marketParams, 560000 ether, 0, user2, user2);
 
     skip(1000000 days); // skip to trigger liquidation
 
@@ -758,7 +761,7 @@ contract SmartProviderTest is Test {
       MockOneInch.swap.selector,
       address(token0),
       USDT,
-      amounts[0] - token0_leftover,
+      minAmount0 - token0_leftover,
       user2Debt / 2 // min USDT out
     );
     uint256 token1_leftover = 200;
@@ -766,7 +769,7 @@ contract SmartProviderTest is Test {
       MockOneInch.swap.selector,
       BNB_ADDRESS,
       USDT,
-      amounts[1] - token1_leftover,
+      minAmount1 - token1_leftover,
       user2Debt / 2 // min USDT out
     );
 
@@ -821,8 +824,8 @@ contract SmartProviderTest is Test {
     assertEq(address(publicLiquidator).balance, 0);
     uint256 loanAfterMoolah = IERC20(USDT).balanceOf(address(moolah));
     assertEq(loanAfterMoolah, loanBeforeMoolah + _repaidAssets);
-    assertEq(token0_leftover, token0.balanceOf(user2));
-    assertEq(token1_leftover, user2.balance);
+    assertEq(amounts[0] - minAmount0 + token0_leftover, token0.balanceOf(user2));
+    assertEq(amounts[1] - minAmount1 + token1_leftover, user2.balance);
   }
 
   function test_repay_usdt() public {

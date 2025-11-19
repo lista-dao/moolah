@@ -466,8 +466,33 @@ contract PublicLiquidator is
 
     // decrease tracked lp collateral
     lpCollaterals[msg.sender][lpCollateral] -= lpAmount;
+    (uint256 token0Amount, uint256 token1Amount) = ISmartProvider(smartProvider).redeemLpCollateral(
+      lpAmount,
+      minToken0Amt,
+      minToken1Amt
+    );
 
-    return ISmartProvider(smartProvider).redeemLpCollateral(lpAmount, minToken0Amt, minToken1Amt);
+    // transfer redeemed token0 to msg.sender
+    if (token0Amount > 0) {
+      address token0 = ISmartProvider(smartProvider).token(0);
+      if (token0 == BNB_ADDRESS) {
+        msg.sender.safeTransferETH(token0Amount);
+      } else {
+        token0.safeTransfer(msg.sender, token0Amount);
+      }
+    }
+
+    // transfer redeemed token1 to msg.sender
+    if (token1Amount > 0) {
+      address token1 = ISmartProvider(smartProvider).token(1);
+      if (token1 == BNB_ADDRESS) {
+        msg.sender.safeTransferETH(token1Amount);
+      } else {
+        token1.safeTransfer(msg.sender, token1Amount);
+      }
+    }
+
+    return (token0Amount, token1Amount);
   }
 
   /// @dev calculates the amount of loan token needed to repay the shares.
@@ -538,6 +563,7 @@ contract PublicLiquidator is
       // revoke approval for the pair
       arb.collateralToken.safeApprove(arb.collateralPair, 0);
     } else if (arb.swapSmartCollateral) {
+      uint256 before = arb.loanToken.balanceOf(address(this));
       // redeem lp
       (uint256 amount0, uint256 amount1) = ISmartProvider(arb.smartProvider).redeemLpCollateral(
         arb.seized,
@@ -549,17 +575,16 @@ contract PublicLiquidator is
       address token1 = ISmartProvider(arb.smartProvider).token(1);
 
       // swap token0 and token1 to loanToken if needed
-      uint256 before = arb.loanToken.balanceOf(address(this));
       if (amount0 > 0 && token0 != arb.loanToken) {
         if (token0 != BNB_ADDRESS) token0.safeApprove(arb.token0Pair, amount0);
-        uint256 _value = token0 == BNB_ADDRESS ? amount0 : 0;
+        uint256 _value = token0 == BNB_ADDRESS ? arb.minToken0Amt : 0;
         (bool success, ) = arb.token0Pair.call{ value: _value }(arb.swapToken0Data);
         require(success, SwapFailed());
       }
 
       if (amount1 > 0 && token1 != arb.loanToken) {
         if (token1 != BNB_ADDRESS) token1.safeApprove(arb.token1Pair, amount1);
-        uint256 _value = token1 == BNB_ADDRESS ? amount1 : 0;
+        uint256 _value = token1 == BNB_ADDRESS ? arb.minToken1Amt : 0;
         (bool success, ) = arb.token1Pair.call{ value: _value }(arb.swapToken1Data);
         require(success, SwapFailed());
       }

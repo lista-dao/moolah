@@ -39,7 +39,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
   event MarketWhitelistChanged(bytes32 id, bool added);
   event PairWhitelistChanged(address pair, bool added);
   event SmartProvidersChanged(address provider, bool added);
-  event SellToken(address pair, address tokenIn, address tokenOut, uint256 amountIn, uint256 actualAmoutOut);
+  event SellToken(address pair, address tokenIn, address tokenOut, uint256 amountIn, uint256 actualAmountOut);
   event SmartLiquidation(
     bytes32 indexed id,
     address indexed lpToken,
@@ -444,6 +444,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
 
       arb.collateralToken.safeApprove(arb.collateralPair, 0);
     } else if (arb.swapSmartCollateral) {
+      uint256 before = arb.loanToken.balanceOf(address(this));
       // redeem lp
       (uint256 amount0, uint256 amount1) = ISmartProvider(arb.smartProvider).redeemLpCollateral(
         arb.seized,
@@ -455,17 +456,16 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
       address token1 = ISmartProvider(arb.smartProvider).token(1);
 
       // swap token0 and token1 to loanToken if needed
-      uint256 before = arb.loanToken.balanceOf(address(this));
       if (amount0 > 0 && token0 != arb.loanToken) {
         if (token0 != BNB_ADDRESS) token0.safeApprove(arb.token0Pair, amount0);
-        uint256 _value = token0 == BNB_ADDRESS ? amount0 : 0;
+        uint256 _value = token0 == BNB_ADDRESS ? arb.minToken0Amt : 0;
         (bool success, ) = arb.token0Pair.call{ value: _value }(arb.swapToken0Data);
         require(success, SwapFailed());
       }
 
       if (amount1 > 0 && token1 != arb.loanToken) {
         if (token1 != BNB_ADDRESS) token1.safeApprove(arb.token1Pair, amount1);
-        uint256 _value = token1 == BNB_ADDRESS ? amount1 : 0;
+        uint256 _value = token1 == BNB_ADDRESS ? arb.minToken1Amt : 0;
         (bool success, ) = arb.token1Pair.call{ value: _value }(arb.swapToken1Data);
         require(success, SwapFailed());
       }
