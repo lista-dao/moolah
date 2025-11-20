@@ -250,6 +250,13 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
       // move module data to new contract; reset userTotalDeposit temporarily to burn all lpToken
       userTotalDeposit[account] = 0;
       _rebalanceUserLp(account);
+
+      address delegatee = delegation[account];
+      if (delegatee != address(0)) {
+        // write delegation data to slisBNBxMinter
+        ISlisBNBxMinter(slisBNBxMinter).syncDelegatee(account, delegatee);
+      }
+
       userTotalDeposit[account] = totalDeposit; // restore value after burn
     }
 
@@ -262,6 +269,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
    * @param newDelegatee new target address of collateral tokens
    */
   function delegateAllTo(address newDelegatee) external {
+    require(slisBNBxMinter == address(0), "not supported");
     require(
       newDelegatee != address(0) && newDelegatee != delegation[msg.sender],
       "newDelegatee cannot be zero address or same as current delegatee"
@@ -444,6 +452,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     return STAKE_MANAGER.convertSnBnbToBnb(totalDeposit) - userLp[account] - userReservedLp[account];
   }
 
+  /// @dev Set the slisBNBxMinter contract address
   function setSlisBNBxMinter(address _slisBNBxMinter) external onlyRole(MANAGER) {
     require(_slisBNBxMinter != address(0), "zero address provided");
     slisBNBxMinter = _slisBNBxMinter;
@@ -460,14 +469,6 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
       if (delegatee != address(0)) {
         // write data to slisBNBxMinter
         ISlisBNBxMinter(slisBNBxMinter).syncDelegatee(account, delegatee);
-
-        // clear old data
-        // burn all lpToken from account or delegatee
-        _safeBurnLp(delegatee, userLp[msg.sender]);
-        // reset delegatee record
-        delegation[msg.sender] = address(0);
-        // clear user's lpToken record
-        userLp[msg.sender] = 0;
       }
     }
   }

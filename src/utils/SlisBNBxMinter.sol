@@ -125,7 +125,7 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
 
   /**
    * @notice User's available slisBNBx might lower than the burn amount
-   *         due to the change of exchangeRate, ReservedLpRate or the value of the LP token fluctuates from time to time
+   *         due to the change of exchangeRate, feeRate or the value of the LP token fluctuates from time to time
    *         i.e. userLp[account] might < slisBNBx.balanceOf(holder)
    * @param holder lp token holder
    * @param amount amount to burn
@@ -225,6 +225,9 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     );
     // current delegatee
     address oldDelegatee = delegation[account];
+    if (oldDelegatee == address(0)) {
+      oldDelegatee = account;
+    }
     // burn all slisBNBx from account or delegatee
     _safeBurnLp(oldDelegatee, userTotalBalance[account]);
     // update delegatee record

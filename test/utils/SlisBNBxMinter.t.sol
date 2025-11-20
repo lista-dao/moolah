@@ -24,6 +24,7 @@ contract SlisBNBxMinterTest is Test {
 
   address user1 = makeAddr("user1");
   address user2 = makeAddr("user2");
+  address delegatee = makeAddr("delegatee");
 
   address smartLpModule = 0xC3be83DE4b19aFC4F6021Ea5011B75a3542024dE;
   address slisBnbModule = 0x33f7A980a246f9B8FEA2254E3065576E127D4D5f;
@@ -102,6 +103,12 @@ contract SlisBNBxMinterTest is Test {
   }
 
   function upgrade_SlisBNBProvider() public {
+    slisBnbProvider = SlisBNBProvider(slisBnbModule);
+    // delegate
+    address user = 0xFF051b7B20eC819C6785FaA369D99bc2C9235B8a;
+    vm.prank(user);
+    slisBnbProvider.delegateAllTo(delegatee);
+
     address newImlp = address(new SlisBNBProvider(address(moolah), slisBnb, stakeManager, slisBnbx));
     vm.startPrank(admin);
     UUPSUpgradeable proxy = UUPSUpgradeable(slisBnbModule);
@@ -359,6 +366,70 @@ contract SlisBNBxMinterTest is Test {
     vm.prank(smartLpModule);
     minter.syncDelegatee(user, delegatee2);
     assertEq(minter.delegation(user), delegatee2, "delegatee sync error");
+  }
+
+  function test_delegation_transition() public {
+    address user = 0xFF051b7B20eC819C6785FaA369D99bc2C9235B8a;
+    assertEq(delegatee, slisBnbProvider.delegation(user), "pre delegatee error");
+
+    uint256 userBefore = ISlisBNBx(slisBnbx).balanceOf(user);
+    uint256 delegateeBefore = ISlisBNBx(slisBnbx).balanceOf(delegatee);
+
+    uint256 amount = 5 ether;
+    deal(slisBnb, user, amount);
+    vm.startPrank(user);
+    IERC20(slisBnb).approve(address(slisBnbProvider), amount);
+    slisBnbProvider.supplyCollateral(param3, amount, user, "");
+    vm.stopPrank();
+
+    // delegation data should be emptied in slisBnbProvider
+    assertEq(slisBnbProvider.delegation(user), delegatee, "old provider delegatee should be same");
+    assertEq(slisBnbProvider.userLp(delegatee), 0, "old provider delegatee balance should be zero");
+    assertEq(slisBnbProvider.userReservedLp(delegatee), 0, "old provider delegatee reserved balance should be zero");
+
+    // delegation data should be set in minter
+    assertEq(minter.delegation(user), delegatee, "minter delegation error");
+    (uint256 userPart, uint256 feePart) = minter.userModuleBalance(user, slisBnbModule);
+
+    // check slisBNBx minted with no discount and fee
+    uint256 collateralInBnb = slisBnbProvider.getUserBalanceInBnb(user); // total slisBnbx with no discount
+    uint256 increaseInBnb = IStakeManager(stakeManager).convertSnBnbToBnb(amount);
+    uint256 expectMinted = collateralInBnb; // no discount
+    uint256 fee = (expectMinted * 3e4) / 1e6; // 3% fee
+    expectMinted = expectMinted - fee;
+
+    // check fee
+    uint256 actualFee = ISlisBNBx(slisBnbx).balanceOf(mpc);
+    assertEq(actualFee, fee, "fee receiver balance error");
+
+    // check owner balance and fee in minter
+    assertEq(userPart, expectMinted, "user part error");
+    assertEq(feePart, fee, "fee part error");
+    assertEq(minter.userTotalBalance(user), userPart, "user total balance error");
+
+    // check delegate balance and fee in minter. should be zero
+    (userPart, feePart) = minter.userModuleBalance(delegatee, slisBnbModule);
+    assertEq(userPart, 0, "delegatee user part should be zero");
+    assertEq(feePart, 0, "delegatee fee part should be zero");
+
+    // check old data is empty
+    assertEq(slisBnbProvider.userReservedLp(user), 0, "old userReservedLp should be zero");
+    assertEq(slisBnbProvider.userLp(user), 0, "old userReservedLp should be zero");
+
+    // check user balance
+    uint256 userAfter = ISlisBNBx(slisBnbx).balanceOf(user);
+    assertEq(userAfter - userBefore, 0, "user balance should not change");
+  }
+
+  // test user delegate before supply collateral
+  function test_delegateAllTo() public {
+    address user = makeAddr("newUser");
+    address delegateeAddr = makeAddr("newDelegatee");
+
+    vm.startPrank(user);
+    minter.delegateAllTo(delegateeAddr, slisBnbModule);
+    minter.delegateAllTo(delegateeAddr, smartLpModule);
+    vm.stopPrank();
   }
 
   function getImplementation(address _proxyAddress) public view returns (address) {
