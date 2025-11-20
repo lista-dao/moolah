@@ -11,6 +11,7 @@ import { ILpToken } from "./interfaces/ILpToken.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { Moolah } from "moolah/Moolah.sol";
 import { IStakeManager } from "../oracle/interfaces/IStakeManager.sol";
+import { ISlisBNBxMinter } from "../utils/interfaces/ISlisBNBx.sol";
 
 contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   using SafeERC20 for IERC20;
@@ -47,6 +48,8 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   uint256 public totalReservedLp;
   // mpc wallets
   MPCWallet[] public mpcWallets;
+  // slisBNBxMinter contract address
+  address public slisBNBxMinter;
 
   uint128 public constant RATE_DENOMINATOR = 1e18;
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
@@ -60,6 +63,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   event MpcWalletCapChanged(address wallet, uint256 oldCap, uint256 newCap);
   event MpcWalletRemoved(address wallet);
   event MpcWalletAdded(address wallet, uint256 cap);
+  event SlisBNBxMinterChanged(address newSlisBNBxMinter);
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   /// @param moolah The address of the Moolah contract.
@@ -240,7 +244,17 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     }
     userMarketDeposit[account][id] = userMarketSupplyCollateral;
 
-    return _rebalanceUserLp(account);
+    // burn old data for transition to new slisBNBxMinter logic
+    if (userLp[account] > 0 || userReservedLp[account] > 0) {
+      uint256 totalDeposit = userTotalDeposit[account];
+      // move module data to new contract; reset userTotalDeposit temporarily to burn all lpToken
+      userTotalDeposit[account] = 0;
+      _rebalanceUserLp(account);
+      userTotalDeposit[account] = totalDeposit; // restore value after burn
+    }
+
+    // rebalance user's slisBNBx in slisBNBxMinter
+    return ISlisBNBxMinter(slisBNBxMinter).rebalance(account);
   }
 
   /**
@@ -417,6 +431,43 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
         wallet.balance -= toBurn;
         // deduct leftToMint
         leftToBurn -= toBurn;
+      }
+    }
+  }
+
+  /// @dev Returns the user's lp collateral value in BNB.
+  /// @param account The address of the user.
+  function getUserBalanceInBnb(address account) external view returns (uint256) {
+    // get user total deposited slisBNB
+    uint256 totalDeposit = userTotalDeposit[account];
+    // convert to BNB value minus minted slisBNBx
+    return STAKE_MANAGER.convertSnBnbToBnb(totalDeposit) - userLp[account] - userReservedLp[account];
+  }
+
+  function setSlisBNBxMinter(address _slisBNBxMinter) external onlyRole(MANAGER) {
+    require(_slisBNBxMinter != address(0), "zero address provided");
+    slisBNBxMinter = _slisBNBxMinter;
+
+    emit SlisBNBxMinterChanged(_slisBNBxMinter);
+  }
+
+  /// @dev Sync delegation records to slisBNBxMinter
+  /// @param accounts The list of user addresses to sync
+  function syncDelegation(address[] calldata accounts) external {
+    for (uint256 i = 0; i < accounts.length; i++) {
+      address account = accounts[i];
+      address delegatee = delegation[account];
+      if (delegatee != address(0)) {
+        // write data to slisBNBxMinter
+        ISlisBNBxMinter(slisBNBxMinter).syncDelegatee(account, delegatee);
+
+        // clear old data
+        // burn all lpToken from account or delegatee
+        _safeBurnLp(delegatee, userLp[msg.sender]);
+        // reset delegatee record
+        delegation[msg.sender] = address(0);
+        // clear user's lpToken record
+        userLp[msg.sender] = 0;
       }
     }
   }
