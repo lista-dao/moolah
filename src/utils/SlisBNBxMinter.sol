@@ -141,6 +141,7 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
       SLISBNB_X.burn(holder, availableBalance);
       return availableBalance;
     }
+    return 0;
   }
 
   /**
