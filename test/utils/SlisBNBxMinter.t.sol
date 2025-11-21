@@ -421,15 +421,58 @@ contract SlisBNBxMinterTest is Test {
     assertEq(userAfter - userBefore, 0, "user balance should not change");
   }
 
-  // test user delegate before supply collateral
-  function test_delegateAllTo() public {
+  function test_delegateAllTo_no_position() public {
     address user = makeAddr("newUser");
     address delegateeAddr = makeAddr("newDelegatee");
 
     vm.startPrank(user);
-    minter.delegateAllTo(delegateeAddr, slisBnbModule);
-    minter.delegateAllTo(delegateeAddr, smartLpModule);
+    minter.delegateAllTo(delegateeAddr);
+    vm.expectRevert("newDelegatee cannot be zero address or same as current delegatee");
+    minter.delegateAllTo(delegateeAddr);
     vm.stopPrank();
+  }
+
+  function test_delegateAllTo_with_position() public {
+    address user = makeAddr("newUser");
+    address delegateeAddr = makeAddr("newDelegatee");
+
+    deal(slisBnb, user, 1 ether);
+    deal(smartProvider.dexLP(), user, 1 ether);
+
+    // user supply via slisBnbProvider and smartProvider
+    vm.startPrank(user);
+    IERC20(slisBnb).approve(address(slisBnbProvider), 1 ether);
+    slisBnbProvider.supplyCollateral(param3, 1 ether, user, "");
+    IERC20(smartProvider.dexLP()).approve(address(smartProvider), 1 ether);
+    smartProvider.supplyDexLp(param1, user, 1 ether);
+    vm.stopPrank();
+
+    // check balances in minter
+    (uint256 userPart1, ) = minter.userModuleBalance(user, slisBnbModule);
+    (uint256 userPart2, ) = minter.userModuleBalance(user, smartLpModule);
+    uint256 totalBalance = minter.userTotalBalance(user);
+
+    // delegate
+    uint256 beforeUserBalance = ISlisBNBx(slisBnbx).balanceOf(user);
+    uint256 beforeDelegateeBalance = ISlisBNBx(slisBnbx).balanceOf(delegateeAddr);
+    vm.startPrank(user);
+    minter.delegateAllTo(delegateeAddr);
+    vm.stopPrank();
+
+    assertEq(minter.delegation(user), delegateeAddr, "delegatee not set");
+    (uint256 newUserPart1, ) = minter.userModuleBalance(user, slisBnbModule);
+    (uint256 newUserPart2, ) = minter.userModuleBalance(user, smartLpModule);
+    uint256 newTotalBalance = minter.userTotalBalance(user);
+    assertEq(newUserPart1, userPart1, "user part in slisBnbModule should not change");
+    assertEq(newUserPart2, userPart2, "user part in smartLpModule should not change");
+    assertEq(newTotalBalance, totalBalance, "total balance should not change");
+
+    // slisBNBx should be moved to delegatee
+    uint256 afterUserBalance = ISlisBNBx(slisBnbx).balanceOf(user);
+    uint256 afterDelegateeBalance = ISlisBNBx(slisBnbx).balanceOf(delegateeAddr);
+    assertEq(afterUserBalance, beforeUserBalance - totalBalance, "user balance not decreased correctly");
+    assertEq(afterDelegateeBalance, beforeDelegateeBalance + totalBalance, "delegatee balance not increased correctly");
+    assertEq(afterDelegateeBalance, beforeUserBalance, "delegatee balance not equal to before user balance");
   }
 
   function getImplementation(address _proxyAddress) public view returns (address) {

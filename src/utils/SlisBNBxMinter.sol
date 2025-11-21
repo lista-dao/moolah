@@ -57,7 +57,7 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   /* ------------------ Events ------------------ */
   event Rebalance(address account, uint256 latestModuleBalance, address module, uint256 latestTotalBalance);
   event UserModuleRebalanced(address account, address module, uint256 userPart, uint256 feePart);
-  event ChangeDelegateTo(address account, address oldDelegatee, address newDelegatee);
+  event ChangeDelegateTo(address account, address oldDelegatee, address newDelegatee, uint256 amount);
   event MpcWalletCapChanged(address wallet, uint256 oldCap, uint256 newCap);
   event MpcWalletRemoved(address wallet);
   event MpcWalletAdded(address wallet, uint256 cap);
@@ -129,14 +129,17 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
    *         i.e. userLp[account] might < slisBNBx.balanceOf(holder)
    * @param holder lp token holder
    * @param amount amount to burn
+   * @return actual burned amount
    */
-  function _safeBurnLp(address holder, uint256 amount) internal {
+  function _safeBurnLp(address holder, uint256 amount) internal returns (uint256) {
     uint256 availableBalance = SLISBNB_X.balanceOf(holder);
     if (amount <= availableBalance) {
       SLISBNB_X.burn(holder, amount);
+      return amount;
     } else if (availableBalance > 0) {
       // existing users do not have enough slisBNBx
       SLISBNB_X.burn(holder, availableBalance);
+      return availableBalance;
     }
   }
 
@@ -204,21 +207,20 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
    * @param newDelegatee new delegatee address
    */
   function syncDelegatee(address account, address newDelegatee) external {
-    ModuleConfig memory config = moduleConfig[msg.sender];
-    require(config.enabled, "unauthorized msg.sender");
+    require(moduleConfig[msg.sender].enabled, "unauthorized msg.sender");
 
-    _delegateAllTo(account, newDelegatee, msg.sender);
+    _delegateAllTo(account, newDelegatee);
   }
 
   /**
-   * @dev delegate all collateral tokens of a module to given address
+   * @dev delegate all slisBNBx to given address without rebalancing
    * @param newDelegatee new target address of collateral tokens
    */
-  function delegateAllTo(address newDelegatee, address module) external {
-    _delegateAllTo(msg.sender, newDelegatee, module);
+  function delegateAllTo(address newDelegatee) external {
+    _delegateAllTo(msg.sender, newDelegatee);
   }
 
-  function _delegateAllTo(address account, address newDelegatee, address module) internal {
+  function _delegateAllTo(address account, address newDelegatee) internal {
     require(
       newDelegatee != address(0) && newDelegatee != delegation[account],
       "newDelegatee cannot be zero address or same as current delegatee"
@@ -229,15 +231,13 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
       oldDelegatee = account;
     }
     // burn all slisBNBx from account or delegatee
-    _safeBurnLp(oldDelegatee, userTotalBalance[account]);
+    uint256 actualBurned = _safeBurnLp(oldDelegatee, userTotalBalance[account]);
     // update delegatee record
     delegation[account] = newDelegatee;
-    // clear user's slisBNBx record
-    userTotalBalance[account] = 0;
-    // rebalance user's slisBNBx
-    _rebalanceUserLp(account, module);
+    // mint all burned slisBNBx to new delegatee
+    SLISBNB_X.mint(newDelegatee, actualBurned);
 
-    emit ChangeDelegateTo(account, oldDelegatee, newDelegatee);
+    emit ChangeDelegateTo(account, oldDelegatee, newDelegatee, actualBurned);
   }
 
   /* ----------------------- slisBNBx Re-balancing ----------------------- */
