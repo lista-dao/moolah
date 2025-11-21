@@ -55,8 +55,8 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   bytes32 public constant MANAGER = keccak256("MANAGER");
 
   /* ------------------ Events ------------------ */
-  event Rebalance(address account, uint256 latestLpBalance);
-  event UserLpRebalanced(address account, uint256 userLp, uint256 reservedLp);
+  event Rebalance(address account, uint256 latestModuleBalance, address module, uint256 latestTotalBalance);
+  event UserModuleRebalanced(address account, address module, uint256 userPart, uint256 feePart);
   event ChangeDelegateTo(address account, address oldDelegatee, address newDelegatee);
   event MpcWalletCapChanged(address wallet, uint256 oldCap, uint256 newCap);
   event MpcWalletRemoved(address wallet);
@@ -111,16 +111,16 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
    * @param account The user address
    * @return rebalanced and latestLpBalance whether rebalanced, new user slisBNBx balance
    */
-  function rebalance(address account) external returns (bool rebalanced, uint256 latestLpBalance) {
+  function rebalance(address account) external returns (bool rebalanced, uint256 latestModuleBalance) {
     require(account != address(0), "zero account address");
 
     ModuleConfig memory config = moduleConfig[msg.sender];
     require(config.enabled, "unauthorized module");
 
     // rebalance user's slisBNBx
-    (rebalanced, latestLpBalance) = _rebalanceUserLp(account, msg.sender);
+    (rebalanced, latestModuleBalance) = _rebalanceUserLp(account, msg.sender);
 
-    emit Rebalance(account, latestLpBalance);
+    emit Rebalance(account, latestModuleBalance, msg.sender, userTotalBalance[account]);
   }
 
   /**
@@ -193,7 +193,7 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     // update user slisBNBx balance as new LP
     userModuleBal.userPart = newUserLp;
 
-    emit UserLpRebalanced(account, newUserLp, newReservedLp);
+    emit UserModuleRebalanced(account, _module, newUserLp, newReservedLp);
 
     return (true, newUserLp);
   }
@@ -214,7 +214,7 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
    * @dev delegate all collateral tokens of a module to given address
    * @param newDelegatee new target address of collateral tokens
    */
-  function delegateAllTo(address newDelegatee, address module) public {
+  function delegateAllTo(address newDelegatee, address module) external {
     _delegateAllTo(msg.sender, newDelegatee, module);
   }
 
