@@ -26,7 +26,7 @@ import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
 import { MathLib, WAD } from "moolah/libraries/MathLib.sol";
 import { UtilsLib } from "moolah/libraries/UtilsLib.sol";
 import { IMoolahLiquidateCallback } from "../../src/moolah/interfaces/IMoolahCallbacks.sol";
-import { MockLiquidator } from "./MockLiquidator.sol";
+import { BrokerLiquidator } from "../../src/liquidator/BrokerLiquidator.sol";
 import { ORACLE_PRICE_SCALE, LIQUIDATION_CURSOR, MAX_LIQUIDATION_INCENTIVE_FACTOR } from "moolah/libraries/ConstantsLib.sol";
 
 contract LendingBrokerTest is Test {
@@ -52,7 +52,7 @@ contract LendingBrokerTest is Test {
   IrmMockZero public irm; // unused in fork path
   address supplier = address(0x201);
   address borrower = address(0x202);
-  MockLiquidator public liquidator;
+  BrokerLiquidator public liquidator;
 
   uint256 constant LTV = 0.8e18;
   uint256 constant SUPPLY_LIQ = 1_000_000 ether;
@@ -178,12 +178,12 @@ contract LendingBrokerTest is Test {
     LISUSD.approve(address(broker), type(uint256).max);
 
     // deploy liquidator contract
-    MockLiquidator mockLiqImpl = new MockLiquidator(address(moolah));
+    BrokerLiquidator mockLiqImpl = new BrokerLiquidator(address(moolah));
     ERC1967Proxy mockLiqProxy = new ERC1967Proxy(
       address(mockLiqImpl),
-      abi.encodeWithSelector(MockLiquidator.initialize.selector, ADMIN, MANAGER, BOT)
+      abi.encodeWithSelector(BrokerLiquidator.initialize.selector, ADMIN, MANAGER, BOT)
     );
-    liquidator = MockLiquidator(address(mockLiqProxy));
+    liquidator = BrokerLiquidator(address(mockLiqProxy));
 
     // whitelist lendingbroker as liquidator in moolah
     vm.prank(MANAGER);
@@ -199,7 +199,7 @@ contract LendingBrokerTest is Test {
 
     // add brokers mapping in liquidator
     vm.prank(MANAGER);
-    liquidator.setBroker(Id.unwrap(id), address(broker), true);
+    liquidator.setMarketWhitelist(Id.unwrap(id), address(broker), true);
   }
 
   function _snapshot(address user) internal view returns (Market memory market, Position memory pos) {
@@ -1179,6 +1179,90 @@ contract LendingBrokerTest is Test {
     vm.expectRevert(bytes("broker/invalid-market"));
     vm.prank(MANAGER);
     broker.setMarketId(id);
+  }
+
+  function test_liquidatorSetMarketWhitelist_whitelistsNewBroker() public {
+    LendingBroker bImpl2 = new LendingBroker(address(moolah), address(relayer), address(oracle));
+    ERC1967Proxy bProxy2 = new ERC1967Proxy(
+      address(bImpl2),
+      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
+    );
+    LendingBroker newBroker = LendingBroker(payable(address(bProxy2)));
+
+    MarketParams memory params = MarketParams({
+      loanToken: address(LISUSD),
+      collateralToken: address(BTCB),
+      oracle: address(newBroker),
+      irm: address(irm),
+      lltv: 80 * 1e16
+    });
+    Id newId = params.id();
+    Moolah(address(moolah)).createMarket(params);
+
+    vm.prank(MANAGER);
+    newBroker.setMarketId(newId);
+
+    bytes32 rawId = Id.unwrap(newId);
+    vm.prank(MANAGER);
+    liquidator.setMarketWhitelist(rawId, address(newBroker), true);
+
+    assertEq(liquidator.marketWhitelist(rawId), address(newBroker), "market not whitelisted");
+    assertEq(liquidator.brokerWhitelist(address(newBroker)), rawId, "broker mapping missing");
+  }
+
+  function test_liquidatorBatchSetMarketWhitelist_whitelistsMultipleMarkets() public {
+    LendingBroker bImplA = new LendingBroker(address(moolah), address(relayer), address(oracle));
+    ERC1967Proxy bProxyA = new ERC1967Proxy(
+      address(bImplA),
+      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
+    );
+    LendingBroker brokerA = LendingBroker(payable(address(bProxyA)));
+
+    MarketParams memory paramsA = MarketParams({
+      loanToken: address(LISUSD),
+      collateralToken: address(BTCB),
+      oracle: address(brokerA),
+      irm: address(irm),
+      lltv: 80 * 1e16
+    });
+    Id idA = paramsA.id();
+    Moolah(address(moolah)).createMarket(paramsA);
+    vm.prank(MANAGER);
+    brokerA.setMarketId(idA);
+
+    LendingBroker bImplB = new LendingBroker(address(moolah), address(relayer), address(oracle));
+    ERC1967Proxy bProxyB = new ERC1967Proxy(
+      address(bImplB),
+      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
+    );
+    LendingBroker brokerB = LendingBroker(payable(address(bProxyB)));
+
+    MarketParams memory paramsB = MarketParams({
+      loanToken: address(LISUSD),
+      collateralToken: address(BTCB),
+      oracle: address(brokerB),
+      irm: address(irm),
+      lltv: 80 * 1e16
+    });
+    Id idB = paramsB.id();
+    Moolah(address(moolah)).createMarket(paramsB);
+    vm.prank(MANAGER);
+    brokerB.setMarketId(idB);
+
+    bytes32[] memory ids = new bytes32[](2);
+    address[] memory brokers = new address[](2);
+    ids[0] = Id.unwrap(idA);
+    ids[1] = Id.unwrap(idB);
+    brokers[0] = address(brokerA);
+    brokers[1] = address(brokerB);
+
+    vm.prank(MANAGER);
+    liquidator.batchSetMarketWhitelist(ids, brokers, true);
+
+    assertEq(liquidator.marketWhitelist(ids[0]), brokers[0], "first market not whitelisted");
+    assertEq(liquidator.marketWhitelist(ids[1]), brokers[1], "second market not whitelisted");
+    assertEq(liquidator.brokerWhitelist(brokers[0]), ids[0], "first broker mapping missing");
+    assertEq(liquidator.brokerWhitelist(brokers[1]), ids[1], "second broker mapping missing");
   }
 
   function test_setFixedTerm_validations_revert() public {
