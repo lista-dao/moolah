@@ -8,7 +8,6 @@ import { MockStakeManager } from "../mocks/MockStakeManager.sol";
 import { MockLpToken } from "../mocks/MockLpToken.sol";
 import { SlisBNBProvider } from "../../../src/provider/SlisBNBProvider.sol";
 import { MarketParamsLibTest } from "../MarketParamsLibTest.sol";
-import { SlisBNBxMinter } from "../../../src/utils/SlisBNBxMinter.sol";
 
 contract SlisBNBProviderTest is BaseTest {
   using MarketParamsLib for MarketParams;
@@ -16,7 +15,6 @@ contract SlisBNBProviderTest is BaseTest {
   MockStakeManager stakeManager;
   SlisBNBProvider provider;
   MockLpToken lpToken;
-  SlisBNBxMinter minter;
   address MPC;
   address DELEGATOR;
   function setUp() public override {
@@ -26,8 +24,6 @@ contract SlisBNBProviderTest is BaseTest {
     DELEGATOR = makeAddr("DELEGATOR");
 
     lpToken = new MockLpToken();
-    minter = new SlisBNBxMinter(address(lpToken));
-
     stakeManager = new MockStakeManager();
     stakeManager.setExchangeRate(1 ether);
 
@@ -44,7 +40,6 @@ contract SlisBNBProviderTest is BaseTest {
     vm.startPrank(OWNER);
     moolah.addProvider(marketParams.id(), address(provider));
     provider.addMPCWallet(MPC, type(uint256).max);
-    provider.setSlisBNBxMinter(address(minter));
     vm.stopPrank();
 
     vm.startPrank(SUPPLIER);
@@ -58,13 +53,6 @@ contract SlisBNBProviderTest is BaseTest {
 
   function test_supplyCollateral() public {
     collateralToken.setBalance(SUPPLIER, 100 ether);
-    uint256 expectUserLp = (100 ether * 0.997 ether) / 1e18;
-    uint256 expectReserve = 100 ether - expectUserLp;
-    vm.mockCall(
-      address(minter),
-      abi.encodeWithSelector(SlisBNBxMinter.rebalance.selector),
-      abi.encode(true, expectUserLp)
-    );
 
     vm.startPrank(SUPPLIER);
     vm.expectRevert(bytes("not provider"));
@@ -74,10 +62,12 @@ contract SlisBNBProviderTest is BaseTest {
     assertEq(collateralToken.balanceOf(SUPPLIER), 0, "SUPPLIER balance error");
     vm.stopPrank();
 
-    //    below assertions are disabled due to upgrade to slisBNBxMinter
-    //    assertEq(provider.userLp(SUPPLIER), expectUserLp, "userLp error");
-    //    assertEq(provider.userReservedLp(SUPPLIER), expectReserve, "userReservedLp error");
-    //    assertEq(provider.totalReservedLp(), expectReserve, "totalReservedLp error");
+    uint256 expectUserLp = (100 ether * 0.997 ether) / 1e18;
+    uint256 expectReserve = 100 ether - expectUserLp;
+
+    assertEq(provider.userLp(SUPPLIER), expectUserLp, "userLp error");
+    assertEq(provider.userReservedLp(SUPPLIER), expectReserve, "userReservedLp error");
+    assertEq(provider.totalReservedLp(), expectReserve, "totalReservedLp error");
   }
 
   function test_withdrawCollateral() public {
@@ -204,14 +194,6 @@ contract SlisBNBProviderTest is BaseTest {
 
   function test_delegateAllTo() public {
     collateralToken.setBalance(SUPPLIER, 100 ether);
-    uint256 expectUserLp = (100 ether * 0.997 ether) / 1e18;
-    uint256 expectReserve = 100 ether - expectUserLp;
-
-    vm.mockCall(
-      address(minter),
-      abi.encodeWithSelector(SlisBNBxMinter.rebalance.selector),
-      abi.encode(true, expectUserLp)
-    );
 
     vm.startPrank(SUPPLIER);
     provider.supplyCollateral(marketParams, 10 ether, SUPPLIER, "");
@@ -224,6 +206,9 @@ contract SlisBNBProviderTest is BaseTest {
 
     assertEq(lpToken.balanceOf(DELEGATOR), 99.7 ether, "DELEGATOR lp balance error");
     vm.stopPrank();
+
+    uint256 expectUserLp = (100 ether * 0.997 ether) / 1e18;
+    uint256 expectReserve = 100 ether - expectUserLp;
 
     assertEq(provider.userLp(SUPPLIER), expectUserLp, "userLp error");
     assertEq(provider.userReservedLp(SUPPLIER), expectReserve, "userReservedLp error");
@@ -238,10 +223,9 @@ contract SlisBNBProviderTest is BaseTest {
     expectUserLp = 0;
     expectReserve = 0;
 
-    //    below assertions are disabled due to upgrade to slisBNBxMinter
-    //    assertEq(provider.userLp(SUPPLIER), expectUserLp, "userLp error");
-    //    assertEq(provider.userReservedLp(SUPPLIER), expectReserve, "userReservedLp error");
-    //    assertEq(provider.totalReservedLp(), expectReserve, "totalReservedLp error");
+    assertEq(provider.userLp(SUPPLIER), expectUserLp, "userLp error");
+    assertEq(provider.userReservedLp(SUPPLIER), expectReserve, "userReservedLp error");
+    assertEq(provider.totalReservedLp(), expectReserve, "totalReservedLp error");
   }
 
   function newSlisBNBProvider(

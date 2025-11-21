@@ -244,6 +244,11 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     }
     userMarketDeposit[account][id] = userMarketSupplyCollateral;
 
+    // if slisBNBxMinter is not set, use old logic
+    if (slisBNBxMinter == address(0)) {
+      return _rebalanceUserLp(account);
+    }
+
     // burn old data for transition to new slisBNBxMinter logic
     if (userLp[account] > 0 || userReservedLp[account] > 0) {
       uint256 totalDeposit = userTotalDeposit[account];
