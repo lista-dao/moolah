@@ -547,8 +547,8 @@ contract SmartProvider is
     uint256 dps1 = (token(1) == BNB_ADDRESS) ? 18 : IERC20Metadata(token(1)).decimals();
 
     // calculate lp value in BNB
-    uint256 value0 = (amounts[0] * token0Price) / dps0;
-    uint256 value1 = (amounts[1] * token1Price) / dps1;
+    uint256 value0 = ((amounts[0] * token0Price) * 1e18) / (10 ** dps0);
+    uint256 value1 = ((amounts[1] * token1Price) * 1e18) / (10 ** dps1);
     return (value0 + value1) / _peek(BNB_ADDRESS);
   }
 
