@@ -503,7 +503,11 @@ contract SmartProvider is
     }
     userMarketDeposit[account][id] = userMarketSupplyCollateral;
 
-    return ISlisBNBxMinter(slisBNBxMinter).rebalance(account);
+    if (slisBNBxMinter == address(0)) {
+      return (false, 0);
+    } else {
+      return ISlisBNBxMinter(slisBNBxMinter).rebalance(account);
+    }
   }
 
   /* ----------------------- slisBNBx Re-balancing ----------------------- */
