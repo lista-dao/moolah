@@ -12,10 +12,11 @@ contract PublicLiquidatorTest is BaseTest {
   using SharesMathLib for uint256;
   using MarketParamsLib for MarketParams;
 
-  IPublicLiquidator publicLiquidator;
+  PublicLiquidator publicLiquidator;
   address BOT;
   MockOneInch oneInch;
   address USER;
+  address _MANAGER = makeAddr("Manager");
 
   function setUp() public override {
     super.setUp();
@@ -27,9 +28,9 @@ contract PublicLiquidatorTest is BaseTest {
     PublicLiquidator impl = new PublicLiquidator(address(moolah));
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, OWNER, OWNER, BOT)
+      abi.encodeWithSelector(impl.initialize.selector, OWNER, _MANAGER, BOT)
     );
-    publicLiquidator = IPublicLiquidator(address(proxy));
+    publicLiquidator = PublicLiquidator(payable(address(proxy)));
   }
 
   /// @dev whitelist market couldn't be added to the whitelist again
@@ -87,6 +88,29 @@ contract PublicLiquidatorTest is BaseTest {
     moolah.borrow(marketParams, 8e18, 0, address(this), address(this));
 
     oracle.setPrice(address(collateralToken), ORACLE_PRICE_SCALE / 10);
+
+    vm.startPrank(USER);
+    vm.expectRevert("NotWhitelisted()");
+    publicLiquidator.flashLiquidate(
+      Id.unwrap(marketParams.id()),
+      address(this),
+      collateralAmount,
+      address(oneInch),
+      abi.encodeWithSelector(
+        oneInch.swap.selector,
+        address(collateralToken),
+        address(loanToken),
+        collateralAmount,
+        8e18
+      )
+    );
+    vm.stopPrank();
+
+    // whitelist pair
+    vm.startPrank(_MANAGER);
+    publicLiquidator.setPairWhitelist(address(oneInch), true);
+    assertTrue(publicLiquidator.pairWhitelist(address(oneInch)), "pair not whitelisted");
+    vm.stopPrank();
 
     vm.startPrank(USER);
     publicLiquidator.flashLiquidate(
@@ -178,6 +202,51 @@ contract PublicLiquidatorTest is BaseTest {
     loanToken.approve(address(publicLiquidator), 8e18 * 1.1);
     vm.expectRevert(bytes4(keccak256("NotWhitelisted()")));
     publicLiquidator.liquidate(Id.unwrap(marketParams.id()), address(this), collateralAmount, 0);
+    vm.stopPrank();
+  }
+
+  function _isLiquidatable(bytes32 id, address borrower) internal view returns (bool) {
+    return
+      IMoolah(address(moolah)).isLiquidationWhitelist(Id.wrap(id), address(0)) ||
+      publicLiquidator.marketWhitelist(id) ||
+      publicLiquidator.marketUserWhitelist(id, borrower);
+  }
+
+  function testSetMarketUserWhitelist() public {
+    // add Moolah liquidation whitelist first
+    vm.startPrank(OWNER);
+    moolah.addLiquidationWhitelist(marketParams.id(), BOT);
+    vm.stopPrank();
+    assertFalse(
+      IMoolah(address(moolah)).isLiquidationWhitelist(marketParams.id(), address(0)),
+      "bot already whitelisted in PublicLiquidator"
+    );
+    assertFalse(
+      publicLiquidator.marketWhitelist(Id.unwrap(marketParams.id())),
+      "market already whitelisted in PublicLiquidator"
+    );
+    address user1 = makeAddr("User1");
+    address user2 = makeAddr("User2");
+    assertFalse(_isLiquidatable(Id.unwrap(marketParams.id()), user1), "user1 position should be un-liquidatable");
+    assertFalse(_isLiquidatable(Id.unwrap(marketParams.id()), user2), "user2 position should be un-liquidatable");
+
+    vm.startPrank(BOT);
+    // whitelist market
+    publicLiquidator.setMarketWhitelist(Id.unwrap(marketParams.id()), true);
+    assertTrue(publicLiquidator.marketWhitelist(Id.unwrap(marketParams.id())), "market not whitelisted");
+    assertTrue(_isLiquidatable(Id.unwrap(marketParams.id()), user1), "user1 position should be liquidatable");
+    assertTrue(_isLiquidatable(Id.unwrap(marketParams.id()), user2), "user2 position should be liquidatable");
+
+    // set whitelist for user1 should revert since market is already whitelisted
+    vm.expectRevert("market is already open for liquidate");
+    publicLiquidator.setMarketUserWhitelist(Id.unwrap(marketParams.id()), user1, true);
+
+    // unset market whitelist and set user1 whitelist
+    publicLiquidator.setMarketWhitelist(Id.unwrap(marketParams.id()), false);
+    assertFalse(_isLiquidatable(Id.unwrap(marketParams.id()), user1), "user1 position should be un-liquidatable");
+    publicLiquidator.setMarketUserWhitelist(Id.unwrap(marketParams.id()), user1, true);
+    assertTrue(_isLiquidatable(Id.unwrap(marketParams.id()), user1), "user1 position should be liquidatable");
+
     vm.stopPrank();
   }
 }

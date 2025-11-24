@@ -125,6 +125,7 @@ contract LiquidatorTest is BaseTest {
 
     assertEq(loanToken.balanceOf(address(liquidator)), loanAmount, "loanToken balance");
     assertEq(collateralToken.balanceOf(address(liquidator)), 0, "collateralToken balance");
+    assertEq(collateralToken.allowance(address(liquidator), address(oneInch)), 0, "collateralToken allowance");
   }
 
   function testSellBNB() public {
