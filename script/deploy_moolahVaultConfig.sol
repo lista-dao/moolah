@@ -9,7 +9,7 @@ import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 contract MoolahVaultConfigDeploy is Script {
   using MarketParamsLib for MarketParams;
   // todo update vault
-  MoolahVault vault = MoolahVault(0xf21308b903F96592B6d6988c646dC2A3028F39fd);
+  MoolahVault vault = MoolahVault(0x384729E442b7636709896e9a3bEf63EF70C22FB0);
   uint256 fee = 10 * 1e16;
   address feeRecipient = 0x2E2Eed557FAb1d2E11fEA1E1a23FF8f1b23551f3;
   address skimRecipient = 0x1d60bBBEF79Fb9540D271Dbb01925380323A8f66;
@@ -25,6 +25,8 @@ contract MoolahVaultConfigDeploy is Script {
   address Puffer = 0x87d00066cf131ff54B72B134a217D5401E5392b6;
   address SPA = 0x1A9Fd6eC3144Da3Dd6Ea13Ec1C25C58423a379b1;
   address Aster = 0x000Ae314E2A2172a039B26378814C252734f556A;
+  address CDL = 0x84575b87395c970F1F48E87d87a8dB36Ed653716;
+  address AT = 0x9be61A38725b265BC3eb7Bfdf17AfDFc9d26C130;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
@@ -50,35 +52,21 @@ contract MoolahVaultConfigDeploy is Script {
     console.log("Deployer: ", deployer);
 
     MarketParams memory BTCBParams = MarketParams({
-      loanToken: Aster,
+      loanToken: AT,
       collateralToken: BTCB,
       oracle: multiOracle,
       irm: irm,
       lltv: lltv50
     });
-    MarketParams memory WBNBParams = MarketParams({
-      loanToken: Aster,
-      collateralToken: WBNB,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv50
-    });
-    MarketParams memory slisBNBParams = MarketParams({
-      loanToken: Aster,
-      collateralToken: slisBNB,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv50
-    });
-    MarketParams memory USD1Params = MarketParams({
-      loanToken: Aster,
-      collateralToken: USD1,
+    MarketParams memory AsterParams = MarketParams({
+      loanToken: AT,
+      collateralToken: Aster,
       oracle: multiOracle,
       irm: irm,
       lltv: lltv50
     });
     MarketParams memory USDTParams = MarketParams({
-      loanToken: Aster,
+      loanToken: AT,
       collateralToken: USDT,
       oracle: multiOracle,
       irm: irm,
@@ -97,23 +85,17 @@ contract MoolahVaultConfigDeploy is Script {
 
     vault.setFee(fee);
 
-    vault.setCap(BTCBParams, 5_000_000 ether);
-    vault.setCap(WBNBParams, 5_000_000 ether);
-    vault.setCap(slisBNBParams, 5_000_000 ether);
-    vault.setCap(USD1Params, 5_000_000 ether);
-    vault.setCap(USDTParams, 5_000_000 ether);
+    vault.setCap(BTCBParams, 4_000_000 ether);
+    vault.setCap(AsterParams, 2_000_000 ether);
+    vault.setCap(USDTParams, 4_000_000 ether);
 
     Id BTCBId = BTCBParams.id();
-    Id WBNBBId = WBNBParams.id();
-    Id slisBNBId = slisBNBParams.id();
-    Id USD1Id = USD1Params.id();
+    Id AsterId = AsterParams.id();
     Id USDTId = USDTParams.id();
-    Id[] memory supplyQueue = new Id[](5);
+    Id[] memory supplyQueue = new Id[](3);
     supplyQueue[0] = BTCBId;
-    supplyQueue[1] = WBNBBId;
-    supplyQueue[2] = slisBNBId;
-    supplyQueue[3] = USD1Id;
-    supplyQueue[4] = USDTId;
+    supplyQueue[1] = AsterId;
+    supplyQueue[2] = USDTId;
 
     vault.setSupplyQueue(supplyQueue);
     vm.stopBroadcast();

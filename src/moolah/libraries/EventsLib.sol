@@ -38,6 +38,8 @@ library EventsLib {
 
   event RemoveWhiteList(Id indexed id, address indexed account);
 
+  event SetVaultBlacklist(address indexed account, bool isBlacklisted);
+
   /// @notice Emitted when creating a market.
   /// @param id The market id.
   /// @param marketParams The market that was created.

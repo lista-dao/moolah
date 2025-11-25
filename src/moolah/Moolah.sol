@@ -80,6 +80,8 @@ contract Moolah is
   /// @inheritdoc IMoolahBase
   mapping(address => bool) public flashLoanTokenBlacklist;
 
+  mapping(address => bool) public vaultBlacklist;
+
   /// @inheritdoc IMoolahBase
   // fixed rate & fixed term brokers
   mapping(Id => address) public brokers;
@@ -234,6 +236,14 @@ contract Moolah is
     emit EventsLib.RemoveWhiteList(id, account);
   }
 
+  /// @inheritdoc IMoolahBase
+  function setVaultBlacklist(address account, bool isBlacklisted) external onlyRole(MANAGER) {
+    require(vaultBlacklist[account] != isBlacklisted, ErrorsLib.ALREADY_SET);
+    vaultBlacklist[account] = isBlacklisted;
+
+    emit EventsLib.SetVaultBlacklist(account, isBlacklisted);
+  }
+
   function addProvider(Id id, address provider) external onlyRole(MANAGER) {
     address token = IProvider(provider).TOKEN();
     require(token != address(0), ErrorsLib.ZERO_ADDRESS);
@@ -323,6 +333,7 @@ contract Moolah is
     require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
     require(UtilsLib.exactlyOneZero(assets, shares), ErrorsLib.INCONSISTENT_INPUT);
     require(onBehalf != address(0), ErrorsLib.ZERO_ADDRESS);
+    require(!vaultBlacklist[onBehalf], ErrorsLib.BLACKLISTED);
 
     _accrueInterest(marketParams, id);
 

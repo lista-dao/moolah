@@ -100,6 +100,8 @@ library ErrorsLib {
   /// @notice Thrown when broker's loan token or collateral token is invalid.
   string internal constant INVALID_BROKER = "invalid broker";
 
+  string internal constant BLACKLISTED = "blacklisted";
+
   /// @notice Thrown when the caller is not a broker.
   string internal constant NOT_BROKER = "not broker";
 }
