@@ -484,13 +484,13 @@ contract LendingBroker is
     uint256 repaidAssets;
     (, repaidAssets) = MOOLAH.liquidate(marketParams, borrower, seizedAssets, repaidShares, data);
 
-    // [9] supply interest to moolah vault
+    // [11] supply interest to moolah vault
     uint256 interestToBroker = liquidationContext.interestToBroker;
     if (interestToBroker > 0) {
       _supplyToMoolahVault(interestToBroker);
     }
 
-    // [10] must clear liquidation context after liquidation
+    // [12] must clear liquidation context after liquidation
     delete liquidationContext;
 
     // emit event
@@ -558,6 +558,8 @@ contract LendingBroker is
             _deductFixedPositionsDebt(borrower, sorted, interestLeftover, principalLeftover);
           }
         }
+        // [10] validate every position after deduction meets minLoan
+        _validatePositions(borrower);
       }
     }
   }
