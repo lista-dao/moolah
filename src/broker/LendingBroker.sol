@@ -686,6 +686,17 @@ contract LendingBroker is
   }
 
   /**
+   * @dev Get the total debt of a user (dynamic + fixed)
+   * @param user The address of the user
+   */
+  function getUserTotalDebt(address user) external view override returns (uint256 totalDebt) {
+    uint256 rate = IRateCalculator(rateCalculator).getRate(address(this));
+    DynamicLoanPosition memory dynPos = dynamicLoanPositions[user];
+    FixedLoanPosition[] memory fixedPos = fixedLoanPositions[user];
+    totalDebt = BrokerMath.getTotalDebt(fixedPos, dynPos, rate);
+  }
+
+  /**
    * @dev Preview the interest, penalty and principal repaid
    * @notice for frontend usage, when user is repaying a fixed loan position with certain amount
    * @param user The address of the user

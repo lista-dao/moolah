@@ -156,4 +156,8 @@ interface IBroker is IBrokerBase {
   /// @param amount The amount to convert from dynamic to fixed
   /// @param termId The ID of the fixed term to use
   function convertDynamicToFixed(uint256 amount, uint256 termId) external;
+
+  /// @dev get the total debt of a user including principal and interest
+  /// @param user The address of the user
+  function getUserTotalDebt(address user) external view returns (uint256 totalDebt);
 }
