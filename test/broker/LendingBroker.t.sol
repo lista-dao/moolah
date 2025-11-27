@@ -1246,6 +1246,17 @@ contract LendingBrokerTest is Test {
     skip(4 hours);
     FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
     assertEq(positions.length, 3);
+
+    // refinance as BOT
+    uint256[] memory wrongPosIds = new uint256[](4);
+    wrongPosIds[0] = positions[2].posId;
+    wrongPosIds[1] = positions[1].posId;
+    wrongPosIds[2] = positions[2].posId;
+    wrongPosIds[3] = positions[0].posId; // duplicated
+    vm.prank(BOT);
+    vm.expectRevert();
+    broker.refinanceMaturedFixedPositions(borrower, wrongPosIds);
+
     // refinance as BOT
     uint256[] memory posIds = new uint256[](3);
     posIds[0] = positions[0].posId;
