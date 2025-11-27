@@ -91,7 +91,7 @@ library BrokerMath {
   }
 
   /**
-   * @dev Ensure every position either cleared or larger than Moolah.minLoan
+   * @dev Ensure every position's principal either cleared or larger than Moolah.minLoan
    * @param user The address of the user
    * @param moolah The address of the Moolah contract
    * @param rateCalculator The address of the rate calculator
@@ -113,17 +113,14 @@ library BrokerMath {
     uint256 minLoan = _moolah.minLoan(_moolah.idToMarketParams(IBroker(address(this)).MARKET_ID()));
     // ensure each position either zero or larger than minLoan
     // check dynamic position
-    uint256 dynamicDebt = denormalizeBorrowAmount(dynamicPosition.normalizedDebt, currentRate);
+    uint256 dynamicDebt = dynamicPosition.principal;
     if (dynamicDebt > 0 && dynamicDebt < minLoan) {
       isValid = false;
     }
     // check fixed positions
     for (uint256 i = 0; i < fixedPositions.length; i++) {
       FixedLoanPosition memory _fixedPos = fixedPositions[i];
-      uint256 fixedPosDebt = _fixedPos.principal -
-        _fixedPos.principalRepaid +
-        getAccruedInterestForFixedPosition(_fixedPos) -
-        _fixedPos.interestRepaid;
+      uint256 fixedPosDebt = _fixedPos.principal - _fixedPos.principalRepaid;
       if (fixedPosDebt > 0 && fixedPosDebt < minLoan) {
         isValid = false;
       }
