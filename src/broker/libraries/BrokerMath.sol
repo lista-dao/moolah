@@ -255,6 +255,19 @@ library BrokerMath {
   }
 
   /**
+   * @dev Revert if duplicate position IDs are found
+   * @param posIds The position IDs to check for duplicates
+   */
+  function _revertIfDuplicatePosIds(uint256[] calldata posIds) internal pure {
+    for (uint256 i = 0; i < posIds.length; i++) {
+      uint256 posId = posIds[i];
+      for (uint256 j = i + 1; j < posIds.length; j++) {
+        require(posIds[j] != posId, "Broker/duplicate-pos-id");
+      }
+    }
+  }
+
+  /**
    * @dev Refinance matured fixed positions into dynamic position
    * @param user The address of the user
    * @param rate The current interest rate
@@ -265,6 +278,7 @@ library BrokerMath {
     uint256 rate,
     uint256[] calldata posIds
   ) public returns (FixedLoanPosition[] memory, DynamicLoanPosition memory, uint256) {
+    _revertIfDuplicatePosIds(posIds);
     IBroker broker = IBroker(address(this));
     uint256[] memory posIdToRemove = new uint256[](posIds.length);
     // the additional principal will be add into the dynamic position
