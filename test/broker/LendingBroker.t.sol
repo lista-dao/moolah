@@ -186,8 +186,13 @@ contract LendingBrokerTest is Test {
     liquidator = MockLiquidator(address(mockLiqProxy));
 
     // whitelist lendingbroker as liquidator in moolah
+    Id[] memory ids = new Id[](1);
+    ids[0] = id;
+    address[][] memory accounts = new address[][](1);
+    accounts[0] = new address[](1);
+    accounts[0][0] = address(broker);
     vm.prank(MANAGER);
-    Moolah(address(moolah)).addLiquidationWhitelist(id, address(broker));
+    Moolah(address(moolah)).batchToggleLiquidationWhitelist(ids, accounts, true);
 
     // whitelist liquidator at lending broker
     vm.prank(MANAGER);
@@ -936,8 +941,6 @@ contract LendingBrokerTest is Test {
     console.log("[Before] user repay shares: ", userRepayShares);
     console.log("[Before] user collateral before: ", userCollateralBefore);
 
-    uint256 brokerCollateralBalBefore = BTCB.balanceOf(address(broker));
-
     uint256 interestBefore = _totalInterestAtBroker(borrower);
     console.log("[Before] interest at broker: ", interestBefore);
     uint256 principalBeforeBroker = _totalPrincipalAtBroker(borrower);
@@ -955,9 +958,12 @@ contract LendingBrokerTest is Test {
     console.log("[Before] vault shares: ", vaultSharesBefore);
     console.log("[Before] vault assets: ", vaultAssetsBefore);
 
+    uint256 liquidatorCollateralBalBefore = BTCB.balanceOf(address(liquidator));
+
     LISUSD.setBalance(address(liquidator), 1_000_000 ether);
-    console.log("[Before] liquidator loanToken balance: ", LISUSD.balanceOf(address(liquidator)));
-    console.log("[Before] liquidator collateral balance: ", BTCB.balanceOf(address(liquidator)));
+    uint256 liquidatorLoanTokenBalBefore = LISUSD.balanceOf(address(liquidator));
+    console.log("[Before] liquidator loanToken balance: ", liquidatorLoanTokenBalBefore);
+    console.log("[Before] liquidator collateral balance: ", liquidatorCollateralBalBefore);
 
     vm.startPrank(BOT);
     if (expectRevert) {
@@ -993,7 +999,16 @@ contract LendingBrokerTest is Test {
     console.log("[After] interest at broker: ", interestAfter);
     console.log("[After] liquidator loanToken balance: ", LISUSD.balanceOf(address(liquidator)));
     console.log("[After] liquidator collateral balance: ", BTCB.balanceOf(address(liquidator)));
-    console.log("[After] broker collateral gained: ", BTCB.balanceOf(address(broker)) - brokerCollateralBalBefore);
+    uint256 collateralGained = BTCB.balanceOf(address(liquidator)) - liquidatorCollateralBalBefore;
+    console.log("[ORACLE] collateral price: ", oracle.peek(address(BTCB)));
+    uint256 collateralGainedWorth = collateralGained.mulDivDown(oracle.peek(address(BTCB)), 1e8);
+    uint256 liquidatorLoanTokenSpent = liquidatorLoanTokenBalBefore - LISUSD.balanceOf(address(liquidator));
+    if (collateralGainedWorth >= liquidatorLoanTokenSpent) {
+      console.log("[After] liquidator PROFITABLE: ", collateralGainedWorth - liquidatorLoanTokenSpent);
+    } else {
+      console.log("[After] liquidator LOSS: ", liquidatorLoanTokenSpent - collateralGainedWorth);
+    }
+
     assertApproxEqAbs(principalAfterBroker, principalAfterMoolah, 1, "principal mismatch after full");
 
     // user supply shares

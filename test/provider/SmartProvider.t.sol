@@ -125,10 +125,18 @@ contract SmartProviderTest is Test {
     // create market
     createMarket();
 
+    Id[] memory ids = new Id[](1);
+    ids[0] = marketParams.id();
+
+    address[][] memory accounts = new address[][](2);
+    accounts[0] = new address[](1);
+    accounts[0][0] = address(liquidator);
+    accounts[1] = new address[](1);
+    accounts[1][0] = address(publicLiquidator);
+
     // set liquidator
     vm.startPrank(manager);
-    moolah.addLiquidationWhitelist(marketParams.id(), address(liquidator));
-    moolah.addLiquidationWhitelist(marketParams.id(), address(publicLiquidator));
+    moolah.batchToggleLiquidationWhitelist(ids, accounts, true);
     liquidator.setTokenWhitelist(address(lp), true);
     liquidator.setMarketWhitelist(Id.unwrap(marketParams.id()), true);
     vm.stopPrank();
@@ -394,7 +402,7 @@ contract SmartProviderTest is Test {
     vm.stopPrank();
 
     vm.startPrank(manager);
-    moolah.addProvider(marketParams.id(), address(smartProvider));
+    moolah.setProvider(marketParams.id(), address(smartProvider), true);
     address[] memory providers = new address[](1);
     providers[0] = address(smartProvider);
     liquidator.batchSetSmartProviders(providers, true);
@@ -450,7 +458,7 @@ contract SmartProviderTest is Test {
     vm.stopPrank();
 
     vm.startPrank(manager);
-    moolah.addProvider(marketParams.id(), address(smartProvider));
+    moolah.setProvider(marketParams.id(), address(smartProvider), true);
     assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
     address[] memory providers = new address[](1);
     providers[0] = address(smartProvider);
@@ -506,7 +514,7 @@ contract SmartProviderTest is Test {
     vm.stopPrank();
 
     vm.prank(manager);
-    moolah.addProvider(marketParams.id(), address(smartProvider));
+    moolah.setProvider(marketParams.id(), address(smartProvider), true);
     assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
 
     address token0Pair = address(new MockOneInch());
@@ -590,7 +598,7 @@ contract SmartProviderTest is Test {
     vm.stopPrank();
 
     vm.prank(manager);
-    moolah.addProvider(marketParams.id(), address(smartProvider));
+    moolah.setProvider(marketParams.id(), address(smartProvider), true);
     assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
 
     uint256 usdtBefore = IERC20(USDT).balanceOf(address(liquidator));
@@ -660,7 +668,7 @@ contract SmartProviderTest is Test {
     vm.stopPrank();
 
     vm.prank(manager);
-    moolah.addProvider(marketParams.id(), address(smartProvider));
+    moolah.setProvider(marketParams.id(), address(smartProvider), true);
     assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
 
     uint256 usdtBefore = IERC20(USDT).balanceOf(address(publicLiquidator));
@@ -747,7 +755,7 @@ contract SmartProviderTest is Test {
     vm.stopPrank();
 
     vm.startPrank(manager);
-    moolah.addProvider(marketParams.id(), address(smartProvider));
+    moolah.setProvider(marketParams.id(), address(smartProvider), true);
     assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
     address[] memory providers = new address[](1);
     providers[0] = address(smartProvider);
@@ -888,7 +896,7 @@ contract SmartProviderTest is Test {
     smartProvider.withdrawCollateral(marketParams, withdrawAmount, minAmount0, minAmount1, user2, payable(user2));
     vm.stopPrank();
     vm.prank(manager);
-    moolah.addProvider(marketParams.id(), address(smartProvider));
+    moolah.setProvider(marketParams.id(), address(smartProvider), true);
     assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
 
     vm.prank(user2);
@@ -930,7 +938,7 @@ contract SmartProviderTest is Test {
     );
     vm.stopPrank();
     vm.prank(manager);
-    moolah.addProvider(marketParams.id(), address(smartProvider));
+    moolah.setProvider(marketParams.id(), address(smartProvider), true);
     assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
 
     vm.prank(user2);
@@ -974,7 +982,7 @@ contract SmartProviderTest is Test {
     smartProvider.withdrawCollateralOneCoin(marketParams, withdrawAmount, 1, expectBnbAmt, user2, payable(user2));
     vm.stopPrank();
     vm.prank(manager);
-    moolah.addProvider(marketParams.id(), address(smartProvider));
+    moolah.setProvider(marketParams.id(), address(smartProvider), true);
     assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
 
     vm.prank(user2);
@@ -1056,7 +1064,7 @@ contract SmartProviderTest is Test {
     test_supplyDexLp();
 
     vm.prank(manager);
-    moolah.addProvider(marketParams.id(), address(smartProvider));
+    moolah.setProvider(marketParams.id(), address(smartProvider), true);
     assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
 
     uint256 redeemAmount = 500 ether;

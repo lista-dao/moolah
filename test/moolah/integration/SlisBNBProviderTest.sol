@@ -39,7 +39,7 @@ contract SlisBNBProviderTest is BaseTest {
     );
 
     vm.startPrank(OWNER);
-    moolah.addProvider(marketParams.id(), address(provider));
+    moolah.setProvider(marketParams.id(), address(provider), true);
     provider.addMPCWallet(MPC, type(uint256).max);
     vm.stopPrank();
 
@@ -114,10 +114,10 @@ contract SlisBNBProviderTest is BaseTest {
         provider.MANAGER()
       )
     );
-    moolah.addProvider(testMarketParams.id(), testProvider);
+    moolah.setProvider(testMarketParams.id(), testProvider, true);
 
     vm.startPrank(OWNER);
-    moolah.addProvider(testMarketParams.id(), testProvider);
+    moolah.setProvider(testMarketParams.id(), testProvider, true);
     vm.stopPrank();
 
     assertEq(testProvider, moolah.providers(testMarketParams.id(), testToken), "provider error");
@@ -140,7 +140,7 @@ contract SlisBNBProviderTest is BaseTest {
     moolah.createMarket(testMarketParams);
 
     vm.startPrank(OWNER);
-    moolah.addProvider(testMarketParams.id(), testProvider);
+    moolah.setProvider(testMarketParams.id(), testProvider, true);
     vm.stopPrank();
 
     vm.expectRevert(
@@ -150,10 +150,10 @@ contract SlisBNBProviderTest is BaseTest {
         provider.MANAGER()
       )
     );
-    moolah.removeProvider(testMarketParams.id(), testToken);
+    moolah.setProvider(testMarketParams.id(), testToken, false);
 
     vm.startPrank(OWNER);
-    moolah.removeProvider(testMarketParams.id(), testToken);
+    moolah.setProvider(testMarketParams.id(), testToken, false);
     vm.stopPrank();
 
     assertEq(address(0), moolah.providers(testMarketParams.id(), testToken), "provider error");
