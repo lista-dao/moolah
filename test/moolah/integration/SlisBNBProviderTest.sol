@@ -150,13 +150,13 @@ contract SlisBNBProviderTest is BaseTest {
         provider.MANAGER()
       )
     );
-    moolah.setProvider(testMarketParams.id(), testToken, false);
+    moolah.setProvider(testMarketParams.id(), testProvider, false);
 
     vm.startPrank(OWNER);
-    moolah.setProvider(testMarketParams.id(), testToken, false);
+    moolah.setProvider(testMarketParams.id(), testProvider, false);
     vm.stopPrank();
 
-    assertEq(address(0), moolah.providers(testMarketParams.id(), testToken), "provider error");
+    assertEq(address(0), moolah.providers(testMarketParams.id(), testProvider), "provider error");
   }
 
   function test_liquidate() public {
