@@ -107,13 +107,11 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
 
   function _setMarketToBroker(bytes32 id, address broker, bool status) internal {
     require(IMoolah(MOOLAH).idToMarketParams(Id.wrap(id)).loanToken != address(0), "Invalid market");
-    require(
-      _checkBrokerMarketId(broker, id) && Id.unwrap(IBrokerBase(broker).MARKET_ID()) == id,
-      BrokerMarketIdMismatch()
-    );
+    require(Id.unwrap(IBrokerBase(broker).MARKET_ID()) == id, BrokerMarketIdMismatch());
     // add market and broker to whitelist
     if (status) {
       require(marketIdToBroker[id] != broker, WhitelistSameStatus());
+      require(_checkBrokerMarketId(broker, id), BrokerMarketIdMismatch());
       marketIdToBroker[id] = broker;
       brokerToMarketId[broker] = id;
     } else {
