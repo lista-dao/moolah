@@ -40,11 +40,13 @@ interface IBrokerLiquidator {
 
   function setTokenWhitelist(address token, bool status) external;
 
-  function setMarketWhitelist(bytes32 id, address broker, bool status) external;
+  function setMarketToBroker(bytes32 id, address broker, bool status) external;
 
-  function batchSetMarketWhitelist(bytes32[] calldata ids, address[] calldata brokers, bool status) external;
+  function batchSetMarketToBroker(bytes32[] calldata ids, address[] calldata brokers, bool status) external;
 
   function setPairWhitelist(address pair, bool status) external;
 
-  function marketWhitelist(bytes32 id) external view returns (address);
+  function marketIdToBroker(bytes32 id) external view returns (address);
+
+  function brokerToMarketId(address broker) external view returns (bytes32);
 }

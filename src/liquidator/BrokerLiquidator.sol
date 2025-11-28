@@ -28,11 +28,11 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   mapping(address => bool) public pairWhitelist;
   /// @dev market id => broker address
   // zero address means market not whitelisted
-  mapping(bytes32 => address) public marketWhitelist;
+  mapping(bytes32 => address) public marketIdToBroker;
   /// @dev broker address => market id
   // then we will know broker is whitelisted or not
-  // by checking broker address => marketWhitelist[market id] == broker address
-  mapping(address => bytes32) public brokerWhitelist;
+  // by checking broker address => marketIdToBroker[market id] == broker address
+  mapping(address => bytes32) public brokerToMarketId;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // manager role
@@ -84,15 +84,15 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   /// @param id The id of the market.
   /// @param broker The address of the broker.
   /// @param status The status of the market.
-  function setMarketWhitelist(bytes32 id, address broker, bool status) external onlyRole(MANAGER) {
-    _setMarketWhitelist(id, broker, status);
+  function setMarketToBroker(bytes32 id, address broker, bool status) external onlyRole(MANAGER) {
+    _setMarketToBroker(id, broker, status);
   }
 
   /// @dev batch sets the market whitelist.
   /// @param ids The array of market ids.
   /// @param brokers The array of broker addresses.
   /// @param status The status to set for all markets.
-  function batchSetMarketWhitelist(
+  function batchSetMarketToBroker(
     bytes32[] calldata ids,
     address[] calldata brokers,
     bool status
@@ -101,23 +101,28 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     for (uint256 i = 0; i < ids.length; i++) {
       bytes32 id = ids[i];
       address broker = brokers[i];
-      _setMarketWhitelist(id, broker, status);
+      _setMarketToBroker(id, broker, status);
     }
   }
 
-  function _setMarketWhitelist(bytes32 id, address broker, bool status) internal {
+  function _setMarketToBroker(bytes32 id, address broker, bool status) internal {
     require(IMoolah(MOOLAH).idToMarketParams(Id.wrap(id)).loanToken != address(0), "Invalid market");
-    require(Id.unwrap(IBrokerBase(broker).MARKET_ID()) == id, BrokerMarketIdMismatch());
-    require(marketWhitelist[id] != broker && brokerWhitelist[broker] != id, WhitelistSameStatus());
+    require(_checkBrokerMarketId(broker, id), BrokerMarketIdMismatch());
     // add market and broker to whitelist
     if (status) {
-      marketWhitelist[id] = broker;
-      brokerWhitelist[broker] = id;
+      require(marketIdToBroker[id] != broker, WhitelistSameStatus());
+      marketIdToBroker[id] = broker;
+      brokerToMarketId[broker] = id;
     } else {
-      marketWhitelist[id] = address(0);
-      brokerWhitelist[broker] = bytes32(0);
+      marketIdToBroker[id] = address(0);
+      brokerToMarketId[broker] = bytes32(0);
     }
     emit MarketWhitelistChanged(id, broker, status);
+  }
+
+  function _checkBrokerMarketId(address broker, bytes32 id) internal view returns (bool) {
+    IMoolah moolah = IMoolah(MOOLAH);
+    return moolah.brokers(Id.wrap(id)) == broker;
   }
 
   /// @dev sets the pair whitelist.
@@ -181,9 +186,9 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     address pair,
     bytes calldata swapCollateralData
   ) external onlyRole(BOT) {
-    address broker = marketWhitelist[id];
+    address broker = marketIdToBroker[id];
     require(broker != address(0), NotWhitelisted());
-    require(Id.unwrap(IBrokerBase(broker).MARKET_ID()) == id, BrokerMarketIdMismatch());
+    require(_checkBrokerMarketId(broker, id), BrokerMarketIdMismatch());
     require(pairWhitelist[pair], NotWhitelisted());
     MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(Id.wrap(id));
     IBrokerBase(broker).liquidate(
@@ -219,9 +224,9 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   /// @param seizedAssets The amount of assets to seize.
   /// @param repaidShares The amount of shares to repay.
   function liquidate(bytes32 id, address borrower, uint256 seizedAssets, uint256 repaidShares) external onlyRole(BOT) {
-    address broker = marketWhitelist[id];
+    address broker = marketIdToBroker[id];
     require(broker != address(0), NotWhitelisted());
-    require(Id.unwrap(IBrokerBase(broker).MARKET_ID()) == id, BrokerMarketIdMismatch());
+    require(_checkBrokerMarketId(broker, id), BrokerMarketIdMismatch());
     MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(Id.wrap(id));
     IBrokerBase(broker).liquidate(
       params,
@@ -254,8 +259,8 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   /// @param repaidAssets The amount of assets repaid.
   /// @param data The callback data.
   function onMoolahLiquidate(uint256 repaidAssets, bytes calldata data) external {
-    bytes32 id = brokerWhitelist[msg.sender];
-    require(marketWhitelist[id] == msg.sender, OnlyBroker());
+    bytes32 id = brokerToMarketId[msg.sender];
+    require(marketIdToBroker[id] == msg.sender, OnlyBroker());
     MoolahLiquidateData memory arb = abi.decode(data, (MoolahLiquidateData));
     if (arb.swapCollateral) {
       require(!arb.swapSmartCollateral, "only swap collateral or smart collateral");

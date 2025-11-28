@@ -199,7 +199,7 @@ contract LendingBrokerTest is Test {
 
     // add brokers mapping in liquidator
     vm.prank(MANAGER);
-    liquidator.setMarketWhitelist(Id.unwrap(id), address(broker), true);
+    liquidator.setMarketToBroker(Id.unwrap(id), address(broker), true);
   }
 
   function _snapshot(address user) internal view returns (Market memory market, Position memory pos) {
@@ -1201,13 +1201,15 @@ contract LendingBrokerTest is Test {
 
     vm.prank(MANAGER);
     newBroker.setMarketId(newId);
+    vm.prank(MANAGER);
+    Moolah(address(moolah)).setMarketBroker(newId, address(newBroker), true);
 
     bytes32 rawId = Id.unwrap(newId);
     vm.prank(MANAGER);
-    liquidator.setMarketWhitelist(rawId, address(newBroker), true);
+    liquidator.setMarketToBroker(rawId, address(newBroker), true);
 
-    assertEq(liquidator.marketWhitelist(rawId), address(newBroker), "market not whitelisted");
-    assertEq(liquidator.brokerWhitelist(address(newBroker)), rawId, "broker mapping missing");
+    assertEq(liquidator.marketIdToBroker(rawId), address(newBroker), "market not whitelisted");
+    assertEq(liquidator.brokerToMarketId(address(newBroker)), rawId, "broker mapping missing");
   }
 
   function test_liquidatorBatchSetMarketWhitelist_whitelistsMultipleMarkets() public {
@@ -1249,6 +1251,11 @@ contract LendingBrokerTest is Test {
     vm.prank(MANAGER);
     brokerB.setMarketId(idB);
 
+    vm.prank(MANAGER);
+    Moolah(address(moolah)).setMarketBroker(idA, address(brokerA), true);
+    vm.prank(MANAGER);
+    Moolah(address(moolah)).setMarketBroker(idB, address(brokerB), true);
+
     bytes32[] memory ids = new bytes32[](2);
     address[] memory brokers = new address[](2);
     ids[0] = Id.unwrap(idA);
@@ -1257,12 +1264,12 @@ contract LendingBrokerTest is Test {
     brokers[1] = address(brokerB);
 
     vm.prank(MANAGER);
-    liquidator.batchSetMarketWhitelist(ids, brokers, true);
+    liquidator.batchSetMarketToBroker(ids, brokers, true);
 
-    assertEq(liquidator.marketWhitelist(ids[0]), brokers[0], "first market not whitelisted");
-    assertEq(liquidator.marketWhitelist(ids[1]), brokers[1], "second market not whitelisted");
-    assertEq(liquidator.brokerWhitelist(brokers[0]), ids[0], "first broker mapping missing");
-    assertEq(liquidator.brokerWhitelist(brokers[1]), ids[1], "second broker mapping missing");
+    assertEq(liquidator.marketIdToBroker(ids[0]), brokers[0], "first market not whitelisted");
+    assertEq(liquidator.marketIdToBroker(ids[1]), brokers[1], "second market not whitelisted");
+    assertEq(liquidator.brokerToMarketId(brokers[0]), ids[0], "first broker mapping missing");
+    assertEq(liquidator.brokerToMarketId(brokers[1]), ids[1], "second broker mapping missing");
   }
 
   function test_setFixedTerm_validations_revert() public {
