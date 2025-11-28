@@ -170,6 +170,9 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     require(actualAmountIn <= amountIn, ExceedAmount());
     require(actualAmountOut >= amountOutMin, NoProfit());
 
+    // reset allowance to zero
+    SafeTransferLib.safeApprove(tokenIn, pair, 0);
+
     emit SellToken(pair, tokenIn, tokenOut, actualAmountIn, actualAmountOut);
   }
 
