@@ -36,7 +36,6 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // manager role
-  address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
   event TokenWhitelistChanged(address indexed token, bool added);
   event MarketWhitelistChanged(bytes32 id, address broker, bool added);
@@ -83,6 +82,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
 
   /// @dev sets the market whitelist.
   /// @param id The id of the market.
+  /// @param broker The address of the broker.
   /// @param status The status of the market.
   function setMarketWhitelist(bytes32 id, address broker, bool status) external onlyRole(MANAGER) {
     _setMarketWhitelist(id, broker, status);
@@ -90,6 +90,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
 
   /// @dev batch sets the market whitelist.
   /// @param ids The array of market ids.
+  /// @param brokers The array of broker addresses.
   /// @param status The status to set for all markets.
   function batchSetMarketWhitelist(
     bytes32[] calldata ids,
@@ -216,6 +217,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   /// @param id The id of the market.
   /// @param borrower The address of the borrower.
   /// @param seizedAssets The amount of assets to seize.
+  /// @param repaidShares The amount of shares to repay.
   function liquidate(bytes32 id, address borrower, uint256 seizedAssets, uint256 repaidShares) external onlyRole(BOT) {
     address broker = marketWhitelist[id];
     require(broker != address(0), NotWhitelisted());
