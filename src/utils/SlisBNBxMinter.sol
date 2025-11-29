@@ -247,12 +247,17 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
    * @dev sync user's slisBNBx balance to retain a consistent ratio with token balance
    * @param _account user address to sync
    */
-  function syncUserModuleLp(address _account, address _module) public {
+  function syncUserModuleLp(address _account, address _module) external {
+    bool rebalanced = _syncUserModuleLp(_account, _module);
+    require(rebalanced, "already synced");
+  }
+
+  function _syncUserModuleLp(address _account, address _module) private returns (bool) {
     ModuleConfig memory config = moduleConfig[_module];
     require(config.moduleAddress == _module, "unauthorized module");
 
     (bool rebalanced, ) = _rebalanceUserLp(_account, _module);
-    require(rebalanced, "already synced");
+    return rebalanced;
   }
 
   /**
@@ -263,7 +268,7 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     require(_accounts.length == _module.length, "accounts and modules length mismatch");
 
     for (uint256 i = 0; i < _accounts.length; i++) {
-      syncUserModuleLp(_accounts[i], _module[i]);
+      _syncUserModuleLp(_accounts[i], _module[i]);
     }
   }
 
