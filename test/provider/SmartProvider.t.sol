@@ -128,11 +128,10 @@ contract SmartProviderTest is Test {
     Id[] memory ids = new Id[](1);
     ids[0] = marketParams.id();
 
-    address[][] memory accounts = new address[][](2);
-    accounts[0] = new address[](1);
+    address[][] memory accounts = new address[][](1);
+    accounts[0] = new address[](2);
     accounts[0][0] = address(liquidator);
-    accounts[1] = new address[](1);
-    accounts[1][0] = address(publicLiquidator);
+    accounts[0][1] = address(publicLiquidator);
 
     // set liquidator
     vm.startPrank(manager);
