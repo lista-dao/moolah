@@ -322,6 +322,7 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
    */
   function addMPCWallet(address walletAddress, uint256 cap) external onlyRole(MANAGER) {
     require(walletAddress != address(0), "zero address provided");
+    require(cap > 0, "Invalid cap");
     // check if the wallet already exists
     for (uint256 i = 0; i < mpcWallets.length; ++i) {
       require(mpcWallets[i].walletAddress != walletAddress, "Wallet already exists");
