@@ -1140,7 +1140,7 @@ contract SmartProviderTest is Test {
     moduleConfigs[0] = SlisBNBxMinter.ModuleConfig({
       discount: 2e4, // 2%
       feeRate: 3e4, // 3%
-      enabled: true
+      moduleAddress: address(smartProvider)
     });
 
     SlisBNBxMinter impl = new SlisBNBxMinter(slisBnbx);

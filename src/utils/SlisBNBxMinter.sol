@@ -30,9 +30,9 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   }
 
   struct ModuleConfig {
-    uint24 discount; // for LP modules, a discount should be applied before calculating user's slisBNBx
+    uint24 discount; // for LP modules, a discount should be applied before calculating user's slisBNBx; set to 100% to disable the module
     uint24 feeRate; // portion of slisBNBx to be taken as fee
-    bool enabled; // whether the module is enabled
+    address moduleAddress; // module address used to distinguish if an address is a valid module
   }
 
   struct UserModuleBalance {
@@ -93,11 +93,12 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
       address module = _modules[i];
       ModuleConfig memory config = _configs[i];
       require(module != address(0), "module is the zero address");
+      require(module == config.moduleAddress, "module address mismatch");
       require(config.feeRate <= DENOMINATOR, "userLpRate invalid");
       require(config.discount <= DENOMINATOR, "discount invalid");
 
       moduleConfig[module] = config;
-      emit ModuleConfigUpdated(module, config.discount, config.feeRate, config.enabled);
+      emit ModuleConfigUpdated(module, config.discount, config.feeRate, true);
     }
 
     __AccessControl_init();
@@ -115,7 +116,7 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     require(account != address(0), "zero account address");
 
     ModuleConfig memory config = moduleConfig[msg.sender];
-    require(config.enabled, "unauthorized module");
+    require(config.moduleAddress == msg.sender, "unauthorized module");
 
     // rebalance user's slisBNBx
     (rebalanced, latestModuleBalance) = _rebalanceUserLp(account, msg.sender);
@@ -208,7 +209,7 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
    * @param newDelegatee new delegatee address
    */
   function syncDelegatee(address account, address newDelegatee) external {
-    require(moduleConfig[msg.sender].enabled, "unauthorized msg.sender");
+    require(moduleConfig[msg.sender].moduleAddress == msg.sender, "unauthorized msg.sender");
 
     _delegateAllTo(account, newDelegatee);
   }
@@ -248,7 +249,7 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
    */
   function syncUserModuleLp(address _account, address _module) public {
     ModuleConfig memory config = moduleConfig[_module];
-    require(config.enabled, "unauthorized module");
+    require(config.moduleAddress == _module, "unauthorized module");
 
     (bool rebalanced, ) = _rebalanceUserLp(_account, _module);
     require(rebalanced, "already synced");
@@ -392,7 +393,7 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   }
 
   /**
-   * @dev Update module configurations
+   * @dev Update module configurations; to disable a module, set discount to 100% and feeRate to 0
    * @param _modules The list of modules to be updated.
    * @param _configs The list of module configurations.
    */
@@ -406,13 +407,18 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
       require(config.feeRate <= DENOMINATOR, "userLpRate invalid");
       require(config.discount <= DENOMINATOR, "discount invalid");
       ModuleConfig memory _config = moduleConfig[module];
-      require(
-        _config.discount != config.discount || _config.feeRate != config.feeRate || _config.enabled != config.enabled,
-        "no changes detected"
-      );
+      require(config.moduleAddress == module, "module address should not change");
+      require(_config.discount != config.discount || _config.feeRate != config.feeRate, "no changes detected");
+
+      bool enabled = true;
+      if (config.discount == DENOMINATOR) {
+        // when disabling a module, set `discount` to 100% and `feeRate` to 0
+        require(config.feeRate == 0, "feeRate must be 0 when disabling module");
+        enabled = false;
+      }
 
       moduleConfig[module] = config;
-      emit ModuleConfigUpdated(module, config.discount, config.feeRate, config.enabled);
+      emit ModuleConfigUpdated(module, config.discount, config.feeRate, enabled);
     }
   }
 

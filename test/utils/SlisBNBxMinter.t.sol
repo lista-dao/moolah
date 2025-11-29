@@ -56,12 +56,12 @@ contract SlisBNBxMinterTest is Test {
     moduleConfigs[0] = SlisBNBxMinter.ModuleConfig({
       discount: 0,
       feeRate: 3e4, // 3%
-      enabled: true
+      moduleAddress: slisBnbModule
     });
     moduleConfigs[1] = SlisBNBxMinter.ModuleConfig({
       discount: 2e4, // 2%
       feeRate: 3e4, // 3%
-      enabled: true
+      moduleAddress: smartLpModule
     });
 
     ERC1967Proxy proxy = new ERC1967Proxy(
@@ -74,15 +74,15 @@ contract SlisBNBxMinterTest is Test {
     assertTrue(minter.hasRole(minter.DEFAULT_ADMIN_ROLE(), admin));
     assertTrue(minter.hasRole(minter.MANAGER(), manager));
 
-    (uint24 discount, uint24 feeRate, bool enabled) = minter.moduleConfig(slisBnbModule);
+    (uint24 discount, uint24 feeRate, address moduleAddress) = minter.moduleConfig(slisBnbModule);
     assertEq(discount, 0);
     assertEq(feeRate, 3e4);
-    assertTrue(enabled);
+    assertEq(moduleAddress, slisBnbModule);
 
-    (discount, feeRate, enabled) = minter.moduleConfig(smartLpModule);
+    (discount, feeRate, moduleAddress) = minter.moduleConfig(smartLpModule);
     assertEq(discount, 2e4);
     assertEq(feeRate, 3e4);
-    assertTrue(enabled);
+    assertEq(moduleAddress, smartLpModule);
 
     // add MPC
     vm.prank(manager);
@@ -473,6 +473,35 @@ contract SlisBNBxMinterTest is Test {
     assertEq(afterUserBalance, beforeUserBalance - totalBalance, "user balance not decreased correctly");
     assertEq(afterDelegateeBalance, beforeDelegateeBalance + totalBalance, "delegatee balance not increased correctly");
     assertEq(afterDelegateeBalance, beforeUserBalance, "delegatee balance not equal to before user balance");
+  }
+
+  function test_disable_module() public {
+    address[] memory modules = new address[](1);
+    modules[0] = smartLpModule;
+    SlisBNBxMinter.ModuleConfig[] memory configs = new SlisBNBxMinter.ModuleConfig[](1);
+    configs[0] = SlisBNBxMinter.ModuleConfig({ discount: 1_000_000, feeRate: 0, moduleAddress: smartLpModule });
+    // disable smartLpModule
+    vm.prank(manager);
+    minter.updateModules(modules, configs);
+    (uint24 discount, uint24 feeRate, address moduleAddress) = minter.moduleConfig(smartLpModule);
+    assertEq(discount, 1_000_000);
+    assertEq(feeRate, 0);
+    assertEq(moduleAddress, smartLpModule);
+
+    // try to supply collateral via smartProvider
+    uint256 amount = 1 ether;
+    address user = makeAddr("user3");
+    deal(user, amount);
+    deal(slisBnb, user, amount);
+
+    uint256 beforeBalance = ISlisBNBx(slisBnbx).balanceOf(user);
+
+    vm.startPrank(user);
+    IERC20(slisBnb).approve(address(smartProvider), amount);
+    smartProvider.supplyCollateral{ value: amount }(param1, user, amount, amount, 0);
+    vm.stopPrank();
+    uint256 afterBalance = ISlisBNBx(slisBnbx).balanceOf(user);
+    assertEq(afterBalance - beforeBalance, 0, "slisBNBx balance should not change");
   }
 
   function getImplementation(address _proxyAddress) public view returns (address) {
