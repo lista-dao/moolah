@@ -118,6 +118,19 @@ contract BrokerInterestRelayer is
     }
   }
 
+  /**
+   * @dev Returns the list of whitelisted brokers
+   * @return brokerList The list of whitelisted brokers
+   */
+  function getBrokers() external view returns (address[] memory) {
+    uint256 length = brokers.length();
+    address[] memory brokerList = new address[](length);
+    for (uint256 i = 0; i < length; i++) {
+      brokerList[i] = brokers.at(i);
+    }
+    return brokerList;
+  }
+
   ///////////////////////////////////////
   /////        Admin functions      /////
   ///////////////////////////////////////
