@@ -84,15 +84,6 @@ contract SmartProvider is
     address receiver
   );
 
-  event SmartLiquidation(
-    address indexed liquidator,
-    address indexed collateralToken,
-    address dexLP,
-    uint256 seizedAssets,
-    uint256 minAmount0,
-    uint256 minAmount1
-  );
-
   event RedeemLpCollateral(address indexed liquidator, uint256 lpAmount, uint256 token0Amount, uint256 token1Amount);
   event SlisBNBxMinterChanged(address newSlisBNBxMinter);
 
