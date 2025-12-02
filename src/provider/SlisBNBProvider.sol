@@ -259,6 +259,8 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
       address delegatee = delegation[account];
       address targetDelegatee = ISlisBNBxMinter(slisBNBxMinter).delegation(account);
       if (delegatee != address(0) && targetDelegatee != delegatee && delegatee != account) {
+        // clear old delegation record
+        delegation[account] = address(0);
         // write delegation data to slisBNBxMinter
         ISlisBNBxMinter(slisBNBxMinter).syncDelegatee(account, delegatee);
       }
