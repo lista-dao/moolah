@@ -9,11 +9,11 @@ import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 contract MoolahVaultDeploy is Script {
   address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
 
-  address asset = 0x9be61A38725b265BC3eb7Bfdf17AfDFc9d26C130; // AT
+  address asset = 0x0782b6d8c4551B9760e74c0545a9bCD90bdc41E5; // lisUSD
 
   MoolahVault impl = MoolahVault(0xA1f832c7C7ECf91A53b4ff36E0ABdb5133C15982);
-  string name = "APRO Vault";
-  string symbol = "APRO";
+  string name = "LisUSD Vault";
+  string symbol = "LisUSD";
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
