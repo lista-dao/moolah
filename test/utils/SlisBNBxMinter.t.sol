@@ -383,7 +383,7 @@ contract SlisBNBxMinterTest is Test {
     vm.stopPrank();
 
     // delegation data should be emptied in slisBnbProvider
-    assertEq(slisBnbProvider.delegation(user), delegatee, "old provider delegatee should be same");
+    assertEq(slisBnbProvider.delegation(user), address(0), "old provider delegation record should be cleared");
     assertEq(slisBnbProvider.userLp(delegatee), 0, "old provider delegatee balance should be zero");
     assertEq(slisBnbProvider.userReservedLp(delegatee), 0, "old provider delegatee reserved balance should be zero");
 

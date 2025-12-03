@@ -257,7 +257,10 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
       _rebalanceUserLp(account);
 
       address delegatee = delegation[account];
-      if (delegatee != address(0)) {
+      address targetDelegatee = ISlisBNBxMinter(slisBNBxMinter).delegation(account);
+      if (delegatee != address(0) && targetDelegatee != delegatee && delegatee != account) {
+        // clear old delegation record
+        delegation[account] = address(0);
         // write delegation data to slisBNBxMinter
         ISlisBNBxMinter(slisBNBxMinter).syncDelegatee(account, delegatee);
       }
@@ -463,19 +466,6 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     slisBNBxMinter = _slisBNBxMinter;
 
     emit SlisBNBxMinterChanged(_slisBNBxMinter);
-  }
-
-  /// @dev Sync delegation records to slisBNBxMinter
-  /// @param accounts The list of user addresses to sync
-  function syncDelegation(address[] calldata accounts) external {
-    for (uint256 i = 0; i < accounts.length; i++) {
-      address account = accounts[i];
-      address delegatee = delegation[account];
-      if (delegatee != address(0)) {
-        // write data to slisBNBxMinter
-        ISlisBNBxMinter(slisBNBxMinter).syncDelegatee(account, delegatee);
-      }
-    }
   }
 
   /**
