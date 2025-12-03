@@ -25,4 +25,19 @@ interface IFixedRateIrm is IIrm {
   /// @dev As interest are rounded down in Moolah, for markets with a low total borrow, setting a rate too low could
   /// prevent interest from accruing if interactions are frequent.
   function setBorrowRate(Id id, int256 newBorrowRate) external;
+
+  /// @notice Rate cap for the given market.
+  function rateCap(Id id) external view returns (uint256);
+
+  /// @notice Minimum borrow rate for the given market.
+  function rateFloor(Id id) external view returns (uint256);
+
+  /// @notice Minimum borrow rate cap for all markets.
+  function minCap() external view returns (uint256);
+
+  /// @notice Updates the borrow rate cap for a market.
+  function updateRateCap(Id id, uint256 newRateCap) external;
+
+  /// @notice Updates the minimum borrow rate cap for all markets.
+  function updateMinCap(uint256 newMinCap) external;
 }
