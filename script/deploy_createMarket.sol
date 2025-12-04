@@ -102,32 +102,25 @@ contract CreateMarketDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams[] memory params = new MarketParams[](3);
+    MarketParams[] memory params = new MarketParams[](2);
     params[0] = MarketParams({
       loanToken: lisUSD,
       collateralToken: WBNB,
       oracle: multiOracle,
       irm: alphaIrm,
-      lltv: lltv86
+      lltv: lltv85
     });
     params[1] = MarketParams({
       loanToken: lisUSD,
       collateralToken: slisBNB,
       oracle: multiOracle,
       irm: alphaIrm,
-      lltv: lltv86
-    });
-    params[2] = MarketParams({
-      loanToken: lisUSD,
-      collateralToken: BTCB,
-      oracle: multiOracle,
-      irm: alphaIrm,
-      lltv: lltv86
+      lltv: lltv85
     });
 
     // create market
     vm.startBroadcast(deployerPrivateKey);
-    for (uint256 i = 0; i < 3; i++) {
+    for (uint256 i = 0; i < 2; i++) {
       Id id = params[i].id();
       console.log("market id:");
       console.logBytes32(Id.unwrap(id));
