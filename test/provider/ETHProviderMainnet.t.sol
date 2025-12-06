@@ -12,6 +12,10 @@ import { MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
 
+interface IMoolahLegacy {
+  function addProvider(Id id, address provider) external;
+}
+
 contract ETHProviderTest is Test {
   using MarketParamsLib for MarketParams;
   using SharesMathLib for uint256;
@@ -52,7 +56,7 @@ contract ETHProviderTest is Test {
 
     // Set up Moolah
     vm.prank(manager);
-    moolah.addProvider(param.id(), ethProviderProxy);
+    IMoolahLegacy(address(moolah)).addProvider(param.id(), ethProviderProxy);
     assertEq(moolah.providers(param.id(), WETH), ethProviderProxy);
 
     // Deploy MoolahVault

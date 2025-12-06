@@ -3,15 +3,19 @@ pragma solidity 0.8.28;
 
 import "forge-std/Script.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import { FixedRateIrm } from "../src/interest-rate-model/FixedRateIrm.sol";
+import { BrokerLiquidator } from "../../src/liquidator/BrokerLiquidator.sol";
 
-contract DeployFixedRateIRM is Script {
+contract DeployBrokerLiquidator is Script {
   address timelock;
   address manager;
+  address bot;
+  address moolah;
 
   function setUp() public {
     timelock = vm.envAddress("TIMELOCK");
     manager = vm.envAddress("MANAGER");
+    bot = vm.envAddress("BOT");
+    moolah = vm.envAddress("MOOLAH");
   }
 
   function run() public {
@@ -20,22 +24,22 @@ contract DeployFixedRateIRM is Script {
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
 
-    // Deploy FixedRateIRM implementation
-    FixedRateIrm impl = new FixedRateIrm();
-    console.log("FixedRateIRM implementation: ", address(impl));
+    // Deploy BrokerLiquidator implementation
+    BrokerLiquidator impl = new BrokerLiquidator(moolah);
+    console.log("BrokerLiquidator implementation: ", address(impl));
 
-    // Deploy FixedRateIRM proxy
+    // Deploy BrokerLiquidator proxy
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer)
+      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, bot)
     );
-    console.log("FixedRateIRM proxy: ", address(proxy));
+    console.log("BrokerLiquidator proxy: ", address(proxy));
 
     // grant roles to manager and admin
     bytes32 MANAGER = keccak256("MANAGER");
     bytes32 DEFAULT_ADMIN_ROLE = 0x0000000000000000000000000000000000000000000000000000000000000000;
-    FixedRateIrm(address(proxy)).grantRole(MANAGER, manager);
-    FixedRateIrm(address(proxy)).grantRole(DEFAULT_ADMIN_ROLE, timelock);
+    BrokerLiquidator(address(proxy)).grantRole(MANAGER, manager);
+    BrokerLiquidator(address(proxy)).grantRole(DEFAULT_ADMIN_ROLE, timelock);
 
     vm.stopBroadcast();
   }
