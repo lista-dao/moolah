@@ -13,41 +13,58 @@ contract WhitelistTest is BaseTest {
   }
 
   function testAddWhitelist() public {
-    Id id = marketParams.id();
+    Id[] memory ids = new Id[](1);
+    ids[0] = marketParams.id();
+
+    address[][] memory accounts = new address[][](1);
+    accounts[0] = new address[](1);
+    accounts[0][0] = whitelist;
+
     vm.startPrank(OWNER);
-    moolah.addLiquidationWhitelist(id, whitelist);
+    moolah.batchToggleLiquidationWhitelist(ids, accounts, true);
     assertEq(moolah.getLiquidationWhitelist(id).length, 1, "whitelist length");
     assertTrue(moolah.isLiquidationWhitelist(id, whitelist), "whitelist");
 
     vm.expectRevert(bytes(ErrorsLib.ALREADY_SET));
-    moolah.addLiquidationWhitelist(id, whitelist);
+    moolah.batchToggleLiquidationWhitelist(ids, accounts, true);
 
     vm.stopPrank();
   }
 
   function testRemoveWhitelist() public {
-    Id id = marketParams.id();
+    Id[] memory ids = new Id[](1);
+    ids[0] = marketParams.id();
+
+    address[][] memory accounts = new address[][](1);
+    accounts[0] = new address[](1);
+    accounts[0][0] = whitelist;
+
     vm.startPrank(OWNER);
     vm.expectRevert(bytes(ErrorsLib.NOT_SET));
-    moolah.removeLiquidationWhitelist(id, whitelist);
+    moolah.batchToggleLiquidationWhitelist(ids, accounts, false);
 
-    moolah.addLiquidationWhitelist(id, whitelist);
-    assertEq(moolah.getLiquidationWhitelist(id).length, 1, "whitelist length");
-    assertTrue(moolah.isLiquidationWhitelist(id, whitelist), "whitelist");
+    moolah.batchToggleLiquidationWhitelist(ids, accounts, true);
+    assertEq(moolah.getLiquidationWhitelist(ids[0]).length, 1, "whitelist length");
+    assertTrue(moolah.isLiquidationWhitelist(ids[0], whitelist), "whitelist");
 
-    moolah.removeLiquidationWhitelist(id, whitelist);
-    assertEq(moolah.getLiquidationWhitelist(id).length, 0, "whitelist length");
-    assertTrue(moolah.isLiquidationWhitelist(id, whitelist), "whitelist");
+    moolah.batchToggleLiquidationWhitelist(ids, accounts, false);
+    assertEq(moolah.getLiquidationWhitelist(ids[0]).length, 0, "whitelist length");
+    assertTrue(moolah.isLiquidationWhitelist(ids[0], whitelist), "whitelist");
     vm.stopPrank();
   }
 
   function testNotWhiteListLiquidate() public {
-    Id id = marketParams.id();
-    vm.startPrank(OWNER);
+    Id[] memory ids = new Id[](1);
+    ids[0] = marketParams.id();
 
-    moolah.addLiquidationWhitelist(id, whitelist);
-    assertEq(moolah.getLiquidationWhitelist(id).length, 1, "whitelist length");
-    assertTrue(moolah.isLiquidationWhitelist(id, whitelist), "whitelist");
+    address[][] memory accounts = new address[][](1);
+    accounts[0] = new address[](1);
+    accounts[0][0] = whitelist;
+
+    vm.startPrank(OWNER);
+    moolah.batchToggleLiquidationWhitelist(ids, accounts, true);
+    assertEq(moolah.getLiquidationWhitelist(ids[0]).length, 1, "whitelist length");
+    assertTrue(moolah.isLiquidationWhitelist(ids[0], whitelist), "whitelist");
 
     vm.expectRevert(bytes(ErrorsLib.NOT_LIQUIDATION_WHITELIST));
     moolah.liquidate(marketParams, BORROWER, 0, 0, "");
@@ -58,12 +75,12 @@ contract WhitelistTest is BaseTest {
   function testAddAlphaWhiteList() public {
     Id id = marketParams.id();
     vm.startPrank(OWNER);
-    moolah.addWhiteList(id, whitelist);
+    moolah.setWhiteList(id, whitelist, true);
     assertEq(moolah.getWhiteList(id).length, 1, "whitelist length");
     assertTrue(moolah.isWhiteList(id, whitelist), "whitelist");
 
     vm.expectRevert(bytes(ErrorsLib.ALREADY_SET));
-    moolah.addWhiteList(id, whitelist);
+    moolah.setWhiteList(id, whitelist, true);
 
     vm.stopPrank();
   }
@@ -72,13 +89,13 @@ contract WhitelistTest is BaseTest {
     Id id = marketParams.id();
     vm.startPrank(OWNER);
     vm.expectRevert(bytes(ErrorsLib.NOT_SET));
-    moolah.removeWhiteList(id, whitelist);
+    moolah.setWhiteList(id, whitelist, false);
 
-    moolah.addWhiteList(id, whitelist);
+    moolah.setWhiteList(id, whitelist, true);
     assertEq(moolah.getWhiteList(id).length, 1, "whitelist length");
     assertTrue(moolah.isWhiteList(id, whitelist), "whitelist");
 
-    moolah.removeWhiteList(id, whitelist);
+    moolah.setWhiteList(id, whitelist, false);
     assertEq(moolah.getWhiteList(id).length, 0, "whitelist length");
     assertTrue(moolah.isWhiteList(id, whitelist), "whitelist");
     vm.stopPrank();
@@ -88,7 +105,7 @@ contract WhitelistTest is BaseTest {
     Id id = marketParams.id();
     vm.startPrank(OWNER);
 
-    moolah.addWhiteList(id, whitelist);
+    moolah.setWhiteList(id, whitelist, true);
     assertEq(moolah.getWhiteList(id).length, 1, "whitelist length");
     assertTrue(moolah.isWhiteList(id, whitelist), "whitelist");
 
@@ -102,7 +119,7 @@ contract WhitelistTest is BaseTest {
     Id id = marketParams.id();
     vm.startPrank(OWNER);
 
-    moolah.addWhiteList(id, whitelist);
+    moolah.setWhiteList(id, whitelist, true);
     assertEq(moolah.getWhiteList(id).length, 1, "whitelist length");
     assertTrue(moolah.isWhiteList(id, whitelist), "whitelist");
 
@@ -116,7 +133,7 @@ contract WhitelistTest is BaseTest {
     Id id = marketParams.id();
     vm.startPrank(OWNER);
 
-    moolah.addWhiteList(id, whitelist);
+    moolah.setWhiteList(id, whitelist, true);
     assertEq(moolah.getWhiteList(id).length, 1, "whitelist length");
     assertTrue(moolah.isWhiteList(id, whitelist), "whitelist");
 
@@ -134,8 +151,8 @@ contract WhitelistTest is BaseTest {
 
     Id id = marketParams.id();
     vm.startPrank(OWNER);
-    moolah.addWhiteList(id, SUPPLIER);
-    moolah.addWhiteList(id, BORROWER);
+    moolah.setWhiteList(id, SUPPLIER, true);
+    moolah.setWhiteList(id, BORROWER, true);
     vm.stopPrank();
 
     vm.startPrank(SUPPLIER);

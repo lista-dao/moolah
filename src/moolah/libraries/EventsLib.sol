@@ -188,4 +188,10 @@ library EventsLib {
   /// @param token The token.
   /// @param isBlacklisted The new blacklist status.
   event SetFlashLoanTokenBlacklist(address indexed token, bool isBlacklisted);
+
+  /// @notice Emitted when setting the market broker.
+  /// @param id The market id.
+  /// @param broker The broker address.
+  /// @param isAddition Whether the broker is being added or removed.
+  event SetMarketBroker(Id indexed id, address indexed broker, bool isAddition);
 }

@@ -152,8 +152,13 @@ contract PublicLiquidatorTest is BaseTest {
     oracle.setPrice(address(collateralToken), ORACLE_PRICE_SCALE / 10);
 
     // make this market only whitelisted address can liquidate
+    Id[] memory ids = new Id[](1);
+    ids[0] = marketParams.id();
+    address[][] memory accounts = new address[][](1);
+    accounts[0] = new address[](1);
+    accounts[0][0] = address(makeAddr("WHITELISTOR"));
     vm.prank(OWNER);
-    moolah.addLiquidationWhitelist(marketParams.id(), makeAddr("WHITELISTOR"));
+    moolah.batchToggleLiquidationWhitelist(ids, accounts, true);
 
     vm.startPrank(USER);
     // give user some loan token to buy collateral token
@@ -213,9 +218,16 @@ contract PublicLiquidatorTest is BaseTest {
   }
 
   function testSetMarketUserWhitelist() public {
+    Id[] memory ids = new Id[](1);
+    ids[0] = marketParams.id();
+
+    address[][] memory accounts = new address[][](1);
+    accounts[0] = new address[](1);
+    accounts[0][0] = BOT;
+
     // add Moolah liquidation whitelist first
     vm.startPrank(OWNER);
-    moolah.addLiquidationWhitelist(marketParams.id(), BOT);
+    moolah.batchToggleLiquidationWhitelist(ids, accounts, true);
     vm.stopPrank();
     assertFalse(
       IMoolah(address(moolah)).isLiquidationWhitelist(marketParams.id(), address(0)),

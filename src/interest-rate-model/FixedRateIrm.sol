@@ -15,8 +15,8 @@ import { ErrorsLib } from "./libraries/ErrorsLib.sol";
 
 /// @dev Thrown when the rate is already set for this market.
 string constant RATE_SET = "rate set";
-/// @dev Thrown when the rate is negative.
-string constant RATE_INVALID = "negative rate";
+/// @dev Thrown when the rate is zero or negative.
+string constant RATE_INVALID = "rate zero or negative";
 /// @dev Thrown when trying to set a rate that is too high.
 string constant RATE_TOO_HIGH = "rate too high";
 
