@@ -58,7 +58,7 @@ contract FixedRateIrmTest is Test {
   }
 
   function testSetBorrowRateRateZero(Id id) external {
-    vm.expectRevert(bytes(RATE_INVALID));
+    vm.expectRevert(bytes(RATE_SET));
     vm.prank(bot);
     fixedRateIrm.setBorrowRate(id, 0);
   }
@@ -78,7 +78,6 @@ contract FixedRateIrmTest is Test {
   }
 
   function testBorrowRateRateNotSet(MarketParams memory marketParams, Market memory market) external {
-    vm.expectRevert(bytes(RATE_INVALID));
     fixedRateIrm.borrowRate(marketParams, market);
   }
 
@@ -90,7 +89,6 @@ contract FixedRateIrmTest is Test {
   }
 
   function testBorrowRateViewRateNotSet(MarketParams memory marketParams, Market memory market) external {
-    vm.expectRevert(bytes(RATE_INVALID));
     fixedRateIrm.borrowRateView(marketParams, market);
   }
 

@@ -30,6 +30,7 @@ contract AlpahIrmMainnetTest is Test {
     fixedRateIrm = FixedRateIrm(alphaIrm);
 
     fixedRateIrm.grantRole(fixedRateIrm.MANAGER(), manager);
+    fixedRateIrm.grantRole(fixedRateIrm.BOT(), manager);
     vm.stopPrank();
   }
 
