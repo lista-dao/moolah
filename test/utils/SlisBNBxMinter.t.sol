@@ -427,8 +427,7 @@ contract SlisBNBxMinterTest is Test {
 
     vm.startPrank(user);
     minter.delegateAllTo(delegateeAddr);
-    vm.expectRevert("newDelegatee cannot be zero address or same as current delegatee");
-    minter.delegateAllTo(delegateeAddr);
+    minter.delegateAllTo(delegateeAddr); // should not revert if new delegatee is same as current
     vm.stopPrank();
   }
 
