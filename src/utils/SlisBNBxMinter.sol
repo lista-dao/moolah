@@ -223,10 +223,10 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   }
 
   function _delegateAllTo(address account, address newDelegatee) internal {
-    require(
-      newDelegatee != address(0) && newDelegatee != delegation[account],
-      "newDelegatee cannot be zero address or same as current delegatee"
-    );
+    if (newDelegatee == delegation[account]) {
+      return;
+    }
+    require(newDelegatee != address(0), "cannot delegate to zero address");
     // current delegatee
     address oldDelegatee = delegation[account];
     if (oldDelegatee == address(0)) {
