@@ -456,8 +456,12 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   function getUserBalanceInBnb(address account) external view returns (uint256) {
     // get user total deposited slisBNB
     uint256 totalDeposit = userTotalDeposit[account];
+    uint256 minted = userLp[account] + userReservedLp[account];
     // convert to BNB value minus minted slisBNBx
-    return STAKE_MANAGER.convertSnBnbToBnb(totalDeposit) - userLp[account] - userReservedLp[account];
+    return
+      STAKE_MANAGER.convertSnBnbToBnb(totalDeposit) > minted
+        ? STAKE_MANAGER.convertSnBnbToBnb(totalDeposit) - minted
+        : 0;
   }
 
   /// @dev Set the slisBNBxMinter contract address
