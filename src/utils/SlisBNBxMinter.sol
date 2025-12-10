@@ -189,8 +189,10 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
       delegation[account] = holder;
     }
     if (oldUserLp > newUserLp) {
-      _safeBurnLp(holder, oldUserLp - newUserLp);
-      userTotalBalance[account] -= oldUserLp - newUserLp;
+      uint256 cut = oldUserLp - newUserLp;
+      _safeBurnLp(holder, cut);
+      uint256 beforeTotal = userTotalBalance[account];
+      userTotalBalance[account] = beforeTotal > cut ? beforeTotal - cut : 0;
     } else if (oldUserLp < newUserLp) {
       SLISBNB_X.mint(holder, newUserLp - oldUserLp);
       userTotalBalance[account] += newUserLp - oldUserLp;
@@ -234,6 +236,10 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     }
     // burn all slisBNBx from account or delegatee
     uint256 actualBurned = _safeBurnLp(oldDelegatee, userTotalBalance[account]);
+    if (actualBurned != userTotalBalance[account]) {
+      // adjust userTotalBalance if actual burned is less than expected
+      userTotalBalance[account] = actualBurned;
+    }
     // update delegatee record
     delegation[account] = newDelegatee;
     // mint all burned slisBNBx to new delegatee
