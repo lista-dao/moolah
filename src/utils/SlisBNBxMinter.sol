@@ -287,7 +287,7 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
    */
   function setMpcWalletCap(uint256 idx, uint256 cap) external onlyRole(MANAGER) {
     require(idx < mpcWallets.length, "Invalid index");
-    require(cap > 0 && cap != mpcWallets[idx].cap, "Invalid cap");
+    require(cap != mpcWallets[idx].cap, "Same cap");
     // get the current wallet
     MPCWallet storage wallet = mpcWallets[idx];
     // save old cap

@@ -180,6 +180,7 @@ contract SlisBNBxMinterTest is Test {
     IERC20(slisBnb).approve(address(smartProvider), amount);
     uint256 slisBnbxMinted = ISlisBNBx(slisBnbx).balanceOf(user1);
     smartProvider.supplyCollateral{ value: amount }(param1, user1, amount, amount, 0);
+    vm.stopPrank();
 
     slisBnbxMinted = ISlisBNBx(slisBnbx).balanceOf(user1) - slisBnbxMinted;
 
@@ -581,6 +582,25 @@ contract SlisBNBxMinterTest is Test {
     assertEq(_cap, cap, "mpc cap error");
     assertEq(_balance, _cap, "mpc cap should be full after liquidation");
 
+    vm.stopPrank();
+  }
+
+  function test_setMpcWallet_zero_cap() public {
+    test_smart_lp_module_new_user();
+    uint256 beforeFee = ISlisBNBx(slisBnbx).balanceOf(mpc);
+    assertGt(beforeFee, 0, "mpc slisBnbx balance should be greater than zero");
+
+    // if a MPC is compromised, add a new one and set cap to zero for old one
+    vm.startPrank(manager);
+    address newMpc = makeAddr("newMpc");
+    minter.addMPCWallet(newMpc, 1_000_000_000 ether);
+    minter.setMpcWalletCap(0, 0);
+
+    (address _mpc, uint256 _balance, uint256 _cap) = minter.mpcWallets(0);
+    assertEq(_cap, 0, "mpc cap should be zero");
+    assertEq(_balance, 0, "mpc balance should be zero");
+    assertEq(IERC20(slisBnbx).balanceOf(mpc), 0, "mpc slisBnbx balance should be zero");
+    assertEq(IERC20(slisBnbx).balanceOf(newMpc), beforeFee, "new mpc slisBnbx balance error");
     vm.stopPrank();
   }
 }
