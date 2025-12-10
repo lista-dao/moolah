@@ -10,6 +10,7 @@ import { IMoolah, MarketParams, Id, Position } from "moolah/interfaces/IMoolah.s
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { Moolah } from "moolah/Moolah.sol";
 import { ISlisBNBx, ISlisBNBxModule } from "./interfaces/ISlisBNBx.sol";
+import { ErrorsLib } from "moolah/libraries/ErrorsLib.sol";
 
 /**
  * @title slisBNBx Minter Contract
@@ -372,7 +373,7 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
       }
     }
 
-    require(leftToMint == 0, "Not enough MPC wallets to mint");
+    require(leftToMint == 0, ErrorsLib.EXCEED_MPC_CAP);
   }
 
   /**

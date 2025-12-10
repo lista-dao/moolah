@@ -12,6 +12,7 @@ import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { Moolah } from "moolah/Moolah.sol";
 import { IStakeManager } from "../oracle/interfaces/IStakeManager.sol";
 import { ISlisBNBxMinter } from "../utils/interfaces/ISlisBNBx.sol";
+import { ErrorsLib } from "moolah/libraries/ErrorsLib.sol";
 
 contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   using SafeERC20 for IERC20;
@@ -64,6 +65,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   event MpcWalletRemoved(address wallet);
   event MpcWalletAdded(address wallet, uint256 cap);
   event SlisBNBxMinterChanged(address newSlisBNBxMinter);
+  event RebalanceFailed(string message);
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   /// @param moolah The address of the Moolah contract.
@@ -119,7 +121,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     MOOLAH.supplyCollateral(marketParams, assets, onBehalf, data);
 
     // rebalance user's lpToken
-    (, uint256 latestLpBalance) = _syncPosition(marketParams.id(), onBehalf);
+    (, uint256 latestLpBalance) = _syncPosition(marketParams.id(), onBehalf, false);
 
     emit Deposit(onBehalf, assets, latestLpBalance);
   }
@@ -138,7 +140,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     // withdraw from distributor
     MOOLAH.withdrawCollateral(marketParams, assets, onBehalf, address(this));
     // rebalance user's lpToken
-    _syncPosition(marketParams.id(), onBehalf);
+    _syncPosition(marketParams.id(), onBehalf, false);
 
     // transfer token to user
     IERC20(TOKEN).safeTransfer(receiver, assets);
@@ -150,7 +152,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   /// @param borrower The address of the borrower.
   function liquidate(Id id, address borrower) external {
     require(msg.sender == address(MOOLAH), "only moolah can call this function");
-    _syncPosition(id, borrower);
+    _syncPosition(id, borrower, true);
   }
 
   /// @dev Returns whether the sender is authorized to manage `onBehalf`'s positions.
@@ -229,7 +231,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     return (true, newUserLp);
   }
 
-  function _syncPosition(Id id, address account) internal returns (bool, uint256) {
+  function _syncPosition(Id id, address account, bool isLiquidation) internal returns (bool, uint256) {
     require(MOOLAH.idToMarketParams(id).collateralToken == TOKEN, "invalid market");
     uint256 userMarketSupplyCollateral = MOOLAH.position(id, account).collateral;
     if (MOOLAH.providers(id, TOKEN) != address(this)) {
@@ -269,7 +271,19 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     }
 
     // rebalance user's slisBNBx in slisBNBxMinter
-    return ISlisBNBxMinter(slisBNBxMinter).rebalance(account);
+    try ISlisBNBxMinter(slisBNBxMinter).rebalance(account) returns (bool rebalanced, uint256 latestLpBalance) {
+      return (rebalanced, latestLpBalance);
+    } catch Error(string memory reason) {
+      bool exceededCap = keccak256(bytes(reason)) == keccak256(bytes(ErrorsLib.EXCEED_MPC_CAP));
+      // if isLiquidation && mpcCap exceeded, don't revert
+      if (isLiquidation && exceededCap) {
+        emit RebalanceFailed(reason);
+        (uint256 userPart, ) = ISlisBNBxMinter(slisBNBxMinter).userModuleBalance(account, address(this));
+        return (false, userPart);
+      } else {
+        revert(reason);
+      }
+    }
   }
 
   /**
@@ -302,7 +316,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
    * @param _account user address to sync
    */
   function syncUserLp(Id id, address _account) external {
-    (bool rebalanced, ) = _syncPosition(id, _account);
+    (bool rebalanced, ) = _syncPosition(id, _account, false);
     require(rebalanced, "already synced");
   }
 
@@ -314,7 +328,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     for (uint256 i = 0; i < _accounts.length; i++) {
       for (uint256 j = 0; j < ids.length; j++) {
         // sync user's lpToken balance
-        _syncPosition(ids[j], _accounts[i]);
+        _syncPosition(ids[j], _accounts[i], false);
       }
     }
   }

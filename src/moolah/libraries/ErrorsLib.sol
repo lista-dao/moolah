@@ -95,4 +95,6 @@ library ErrorsLib {
   string internal constant TOKEN_BLACKLISTED = "token blacklisted";
 
   string internal constant BLACKLISTED = "blacklisted";
+
+  string internal constant EXCEED_MPC_CAP = "exceed mpc cap";
 }
