@@ -364,7 +364,7 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
       // get slisBNBx balance
       uint256 balance = wallet.balance;
       // balance not reached the cap yet
-      if (balance <= wallet.cap) {
+      if (balance < wallet.cap) {
         uint256 toMint = balance + leftToMint > wallet.cap ? wallet.cap - balance : leftToMint;
         // mint slisBNBx to the wallet
         SLISBNB_X.mint(wallet.walletAddress, toMint);
