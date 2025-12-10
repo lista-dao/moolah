@@ -11,6 +11,7 @@ import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { Moolah } from "moolah/Moolah.sol";
 import { ISlisBNBx, ISlisBNBxModule } from "./interfaces/ISlisBNBx.sol";
 import { ErrorsLib } from "moolah/libraries/ErrorsLib.sol";
+import { MathLib } from "moolah/libraries/MathLib.sol";
 
 /**
  * @title slisBNBx Minter Contract
@@ -20,6 +21,7 @@ import { ErrorsLib } from "moolah/libraries/ErrorsLib.sol";
 contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   using SafeERC20 for IERC20;
   using MarketParamsLib for MarketParams;
+  using MathLib for uint256;
 
   ISlisBNBx public immutable SLISBNB_X;
   uint24 constant DENOMINATOR = 1_000_000;
@@ -159,8 +161,8 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     uint256 stakedAmount = ISlisBNBxModule(_module).getUserBalanceInBnb(account);
     // Total slisBNBx (User + Reserve) of a module
     uint256 amountAfterDiscount = (stakedAmount * (DENOMINATOR - config.discount)) / DENOMINATOR;
-    // slisBNBx as fee
-    uint256 newReservedLp = (amountAfterDiscount * config.feeRate) / DENOMINATOR;
+    // slisBNBx as fee; rounding up
+    uint256 newReservedLp = amountAfterDiscount.mulDivUp(config.feeRate, DENOMINATOR);
     // User's slisBNBx
     uint256 newUserLp = amountAfterDiscount - newReservedLp;
 
