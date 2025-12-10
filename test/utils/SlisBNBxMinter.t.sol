@@ -8,12 +8,14 @@ import { IERC20 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensio
 
 import { MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
+import { ErrorsLib } from "moolah/libraries/ErrorsLib.sol";
 
 import { SlisBNBxMinter, ISlisBNBx } from "../../src/utils/SlisBNBxMinter.sol";
 
 import { SlisBNBProvider, IStakeManager } from "../../src/provider/SlisBNBProvider.sol";
 import { SmartProvider } from "../../src/provider/SmartProvider.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
+import { IOracle } from "../../src/moolah/interfaces/IOracle.sol";
 
 contract SlisBNBxMinterTest is Test {
   using MarketParamsLib for MarketParams;
@@ -39,10 +41,14 @@ contract SlisBNBxMinterTest is Test {
   address slisBnb = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B;
   address stakeManager = 0x1adB950d8bB3dA4bE104211D5AB038628e477fE6;
   address slisBnbx = 0x4b30fcAA7945fE9fDEFD2895aae539ba102Ed6F6;
+  address wbnb = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
+  address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
 
   MarketParams param1; // smart lp, usd1
   MarketParams param2; // smart lp, bnb
   MarketParams param3; // slisBnb, bnb
+
+  event RebalanceFailed(string message);
 
   function setUp() public {
     vm.createSelectFork(vm.envString("BSC_RPC"), 68721673);
@@ -507,5 +513,74 @@ contract SlisBNBxMinterTest is Test {
     bytes32 IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
     bytes32 implSlot = vm.load(_proxyAddress, IMPLEMENTATION_SLOT);
     return address(uint160(uint256(implSlot)));
+  }
+
+  function test_slisBnb_liquidation_revert() public {
+    vm.mockCall(multiOracle, abi.encodeWithSelector(IOracle.peek.selector, wbnb), abi.encode(893e8));
+    // mock exchange rate to 1:1 liquidation
+    vm.mockCall(
+      stakeManager,
+      abi.encodeWithSelector(IStakeManager.convertSnBnbToBnb.selector, 10 ether),
+      abi.encode(10e18)
+    );
+    address user = makeAddr("liquidateUser");
+    uint256 amount = 10 ether;
+    uint256 cap = (amount * 3) / 100; // 3% fee
+
+    // set MPC cap to small amount and increase fee rate
+    vm.startPrank(manager);
+    minter.setMpcWalletCap(0, cap);
+    vm.stopPrank();
+    (address _mpc, uint256 _balance, uint256 _cap) = minter.mpcWallets(0);
+    assertEq(_cap, cap, "mpc cap error");
+    assertEq(_balance, 0, "mpc balance should be zero");
+
+    // user supply and borrow
+    deal(slisBnb, user, amount);
+    vm.startPrank(user);
+    IERC20(slisBnb).approve(address(slisBnbProvider), amount);
+    slisBnbProvider.supplyCollateral(param3, amount, user, "");
+    // check mpc cap is reached
+    (_mpc, _balance, _cap) = minter.mpcWallets(0);
+    assertEq(_cap, cap, "mpc cap error");
+    assertEq(_mpc, mpc, "mpc address error");
+    assertEq(_balance, _cap, "mpc cap should be reached");
+    vm.stopPrank();
+
+    // increase fee rate approx 100% after supply
+    vm.startPrank(manager);
+    address[] memory _modules = new address[](1);
+    _modules[0] = slisBnbModule;
+    SlisBNBxMinter.ModuleConfig[] memory _configs = new SlisBNBxMinter.ModuleConfig[](1);
+    _configs[0] = SlisBNBxMinter.ModuleConfig({ discount: 0, feeRate: 1e6 - 1, moduleAddress: slisBnbModule }); // ~100%
+    minter.updateModules(_modules, _configs);
+    vm.stopPrank();
+
+    (, _balance, _cap) = minter.mpcWallets(0);
+    assertEq(_cap, cap, "mpc cap error");
+    assertEq(_balance, _cap, "mpc cap should have been reached");
+
+    // borrow bnb amount = amount * 96.5%
+    vm.startPrank(user);
+    uint256 borrowAmount = (amount * 965_000_000_000_000_000) / 1e18;
+    moolah.borrow(param3, borrowAmount, 0, user, user);
+    vm.stopPrank();
+
+    skip(36000000);
+
+    // should not revert even when mpc is full
+    address liquidator = 0x6a87C15598929B2db22cF68a9a0dDE5Bf297a59a;
+    deal(wbnb, liquidator, borrowAmount + 100000 ether);
+    vm.startPrank(liquidator);
+    IERC20(wbnb).approve(address(moolah), borrowAmount + 100000 ether);
+    vm.expectEmit(true, true, true, true);
+    emit RebalanceFailed("exceed mpc cap");
+    moolah.liquidate(param3, user, borrowAmount, 0, "");
+
+    (, _balance, _cap) = minter.mpcWallets(0);
+    assertEq(_cap, cap, "mpc cap error");
+    assertEq(_balance, _cap, "mpc cap should be full after liquidation");
+
+    vm.stopPrank();
   }
 }

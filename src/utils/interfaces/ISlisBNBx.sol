@@ -22,6 +22,8 @@ interface ISlisBNBxModule {
 }
 
 interface ISlisBNBxMinter {
+  function userModuleBalance(address account, address module) external view returns (uint256 userPart, uint256 feePart);
+
   /// @notice Rebalance user slisBNB tokens
   /// @param account The user address
   /// @return success True if rebalance is successful and new slisBNBx balance
