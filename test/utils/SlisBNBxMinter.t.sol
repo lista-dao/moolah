@@ -9,6 +9,7 @@ import { IERC20 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensio
 import { MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { ErrorsLib } from "moolah/libraries/ErrorsLib.sol";
+import { MathLib } from "moolah/libraries/MathLib.sol";
 
 import { SlisBNBxMinter, ISlisBNBx } from "../../src/utils/SlisBNBxMinter.sol";
 
@@ -19,6 +20,7 @@ import { IOracle } from "../../src/moolah/interfaces/IOracle.sol";
 
 contract SlisBNBxMinterTest is Test {
   using MarketParamsLib for MarketParams;
+  using MathLib for uint256;
 
   SlisBNBxMinter minter;
 
@@ -191,7 +193,7 @@ contract SlisBNBxMinterTest is Test {
     // check slisBNBx minted with discount and fee
     uint256 collateralInBnb = smartProvider.getUserBalanceInBnb(user1);
     uint256 expectMinted = (collateralInBnb * (1e6 - 2e4)) / 1e6; // 2% discount
-    uint256 fee = (expectMinted * 3e4) / 1e6; // 3% fee
+    uint256 fee = expectMinted.mulDivUp(3e4, 1e6);
     expectMinted = expectMinted - fee;
     assertEq(slisBnbxMinted, expectMinted, "slisBNBx minted error");
 
@@ -224,7 +226,7 @@ contract SlisBNBxMinterTest is Test {
     // check slisBNBx minted with no discount and fee
     uint256 collateralInBnb = slisBnbProvider.getUserBalanceInBnb(user2);
     uint256 expectMinted = collateralInBnb; // no discount
-    uint256 fee = (expectMinted * 3e4) / 1e6; // 3% fee
+    uint256 fee = expectMinted.mulDivUp(3e4, 1e6);
     expectMinted = expectMinted - fee;
     assertEq(slisBnbxMinted, expectMinted, "slisBNBx minted error");
 
@@ -267,7 +269,7 @@ contract SlisBNBxMinterTest is Test {
     uint256 totalSupply = ISlisBNBx(slisBnbx).totalSupply();
     // assertEq(totalSupply, totalSupplyBefore + expectMinted, "slisBNBx total supply error");
 
-    uint256 fee = (expectMinted * 3e4) / 1e6; // 3% fee
+    uint256 fee = expectMinted.mulDivUp(3e4, 1e6);
     expectMinted = expectMinted - fee;
     assertEq(ISlisBNBx(slisBnbx).balanceOf(user), expectMinted, "slisBNBx minted error");
 
@@ -332,7 +334,7 @@ contract SlisBNBxMinterTest is Test {
 
     // check slisBNBx total supply; TODO: how to check total supply change
 
-    uint256 fee = (expectMinted * 3e4) / 1e6; // 3% fee
+    uint256 fee = expectMinted.mulDivUp(3e4, 1e6);
     expectMinted = expectMinted - fee;
 
     // check fee
@@ -402,7 +404,7 @@ contract SlisBNBxMinterTest is Test {
     uint256 collateralInBnb = slisBnbProvider.getUserBalanceInBnb(user); // total slisBnbx with no discount
     uint256 increaseInBnb = IStakeManager(stakeManager).convertSnBnbToBnb(amount);
     uint256 expectMinted = collateralInBnb; // no discount
-    uint256 fee = (expectMinted * 3e4) / 1e6; // 3% fee
+    uint256 fee = expectMinted.mulDivUp(3e4, 1e6);
     expectMinted = expectMinted - fee;
 
     // check fee
