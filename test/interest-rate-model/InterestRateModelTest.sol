@@ -443,30 +443,32 @@ contract InterestRateModelTest is Test {
   /* HELPERS */
 
   function _expectedRateAtTarget(Id id, Market memory market) internal view returns (int256) {
+    return min(__expectedRateAtTarget(id, market), ConstantsLib.DEFAULT_RATE_CAP / 4);
+  }
+
+  function __expectedRateAtTarget(Id id, Market memory market) internal view returns (int256) {
     int256 rateAtTarget = irm.rateAtTarget(id);
     int256 speed = ConstantsLib.ADJUSTMENT_SPEED.wMulToZero(_err(market));
     uint256 elapsed = (rateAtTarget > 0) ? block.timestamp - market.lastUpdate : 0;
     int256 linearAdaptation = speed * int256(elapsed);
     int256 adaptationMultiplier = ExpLib.wExp(linearAdaptation);
     return
-      min(
-        (rateAtTarget > 0)
-          ? rateAtTarget.wMulToZero(adaptationMultiplier).bound(
-            ConstantsLib.MIN_RATE_AT_TARGET,
-            ConstantsLib.MAX_RATE_AT_TARGET
-          )
-          : ConstantsLib.INITIAL_RATE_AT_TARGET,
-        ConstantsLib.DEFAULT_RATE_CAP / 4
-      );
+      (rateAtTarget > 0)
+        ? rateAtTarget.wMulToZero(adaptationMultiplier).bound(
+          ConstantsLib.MIN_RATE_AT_TARGET,
+          ConstantsLib.MAX_RATE_AT_TARGET
+        )
+        : ConstantsLib.INITIAL_RATE_AT_TARGET;
   }
 
   function _expectedAvgRate(Id id, Market memory market) internal view returns (uint256) {
+    uint256 cap = irm.rateCap(id) != 0 ? irm.rateCap(id) : ConstantsLib.DEFAULT_RATE_CAP;
     int256 rateAtTarget = irm.rateAtTarget(id);
     int256 err = _err(market);
     int256 speed = ConstantsLib.ADJUSTMENT_SPEED.wMulToZero(err);
     uint256 elapsed = (rateAtTarget > 0) ? block.timestamp - market.lastUpdate : 0;
     int256 linearAdaptation = speed * int256(elapsed);
-    int256 endRateAtTarget = int256(_expectedRateAtTarget(id, market));
+    int256 endRateAtTarget = int256(__expectedRateAtTarget(id, market));
     uint256 newBorrowRate = _curve(endRateAtTarget, err);
 
     uint256 avgBorrowRate;
@@ -476,8 +478,8 @@ contract InterestRateModelTest is Test {
       // Safe "unchecked" cast to uint256 because linearAdaptation < 0 <=> newBorrowRate <= borrowRateAfterJump.
       avgBorrowRate = uint256((int256(newBorrowRate) - int256(_curve(rateAtTarget, err))).wDivToZero(linearAdaptation));
     }
-    uint256 cap = irm.rateCap(id) != 0 ? irm.rateCap(id) : ConstantsLib.DEFAULT_RATE_CAP;
     if (avgBorrowRate > cap) avgBorrowRate = cap;
+
     return avgBorrowRate;
   }
 
