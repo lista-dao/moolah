@@ -14,18 +14,21 @@ contract SmartProviderDeploy is Script {
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
 
+    address smartLp = 0x627B5567458A76e6B6a6a6BBe3FcFF7f81821a58;
+    address dex = 0xd77e86779022227226377Dc30D03CF1C78439AcF;
+
     // Deploy SmartProvider
-    SmartProvider impl = new SmartProvider(MOOLAH, COLLATERAL_SOLVBTC_BTCB);
+    SmartProvider impl = new SmartProvider(MOOLAH, smartLp);
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, deployer, DEX_BTCB_SOLVBTC, SS_INFO, RESILIENT_ORACLE)
+      abi.encodeWithSelector(impl.initialize.selector, deployer, dex, SS_INFO, RESILIENT_ORACLE)
     );
 
-    console.log("DEX_BTCB_SOLVBTC SmartProvider deployed at: ", address(proxy));
+    console.log("SmartProvider deployed at: ", address(proxy));
 
     // set minter to smart provider
-    StableSwapLPCollateral(COLLATERAL_SOLVBTC_BTCB).setMinter(address(proxy));
-    console.log("Minter set to SmartProvider for DEX_BTCB_SOLVBTC");
+    StableSwapLPCollateral(smartLp).setMinter(address(proxy));
+    console.log("Minter set to SmartProvider");
 
     vm.stopBroadcast();
   }
