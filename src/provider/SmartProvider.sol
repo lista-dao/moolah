@@ -527,6 +527,9 @@ contract SmartProvider is
   /// @dev Returns the user's lp collateral value in BNB.
   /// @param account The address of the user.
   function getUserBalanceInBnb(address account) external view returns (uint256) {
+    // invoke pool's `get_virtual_price` to ensure the underlying pool not in reentrant state
+    IStableSwap(dex).get_virtual_price();
+
     // how many lp tokens the account has as collateral
     uint256 balance = userTotalDeposit[account];
 
