@@ -284,12 +284,6 @@ interface IMoolahBase {
   /// @notice Accrues interest for the given market `marketParams`.
   function accrueInterest(MarketParams memory marketParams) external;
 
-  /// @notice Adds `account` to the liquidation whitelist of the market `id`.
-  function addLiquidationWhitelist(Id id, address account) external;
-
-  /// @notice Removes `account` from the liquidation whitelist of the market `id`.
-  function removeLiquidationWhitelist(Id id, address account) external;
-
   /// @notice Add/removes `accounts` from the liquidation whitelist of markets `ids`.
   function batchToggleLiquidationWhitelist(Id[] memory ids, address[][] memory accounts, bool isAddition) external;
 
@@ -304,11 +298,8 @@ interface IMoolahBase {
   /// @notice get the minimum loan token assets (supply and borrow) for the market.
   function minLoan(MarketParams memory marketParams) external view returns (uint256);
 
-  /// @notice add a new provider for the token.
-  function addProvider(Id id, address provider) external;
-
-  /// @notice remove the provider for the token.
-  function removeProvider(Id id, address token) external;
+  /// @notice add/remove the provider for the token.
+  function setProvider(Id id, address provider, bool isAddition) external;
 
   /// @notice get the provider for the market.
   function providers(Id id, address token) external view returns (address);
@@ -322,11 +313,8 @@ interface IMoolahBase {
   /// @notice Returns `true` if `account` is whitelisted of market `id`.
   function isWhiteList(Id id, address account) external view returns (bool);
 
-  /// @notice Add `account` to the whitelist of the market `id`.
-  function addWhiteList(Id id, address account) external;
-
-  /// @notice Remove `account` from the whitelist of the market `id`.
-  function removeWhiteList(Id id, address account) external;
+  /// @notice Add/Remove `account` from the whitelist of the market `id`.
+  function setWhiteList(Id id, address account, bool isAddition) external;
 
   /// @notice Returns the default market fee.
   function defaultMarketFee() external view returns (uint256);

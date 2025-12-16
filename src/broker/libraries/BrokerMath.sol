@@ -91,7 +91,7 @@ library BrokerMath {
   }
 
   /**
-   * @dev Ensure every position either cleared or larger than Moolah.minLoan
+   * @dev Ensure every position's principal either cleared or larger than Moolah.minLoan
    * @param user The address of the user
    * @param moolah The address of the Moolah contract
    * @param rateCalculator The address of the rate calculator
@@ -113,17 +113,14 @@ library BrokerMath {
     uint256 minLoan = _moolah.minLoan(_moolah.idToMarketParams(IBroker(address(this)).MARKET_ID()));
     // ensure each position either zero or larger than minLoan
     // check dynamic position
-    uint256 dynamicDebt = denormalizeBorrowAmount(dynamicPosition.normalizedDebt, currentRate);
+    uint256 dynamicDebt = dynamicPosition.principal;
     if (dynamicDebt > 0 && dynamicDebt < minLoan) {
       isValid = false;
     }
     // check fixed positions
     for (uint256 i = 0; i < fixedPositions.length; i++) {
       FixedLoanPosition memory _fixedPos = fixedPositions[i];
-      uint256 fixedPosDebt = _fixedPos.principal -
-        _fixedPos.principalRepaid +
-        getAccruedInterestForFixedPosition(_fixedPos) -
-        _fixedPos.interestRepaid;
+      uint256 fixedPosDebt = _fixedPos.principal - _fixedPos.principalRepaid;
       if (fixedPosDebt > 0 && fixedPosDebt < minLoan) {
         isValid = false;
       }
@@ -258,6 +255,19 @@ library BrokerMath {
   }
 
   /**
+   * @dev Revert if duplicate position IDs are found
+   * @param posIds The position IDs to check for duplicates
+   */
+  function _revertIfDuplicatePosIds(uint256[] calldata posIds) internal pure {
+    for (uint256 i = 0; i < posIds.length; i++) {
+      uint256 posId = posIds[i];
+      for (uint256 j = i + 1; j < posIds.length; j++) {
+        require(posIds[j] != posId, "Broker/duplicate-pos-id");
+      }
+    }
+  }
+
+  /**
    * @dev Refinance matured fixed positions into dynamic position
    * @param user The address of the user
    * @param rate The current interest rate
@@ -267,7 +277,12 @@ library BrokerMath {
     address user,
     uint256 rate,
     uint256[] calldata posIds
+<<<<<<< HEAD
   ) public view returns (FixedLoanPosition[] memory, DynamicLoanPosition memory, uint256) {
+=======
+  ) public returns (FixedLoanPosition[] memory, DynamicLoanPosition memory, uint256) {
+    _revertIfDuplicatePosIds(posIds);
+>>>>>>> 9e69eee (! fix: duplicate check on refinanceMaturedFixedPositions())
     IBroker broker = IBroker(address(this));
     uint256[] memory posIdToRemove = new uint256[](posIds.length);
     // the additional principal will be add into the dynamic position

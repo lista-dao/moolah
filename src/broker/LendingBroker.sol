@@ -50,8 +50,8 @@ contract LendingBroker is
   IMoolah public immutable MOOLAH;
   address public immutable RELAYER;
   IOracle public immutable ORACLE;
-  uint256 public constant MAX_FIXED_TERM_APR = 31 * RATE_SCALE; // 30%
-  uint256 public constant MIN_FIXED_TERM_APR = 2 * RATE_SCALE; // 1%
+  uint256 public constant MAX_FIXED_TERM_APR = 13e26; // 1.3 * RATE_SCALE = 30% MAX APR
+  uint256 public constant MIN_FIXED_TERM_APR = 101 * 1e25; // 0.01 * RATE_SCALE = 1% MIN APR
 
   address public LOAN_TOKEN;
   address public COLLATERAL_TOKEN;
@@ -484,13 +484,13 @@ contract LendingBroker is
     uint256 repaidAssets;
     (, repaidAssets) = MOOLAH.liquidate(marketParams, borrower, seizedAssets, repaidShares, data);
 
-    // [9] supply interest to moolah vault
+    // [11] supply interest to moolah vault
     uint256 interestToBroker = liquidationContext.interestToBroker;
     if (interestToBroker > 0) {
       _supplyToMoolahVault(interestToBroker);
     }
 
-    // [10] must clear liquidation context after liquidation
+    // [12] must clear liquidation context after liquidation
     delete liquidationContext;
 
     // emit event
@@ -558,6 +558,8 @@ contract LendingBroker is
             _deductFixedPositionsDebt(borrower, sorted, interestLeftover, principalLeftover);
           }
         }
+        // [10] validate every position after deduction meets minLoan
+        _validatePositions(borrower);
       }
     }
   }
@@ -683,6 +685,17 @@ contract LendingBroker is
    */
   function userDynamicPosition(address user) external view override returns (DynamicLoanPosition memory) {
     return dynamicLoanPositions[user];
+  }
+
+  /**
+   * @dev Get the total debt of a user (dynamic + fixed)
+   * @param user The address of the user
+   */
+  function getUserTotalDebt(address user) external view override returns (uint256 totalDebt) {
+    uint256 rate = IRateCalculator(rateCalculator).getRate(address(this));
+    DynamicLoanPosition memory dynPos = dynamicLoanPositions[user];
+    FixedLoanPosition[] memory fixedPos = fixedLoanPositions[user];
+    totalDebt = BrokerMath.getTotalDebt(fixedPos, dynPos, rate);
   }
 
   /**

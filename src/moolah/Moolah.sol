@@ -179,22 +179,6 @@ contract Moolah is
   }
 
   /// @inheritdoc IMoolahBase
-  function addLiquidationWhitelist(Id id, address account) public onlyRole(MANAGER) {
-    require(!liquidationWhitelist[id].contains(account), ErrorsLib.ALREADY_SET);
-    liquidationWhitelist[id].add(account);
-
-    emit EventsLib.AddLiquidationWhitelist(id, account);
-  }
-
-  /// @inheritdoc IMoolahBase
-  function removeLiquidationWhitelist(Id id, address account) public onlyRole(MANAGER) {
-    require(liquidationWhitelist[id].contains(account), ErrorsLib.NOT_SET);
-    liquidationWhitelist[id].remove(account);
-
-    emit EventsLib.RemoveLiquidationWhitelist(id, account);
-  }
-
-  /// @inheritdoc IMoolahBase
   function batchToggleLiquidationWhitelist(
     Id[] memory ids,
     address[][] memory accounts,
@@ -209,50 +193,56 @@ contract Moolah is
         address account = accountList[j];
         // add to whitelist
         if (isAddition) {
-          addLiquidationWhitelist(id, account);
+          require(!liquidationWhitelist[id].contains(account), ErrorsLib.ALREADY_SET);
+          liquidationWhitelist[id].add(account);
+          emit EventsLib.AddLiquidationWhitelist(id, account);
         } else {
           // remove from whitelist
-          removeLiquidationWhitelist(id, account);
+          require(liquidationWhitelist[id].contains(account), ErrorsLib.NOT_SET);
+          liquidationWhitelist[id].remove(account);
+          emit EventsLib.RemoveLiquidationWhitelist(id, account);
         }
       }
     }
   }
 
   /// @inheritdoc IMoolahBase
-  function addWhiteList(Id id, address account) external onlyRole(MANAGER) {
-    require(!whiteList[id].contains(account), ErrorsLib.ALREADY_SET);
-    whiteList[id].add(account);
-
-    emit EventsLib.AddWhiteList(id, account);
+  function setWhiteList(Id id, address account, bool isAddition) external onlyRole(MANAGER) {
+    if (isAddition) {
+      require(!whiteList[id].contains(account), ErrorsLib.ALREADY_SET);
+      whiteList[id].add(account);
+      emit EventsLib.AddWhiteList(id, account);
+    } else {
+      require(whiteList[id].contains(account), ErrorsLib.NOT_SET);
+      whiteList[id].remove(account);
+      emit EventsLib.RemoveWhiteList(id, account);
+    }
   }
 
   /// @inheritdoc IMoolahBase
-  function removeWhiteList(Id id, address account) external onlyRole(MANAGER) {
-    require(whiteList[id].contains(account), ErrorsLib.NOT_SET);
-    whiteList[id].remove(account);
+  function setVaultBlacklist(address account, bool isBlacklisted) external onlyRole(MANAGER) {
+    require(vaultBlacklist[account] != isBlacklisted, ErrorsLib.ALREADY_SET);
+    vaultBlacklist[account] = isBlacklisted;
 
-    emit EventsLib.RemoveWhiteList(id, account);
+    emit EventsLib.SetVaultBlacklist(account, isBlacklisted);
   }
 
-  function addProvider(Id id, address provider) external onlyRole(MANAGER) {
-    address token = IProvider(provider).TOKEN();
-    require(token != address(0), ErrorsLib.ZERO_ADDRESS);
-    require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
+  /// @inheritdoc IMoolahBase
+  function setProvider(Id id, address provider, bool isAddition) external onlyRole(MANAGER) {
     require(provider != address(0), ErrorsLib.ZERO_ADDRESS);
-    require(providers[id][token] == address(0), ErrorsLib.ALREADY_SET);
-
-    providers[id][token] = provider;
-
-    emit EventsLib.AddProvider(id, token, provider);
-  }
-
-  function removeProvider(Id id, address token) external onlyRole(MANAGER) {
-    require(providers[id][token] != address(0), ErrorsLib.NOT_SET);
-
-    address provider = providers[id][token];
-    delete providers[id][token];
-
-    emit EventsLib.RemoveProvider(id, token, provider);
+    address token = IProvider(provider).TOKEN();
+    if (isAddition) {
+      require(token != address(0), ErrorsLib.ZERO_ADDRESS);
+      require(market[id].lastUpdate != 0, ErrorsLib.MARKET_NOT_CREATED);
+      require(providers[id][token] == address(0), ErrorsLib.ALREADY_SET);
+      providers[id][token] = provider;
+      emit EventsLib.AddProvider(id, token, provider);
+    } else {
+      require(providers[id][token] != address(0), ErrorsLib.NOT_SET);
+      address provider = providers[id][token];
+      delete providers[id][token];
+      emit EventsLib.RemoveProvider(id, token, provider);
+    }
   }
 
   function setFlashLoanTokenBlacklist(address token, bool isBlacklisted) external onlyRole(MANAGER) {
@@ -727,7 +717,9 @@ contract Moolah is
   /// @dev Assumes that the inputs `marketParams` and `id` match.
   function _isHealthy(MarketParams memory marketParams, Id id, address borrower) internal view returns (bool) {
     if (position[id][borrower].borrowShares == 0) return true;
-    uint256 collateralPrice = _getPrice(marketParams, borrower);
+    // use original price for health check
+    // in order let Liquidator liquidate unhealthy position in time for Broker markets
+    uint256 collateralPrice = _getPrice(marketParams, address(0));
 
     return _isHealthy(marketParams, id, borrower, collateralPrice);
   }
@@ -748,10 +740,20 @@ contract Moolah is
     address borrower,
     uint256 collateralPrice
   ) internal view returns (bool) {
+    /// @dev Calculate the total borrowed assets
     uint256 borrowed = uint256(position[id][borrower].borrowShares).toAssetsUp(
       market[id].totalBorrowAssets,
       market[id].totalBorrowShares
     );
+
+    /// @dev only if market id belongs to a broker
+    if (brokers[id] != address(0)) {
+      // [1] broker market use original collateral price
+      collateralPrice = _getPrice(marketParams, address(0));
+      // [2] replace borrowed with broker total debt (principal at moolah + interest at broker)
+      borrowed = PriceLib._getBrokerTotalDebt(id, borrower, address(this));
+    }
+
     uint256 maxBorrow = uint256(position[id][borrower].collateral)
       .mulDivDown(collateralPrice, ORACLE_PRICE_SCALE)
       .wMulDown(marketParams.lltv);
@@ -849,7 +851,7 @@ contract Moolah is
     if (borrowAssets >= minLoan(marketParams)) {
       return true;
     }
-    return _isHealthy(marketParams, marketParams.id(), account, _getPrice(marketParams, account));
+    return _isHealthy(marketParams, marketParams.id(), account);
   }
 
   /// @inheritdoc IMoolahBase
