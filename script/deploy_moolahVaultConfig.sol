@@ -28,6 +28,7 @@ contract MoolahVaultConfigDeploy is Script {
   address CDL = 0x84575b87395c970F1F48E87d87a8dB36Ed653716;
   address AT = 0x9be61A38725b265BC3eb7Bfdf17AfDFc9d26C130;
   address lisUSD = 0x0782b6d8c4551B9760e74c0545a9bCD90bdc41E5;
+  address $U = 0xDa182944E84092e11370CA521f10AEF488888888;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
@@ -54,25 +55,39 @@ contract MoolahVaultConfigDeploy is Script {
     console.log("Deployer: ", deployer);
 
     MarketParams memory WBNBParams = MarketParams({
-      loanToken: lisUSD,
+      loanToken: $U,
       collateralToken: WBNB,
       oracle: multiOracle,
-      irm: alphaIrm,
+      irm: irm,
       lltv: lltv86
     });
     MarketParams memory slisBNBParams = MarketParams({
-      loanToken: lisUSD,
+      loanToken: $U,
       collateralToken: slisBNB,
       oracle: multiOracle,
-      irm: alphaIrm,
+      irm: irm,
       lltv: lltv86
     });
     MarketParams memory BTCBParams = MarketParams({
-      loanToken: lisUSD,
+      loanToken: $U,
       collateralToken: BTCB,
       oracle: multiOracle,
-      irm: alphaIrm,
+      irm: irm,
       lltv: lltv86
+    });
+    MarketParams memory USDTParams = MarketParams({
+      loanToken: $U,
+      collateralToken: USDT,
+      oracle: multiOracle,
+      irm: irm,
+      lltv: lltv965
+    });
+    MarketParams memory USD1Params = MarketParams({
+      loanToken: $U,
+      collateralToken: USD1,
+      oracle: multiOracle,
+      irm: irm,
+      lltv: lltv965
     });
 
     vm.startBroadcast(deployerPrivateKey);
@@ -87,17 +102,23 @@ contract MoolahVaultConfigDeploy is Script {
 
     vault.setFee(fee);
 
-    vault.setCap(WBNBParams, 100_000 ether);
-    vault.setCap(slisBNBParams, 100_000 ether);
-    vault.setCap(BTCBParams, 100_000 ether);
+    vault.setCap(WBNBParams, 50_000_000 ether);
+    vault.setCap(slisBNBParams, 50_000_000 ether);
+    vault.setCap(BTCBParams, 50_000_000 ether);
+    vault.setCap(USDTParams, 50_000_000 ether);
+    vault.setCap(USD1Params, 50_000_000 ether);
 
     Id WBNBId = WBNBParams.id();
     Id slisBNBId = slisBNBParams.id();
     Id BTCBId = BTCBParams.id();
-    Id[] memory supplyQueue = new Id[](3);
+    Id USDTId = BTCBParams.id();
+    Id USD1Id = BTCBParams.id();
+    Id[] memory supplyQueue = new Id[](5);
     supplyQueue[0] = WBNBId;
     supplyQueue[1] = slisBNBId;
     supplyQueue[2] = BTCBId;
+    supplyQueue[3] = USDTId;
+    supplyQueue[4] = USD1Id;
 
     vault.setSupplyQueue(supplyQueue);
     vm.stopBroadcast();
