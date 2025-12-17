@@ -91,13 +91,6 @@ contract MoolahVaultConfigDeploy is Script {
       irm: irm,
       lltv: lltv965
     });
-    MarketParams memory USD1Params = MarketParams({
-      loanToken: $U,
-      collateralToken: USD1,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv965
-    });
     MarketParams memory UUSDTParams = MarketParams({
       loanToken: $U,
       collateralToken: $UUSDT,
