@@ -151,6 +151,33 @@ contract SmartProvider is
   }
 
   /**
+   * @dev Withdraw stableswap LP tokens from Moolah.
+   * @param marketParams The market parameters.
+   * @param onBehalf The address of the position owner.
+   * @param assets The amount of LP tokens to withdraw.
+   * @param receiver The address to receive the withdrawn LP tokens.
+   */
+  function withdrawDexLp(
+    MarketParams memory marketParams,
+    uint256 assets,
+    address onBehalf,
+    address receiver
+  ) external {
+    require(isSenderAuthorized(msg.sender, onBehalf), "unauthorized sender");
+    require(marketParams.collateralToken == TOKEN, "invalid collateral token");
+
+    // withdraw collateral token from moolah
+    MOOLAH.withdrawCollateral(marketParams, assets, onBehalf, address(this));
+
+    // burn collateral token
+    IStableSwapLPCollateral(TOKEN).burn(address(this), assets);
+
+    // transfer lp to user
+    IERC20(dexLP).safeTransfer(receiver, assets);
+    emit WithdrawCollateral(TOKEN, onBehalf, assets, 0, 0, receiver);
+  }
+
+  /**
    * @dev Supplies liquidity to the stableswap pool and uses the resulting LP tokens as collateral in Moolah.
    * @param marketParams The market parameters.
    * @param onBehalf The address of the position owner.
