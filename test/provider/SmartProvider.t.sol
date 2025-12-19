@@ -278,6 +278,32 @@ contract SmartProviderTest is Test {
     vm.stopPrank();
   }
 
+  function test_withdrawDexLp() public {
+    test_supplyDexLp();
+
+    // add smart provider to moolah
+    vm.prank(manager);
+    moolah.setProvider(marketParams.id(), address(smartProvider), true);
+    assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
+    uint256 user2LpBalance = lp.balanceOf(user2);
+    uint256 lpCollateralTotalSupply = lpCollateral.totalSupply();
+
+    uint256 withdrawAmount = 400 ether;
+    vm.startPrank(user2);
+    smartProvider.withdrawDexLp(marketParams, withdrawAmount, user2, user2);
+    (, , uint256 user2Collateral) = moolah.position(marketParams.id(), user2);
+    assertEq(user2Collateral, 600 ether);
+    vm.stopPrank();
+
+    // check user lp balance
+    user2LpBalance = lp.balanceOf(user2) - user2LpBalance;
+    assertEq(user2LpBalance, withdrawAmount);
+
+    // check lp collateral total supply
+    lpCollateralTotalSupply = lpCollateralTotalSupply - lpCollateral.totalSupply();
+    assertEq(lpCollateralTotalSupply, withdrawAmount);
+  }
+
   function test_supplyCollateral_perfect() public {
     // user2 supply 1000 LP tokens as collateral
     uint256 supplyAmount = 1000 ether;
