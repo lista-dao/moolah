@@ -277,7 +277,8 @@ contract SmartProviderTest is Test {
 
     // add smart provider to moolah
     vm.prank(manager);
-    moolah.setProvider(marketParams.id(), address(smartProvider), true);
+    //    moolah.setProvider(marketParams.id(), address(smartProvider), true);
+    moolah.addProvider(marketParams.id(), address(smartProvider));
     assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
     uint256 user2LpBalance = lp.balanceOf(user2);
     uint256 lpCollateralTotalSupply = lpCollateral.totalSupply();

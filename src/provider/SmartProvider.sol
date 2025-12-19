@@ -176,6 +176,9 @@ contract SmartProvider is
     // withdraw collateral token from moolah
     MOOLAH.withdrawCollateral(marketParams, assets, onBehalf, address(this));
 
+    // sync balances after position change
+    _syncPosition(marketParams.id(), onBehalf);
+
     // burn collateral token
     IStableSwapLPCollateral(TOKEN).burn(address(this), assets);
 
