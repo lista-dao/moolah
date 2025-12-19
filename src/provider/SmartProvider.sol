@@ -169,7 +169,7 @@ contract SmartProvider is
     uint256 assets,
     address onBehalf,
     address receiver
-  ) external {
+  ) external nonReentrant {
     require(isSenderAuthorized(msg.sender, onBehalf), "unauthorized sender");
     require(marketParams.collateralToken == TOKEN, "invalid collateral token");
 
