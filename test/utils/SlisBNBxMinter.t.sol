@@ -45,6 +45,7 @@ contract SlisBNBxMinterTest is Test {
   address slisBnbx = 0x4b30fcAA7945fE9fDEFD2895aae539ba102Ed6F6;
   address wbnb = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
+  address bnb = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
   MarketParams param1; // smart lp, usd1
   MarketParams param2; // smart lp, bnb
@@ -296,7 +297,6 @@ contract SlisBNBxMinterTest is Test {
     assertGt(beforeTotalDeposit, stakedSlisBnb);
 
     uint256 otherBal = ISlisBNBx(slisBnbx).balanceOf(user) - slisBnbProvider.userLp(user);
-    uint256 beforeCollateralInBnb = slisBnbProvider.getUserBalanceInBnb(user);
 
     console.log("user slisBNBx bal:", ISlisBNBx(slisBnbx).balanceOf(user)); // 0.29492327246804595
     console.log("module user LP:", slisBnbProvider.userLp(user)); // 0.20960138248401486
@@ -382,7 +382,6 @@ contract SlisBNBxMinterTest is Test {
     assertEq(delegatee, slisBnbProvider.delegation(user), "pre delegatee error");
 
     uint256 userBefore = ISlisBNBx(slisBnbx).balanceOf(user);
-    uint256 delegateeBefore = ISlisBNBx(slisBnbx).balanceOf(delegatee);
 
     uint256 amount = 5 ether;
     deal(slisBnb, user, amount);
@@ -402,7 +401,6 @@ contract SlisBNBxMinterTest is Test {
 
     // check slisBNBx minted with no discount and fee
     uint256 collateralInBnb = slisBnbProvider.getUserBalanceInBnb(user); // total slisBnbx with no discount
-    uint256 increaseInBnb = IStakeManager(stakeManager).convertSnBnbToBnb(amount);
     uint256 expectMinted = collateralInBnb; // no discount
     uint256 fee = expectMinted.mulDivUp(3e4, 1e6);
     expectMinted = expectMinted - fee;
@@ -587,6 +585,86 @@ contract SlisBNBxMinterTest is Test {
     vm.stopPrank();
   }
 
+  function test_smart_lp_liquidation_revert() public {
+    uint256 amount = 10 ether;
+    address smartLp = smartProvider.TOKEN();
+    address dexLp = smartProvider.dexLP();
+    vm.mockCall(smartLpModule, abi.encodeWithSelector(IOracle.peek.selector, smartLp), abi.encode(100000000000)); // 100e8
+
+    // mock exchange rate to 1:1 liquidation
+    vm.mockCall(
+      stakeManager,
+      abi.encodeWithSelector(IStakeManager.convertSnBnbToBnb.selector, 92515704498),
+      abi.encode(92515704498)
+    );
+    address user = makeAddr("liquidateUser");
+    uint256 cap = 294299548534366723;
+
+    // set MPC cap to small amount and increase fee rate
+    vm.startPrank(manager);
+    minter.setMpcWalletCap(0, cap);
+    vm.stopPrank();
+    (address _mpc, uint256 _balance, uint256 _cap) = minter.mpcWallets(0);
+    assertEq(_cap, cap, "mpc cap error");
+    assertEq(_balance, 0, "mpc balance should be zero");
+
+    // user supply dexlp and borrow
+    deal(dexLp, user, amount);
+    vm.startPrank(user);
+    IERC20(dexLp).approve(address(smartProvider), amount);
+    smartProvider.supplyDexLp(param1, user, amount);
+    // check mpc cap is reached
+    (_mpc, _balance, _cap) = minter.mpcWallets(0);
+    assertEq(_cap, cap, "mpc cap error");
+    assertEq(_mpc, mpc, "mpc address error");
+    assertApproxEqRel(_balance, _cap, 0.02 ether, "mpc cap should be reached");
+    vm.stopPrank();
+
+    // increase fee rate approx 100% after supply
+    vm.startPrank(manager);
+    address[] memory _modules = new address[](1);
+    _modules[0] = smartLpModule;
+    SlisBNBxMinter.ModuleConfig[] memory _configs = new SlisBNBxMinter.ModuleConfig[](1);
+    _configs[0] = SlisBNBxMinter.ModuleConfig({ discount: 0, feeRate: 1e6 - 1, moduleAddress: smartLpModule }); // ~100%
+    minter.updateModules(_modules, _configs);
+    vm.stopPrank();
+
+    (, _balance, _cap) = minter.mpcWallets(0);
+    assertEq(_cap, cap, "mpc cap error");
+    assertEq(_balance, _cap, "mpc cap should have been reached");
+
+    // borrow usd1 amount = amount * 75%
+    vm.startPrank(user);
+    uint256 borrowable = (amount * 1000 * 75_000_000_000_000_000) / 1e18; // lp price 1000 usd, lltv 75%
+    moolah.borrow(param1, borrowable, 0, user, user);
+    vm.stopPrank();
+
+    skip(30000000000000);
+    vm.mockCall(smartLpModule, abi.encodeWithSelector(IOracle.peek.selector, smartLp), abi.encode(40000000000)); // 60% price drop
+    vm.mockCall(multiOracle, abi.encodeWithSelector(IOracle.peek.selector, bnb), abi.encode(40000000000)); // mock bnb price
+    vm.mockCall(multiOracle, abi.encodeWithSelector(IOracle.peek.selector, slisBnb), abi.encode(40000000000)); // mock slisBnb price
+    vm.mockCall(
+      smartLpModule,
+      abi.encodeWithSelector(IOracle.peek.selector, param1.loanToken),
+      abi.encode(2e8) // price doubled
+    );
+
+    // should not revert even when mpc is full
+    address liquidator = 0x6a87C15598929B2db22cF68a9a0dDE5Bf297a59a;
+    deal(param1.loanToken, liquidator, borrowable + 100000 ether);
+    vm.startPrank(liquidator);
+    IERC20(param1.loanToken).approve(address(moolah), borrowable + 100000 ether);
+    vm.expectEmit(true, true, true, true);
+    emit RebalanceFailed("exceed mpc cap");
+    moolah.liquidate(param1, user, 1 ether, 0, "");
+
+    (, _balance, _cap) = minter.mpcWallets(0);
+    assertEq(_cap, cap, "mpc cap error");
+    assertEq(_balance, _cap, "mpc cap should be full after liquidation");
+
+    vm.stopPrank();
+  }
+
   function test_setMpcWallet_zero_cap() public {
     test_smart_lp_module_new_user();
     uint256 beforeFee = ISlisBNBx(slisBnbx).balanceOf(mpc);
@@ -598,7 +676,7 @@ contract SlisBNBxMinterTest is Test {
     minter.addMPCWallet(newMpc, 1_000_000_000 ether);
     minter.setMpcWalletCap(0, 0);
 
-    (address _mpc, uint256 _balance, uint256 _cap) = minter.mpcWallets(0);
+    (, uint256 _balance, uint256 _cap) = minter.mpcWallets(0);
     assertEq(_cap, 0, "mpc cap should be zero");
     assertEq(_balance, 0, "mpc balance should be zero");
     assertEq(IERC20(slisBnbx).balanceOf(mpc), 0, "mpc slisBnbx balance should be zero");
