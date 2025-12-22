@@ -568,6 +568,7 @@ contract SlisBNBxMinterTest is Test {
     vm.stopPrank();
 
     skip(36000000);
+    uint256 userBalance = ISlisBNBx(slisBnbx).balanceOf(user);
 
     // should not revert even when mpc is full
     address liquidator = 0x6a87C15598929B2db22cF68a9a0dDE5Bf297a59a;
@@ -581,8 +582,22 @@ contract SlisBNBxMinterTest is Test {
     (, _balance, _cap) = minter.mpcWallets(0);
     assertEq(_cap, cap, "mpc cap error");
     assertEq(_balance, _cap, "mpc cap should be full after liquidation");
-
     vm.stopPrank();
+
+    // add new mpc and sync user balance
+    address newMpc = makeAddr("newMpc");
+    vm.startPrank(manager);
+    minter.addMPCWallet(newMpc, 1_000_000_000 ether);
+    vm.stopPrank();
+    slisBnbProvider.syncUserLp(param3.id(), user);
+
+    // check user's slisBNBx after sync
+    assertApproxEqRel(
+      userBalance,
+      userBalance - ISlisBNBx(slisBnbx).balanceOf(user),
+      0.0001 ether,
+      "user slisBNBx balance should be burned after sync"
+    );
   }
 
   function test_smart_lp_liquidation_revert() public {
@@ -649,6 +664,8 @@ contract SlisBNBxMinterTest is Test {
       abi.encode(2e8) // price doubled
     );
 
+    uint256 userBalance = ISlisBNBx(slisBnbx).balanceOf(user);
+
     // should not revert even when mpc is full
     address liquidator = 0x6a87C15598929B2db22cF68a9a0dDE5Bf297a59a;
     deal(param1.loanToken, liquidator, borrowable + 100000 ether);
@@ -661,8 +678,22 @@ contract SlisBNBxMinterTest is Test {
     (, _balance, _cap) = minter.mpcWallets(0);
     assertEq(_cap, cap, "mpc cap error");
     assertEq(_balance, _cap, "mpc cap should be full after liquidation");
-
     vm.stopPrank();
+
+    // add new mpc and sync user balance
+    address newMpc = makeAddr("newMpc");
+    vm.startPrank(manager);
+    minter.addMPCWallet(newMpc, 1_000_000_000 ether);
+    vm.stopPrank();
+    smartProvider.syncUserBalance(param1.id(), user);
+
+    // check user's slisBNBx after sync
+    assertApproxEqRel(
+      userBalance,
+      userBalance - ISlisBNBx(slisBnbx).balanceOf(user),
+      0.0001 ether,
+      "user slisBNBx balance should be burned after sync"
+    );
   }
 
   function test_setMpcWallet_zero_cap() public {
