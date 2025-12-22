@@ -422,6 +422,7 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
       require(config.feeRate <= DENOMINATOR, "userLpRate invalid");
       require(config.discount <= DENOMINATOR, "discount invalid");
       ModuleConfig memory _config = moduleConfig[module];
+      require(_config.moduleAddress != address(0), "module does not exist");
       require(config.moduleAddress == module, "module address should not change");
       require(_config.discount != config.discount || _config.feeRate != config.feeRate, "no changes detected");
 
@@ -435,6 +436,22 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
       moduleConfig[module] = config;
       emit ModuleConfigUpdated(module, config.discount, config.feeRate, enabled);
     }
+  }
+
+  /**
+   * @dev Add a new module
+   * @param _module The module address to be added.
+   * @param _config The module configuration.
+   */
+  function addModule(address _module, ModuleConfig calldata _config) external onlyRole(MANAGER) {
+    require(moduleConfig[_module].moduleAddress == address(0), "module already exists");
+    require(_module != address(0), "module is the zero address");
+    require(_config.feeRate <= DENOMINATOR, "userLpRate invalid");
+    require(_config.discount <= DENOMINATOR, "discount invalid");
+    require(_config.moduleAddress == _module, "module address mismatch");
+
+    moduleConfig[_module] = _config;
+    emit ModuleConfigUpdated(_module, _config.discount, _config.feeRate, true);
   }
 
   /**
