@@ -301,7 +301,7 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     if (cap < wallet.balance) {
       uint256 toBurn = wallet.balance - cap;
       // burn slisBNBx from MPC
-      SLISBNB_X.burn(wallet.walletAddress, toBurn);
+      _safeBurnLp(wallet.walletAddress, toBurn);
       // deduct balance
       wallet.balance -= toBurn;
       // mint slisBNBx to the other MPCs
@@ -398,7 +398,7 @@ contract SlisBNBxMinter is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
       if (balance > 0) {
         uint256 toBurn = balance < leftToBurn ? balance : leftToBurn;
         // burn slisBNBx from MPC
-        SLISBNB_X.burn(wallet.walletAddress, toBurn);
+        _safeBurnLp(wallet.walletAddress, toBurn);
         // deduct balance
         wallet.balance -= toBurn;
         // deduct leftToMint
