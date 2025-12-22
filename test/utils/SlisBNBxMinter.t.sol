@@ -714,4 +714,21 @@ contract SlisBNBxMinterTest is Test {
     assertEq(IERC20(slisBnbx).balanceOf(newMpc), beforeFee, "new mpc slisBnbx balance error");
     vm.stopPrank();
   }
+
+  function test_addModule() public {
+    address newModule = makeAddr("newModule");
+    SlisBNBxMinter.ModuleConfig memory config = SlisBNBxMinter.ModuleConfig({
+      discount: 0,
+      feeRate: 0,
+      moduleAddress: newModule
+    });
+
+    vm.prank(manager);
+    minter.addModule(newModule, config);
+
+    (uint24 discount, uint24 feeRate, address moduleAddress) = minter.moduleConfig(newModule);
+    assertEq(discount, config.discount, "module discount error");
+    assertEq(feeRate, config.feeRate, "module feeRate error");
+    assertEq(moduleAddress, config.moduleAddress, "module address error");
+  }
 }
