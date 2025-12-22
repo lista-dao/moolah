@@ -271,19 +271,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     }
 
     // rebalance user's slisBNBx in slisBNBxMinter
-    try ISlisBNBxMinter(slisBNBxMinter).rebalance(account) returns (bool rebalanced, uint256 latestLpBalance) {
-      return (rebalanced, latestLpBalance);
-    } catch Error(string memory reason) {
-      bool exceededCap = keccak256(bytes(reason)) == keccak256(bytes(ErrorsLib.EXCEED_MPC_CAP));
-      // if isLiquidation && mpcCap exceeded, don't revert
-      if (isLiquidation && exceededCap) {
-        emit RebalanceFailed(reason);
-        (uint256 userPart, ) = ISlisBNBxMinter(slisBNBxMinter).userModuleBalance(account, address(this));
-        return (false, userPart);
-      } else {
-        revert(reason);
-      }
-    }
+    return ISlisBNBxMinter(slisBNBxMinter).rebalance(account);
   }
 
   /**
