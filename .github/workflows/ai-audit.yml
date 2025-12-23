@@ -1,0 +1,70 @@
+name: AI Audit
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  pull-requests: write
+  contents: read
+  issues: write
+
+jobs:
+  security-review:
+    runs-on: ubuntu-latest
+    # skip draft PR, save tokens
+    if: github.event.pull_request.draft == false
+    steps:
+      - name: pull repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Slither static analyse
+        uses: crytic/slither-action@v0.4.1
+        with:
+          # will not fail even error exists
+          fail-on: none
+
+      - name: Generate PR diff file
+        id: gen_diff
+        run: |
+          gh pr diff > pr.diff
+
+      - name: cursor perform audit
+        id: cursor_review
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          response=$(curl -s -X POST https://api.cursor.com/v0/review \
+            -H "Authorization: Bearer $CURSOR_API_KEY" \
+            -H "Content-Type: text/plain" \
+            --data-binary @pr.diff)
+          echo "$response" > cursor_output.md
+
+      - name: consolidate audit result
+        run: |
+          echo "## AI Audit Result" > comment.md
+          cat cursor_output.md >> comment.md
+          echo -e "\n## Slither Static Analyse" >> comment.md
+          if [ -f results.sarif ]; then
+            jq -r '.runs[].results[] | "- [\(.check_id)] \(.message.text)"' results.sarif \
+              >> comment.md || true
+          fi
+
+      - name: Searching for existing review
+        id: find_comment
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: 'AI Audit Result'
+
+      - name: Create or update audit result
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: comment.md
+          edit-mode: replace
