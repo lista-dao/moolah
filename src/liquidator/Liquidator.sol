@@ -156,9 +156,42 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     uint256 amountOutMin,
     bytes calldata swapData
   ) external nonReentrant onlyRole(BOT) {
+    _sellToken(pair, pair, tokenIn, tokenOut, amountIn, amountOutMin, swapData);
+  }
+
+  /// @dev sell tokens.
+  /// @param pair The address of the pair.
+  /// @param spender The address of the spender.
+  /// @param tokenIn The address of the input token.
+  /// @param tokenOut The address of the output token.
+  /// @param amountIn The amount to sell.
+  /// @param amountOutMin The minimum amount to receive.
+  /// @param swapData The swap data passed to low level swap call. Should be obtained from aggregator API like 1inch.
+  function sellToken(
+    address pair,
+    address spender,
+    address tokenIn,
+    address tokenOut,
+    uint256 amountIn,
+    uint256 amountOutMin,
+    bytes calldata swapData
+  ) external nonReentrant onlyRole(BOT) {
+    _sellToken(pair, spender, tokenIn, tokenOut, amountIn, amountOutMin, swapData);
+  }
+
+  function _sellToken(
+    address pair,
+    address spender,
+    address tokenIn,
+    address tokenOut,
+    uint256 amountIn,
+    uint256 amountOutMin,
+    bytes calldata swapData
+  ) private {
     require(tokenWhitelist[tokenIn], NotWhitelisted());
     require(tokenWhitelist[tokenOut], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());
+    require(pairWhitelist[spender], NotWhitelisted());
     require(amountIn > 0, "amountIn zero");
 
     require(tokenIn.balanceOf(address(this)) >= amountIn, ExceedAmount());
@@ -166,7 +199,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     uint256 beforeTokenIn = tokenIn.balanceOf(address(this));
     uint256 beforeTokenOut = tokenOut.balanceOf(address(this));
 
-    tokenIn.safeApprove(pair, amountIn);
+    tokenIn.safeApprove(spender, amountIn);
     (bool success, ) = pair.call(swapData);
     require(success, SwapFailed());
 
@@ -176,7 +209,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     require(actualAmountIn <= amountIn, ExceedAmount());
     require(actualAmountOut >= amountOutMin, NoProfit());
 
-    tokenIn.safeApprove(pair, 0);
+    tokenIn.safeApprove(spender, 0);
 
     emit SellToken(pair, tokenIn, tokenOut, actualAmountIn, actualAmountOut);
   }
@@ -229,8 +262,38 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     address pair,
     bytes calldata swapCollateralData
   ) external nonReentrant onlyRole(BOT) {
+    _flashLiquidate(id, borrower, seizedAssets, pair, pair, swapCollateralData);
+  }
+
+  /// @dev flash liquidates a position.
+  /// @param id The id of the market.
+  /// @param borrower The address of the borrower.
+  /// @param seizedAssets The amount of assets to seize.
+  /// @param pair The address of the pair.
+  /// @param spender The address of the spender.
+  /// @param swapCollateralData The swap data passed to low level swap call for collateral swapping to loan token. Should be obtained from aggregator API like 1inch with slippage considered.
+  function flashLiquidate(
+    bytes32 id,
+    address borrower,
+    uint256 seizedAssets,
+    address pair,
+    address spender,
+    bytes calldata swapCollateralData
+  ) external nonReentrant onlyRole(BOT) {
+    _flashLiquidate(id, borrower, seizedAssets, pair, spender, swapCollateralData);
+  }
+
+  function _flashLiquidate(
+    bytes32 id,
+    address borrower,
+    uint256 seizedAssets,
+    address pair,
+    address spender,
+    bytes calldata swapCollateralData
+  ) private {
     require(marketWhitelist[id], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());
+    require(pairWhitelist[spender], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
     IMoolah(MOOLAH).liquidate(
       params,
@@ -243,6 +306,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
           params.loanToken,
           seizedAssets,
           pair,
+          spender,
           swapCollateralData,
           true,
           false,
@@ -281,6 +345,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
           params.collateralToken,
           params.loanToken,
           seizedAssets,
+          address(0),
           address(0),
           "",
           false,
@@ -331,6 +396,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
           params.collateralToken,
           params.loanToken,
           seizedAssets,
+          address(0),
           address(0),
           "",
           false,
@@ -393,6 +459,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
       params.loanToken,
       seizedAssets,
       address(0),
+      address(0),
       "",
       false,
       true,
@@ -434,7 +501,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
       require(!arb.swapSmartCollateral, "only swap collateral or smart collateral");
       uint256 before = arb.loanToken.balanceOf(address(this));
 
-      arb.collateralToken.safeApprove(arb.collateralPair, arb.seized);
+      arb.collateralToken.safeApprove(arb.collateralRouterSpender, arb.seized);
       (bool success, ) = arb.collateralPair.call(arb.swapCollateralData);
       require(success, SwapFailed());
 
@@ -442,7 +509,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
 
       if (out < repaidAssets) revert NoProfit();
 
-      arb.collateralToken.safeApprove(arb.collateralPair, 0);
+      arb.collateralToken.safeApprove(arb.collateralRouterSpender, 0);
     } else if (arb.swapSmartCollateral) {
       uint256 before = arb.loanToken.balanceOf(address(this));
       // redeem lp
