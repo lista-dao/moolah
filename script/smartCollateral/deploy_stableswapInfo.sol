@@ -7,7 +7,7 @@ import { StableSwapPoolInfo } from "src/dex/StableSwapPoolInfo.sol";
 
 contract StableSwapPoolInfoDeploy is Script {
   function run() public {
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY_TESTNET");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

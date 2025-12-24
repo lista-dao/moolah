@@ -23,6 +23,37 @@ contract StableSwapPairDeploy is Script {
     createPair_u(deployer);
   }
 
+  function createPair_sepolia(address deployer) public {
+    // Create $U & USDT
+    uint _A = 5000;
+    uint _fee = 1000000; // 0.01%; swap fee
+    uint _adminFee = 2e9; // 20% swap fee goes to admin
+    uint _priceDiffThreshold = 5e16; // 5%
+    string memory name = "USD1 & USDT-LP";
+
+    (address _lp, address _pool) = factory.createSwapPair(
+      USD1,
+      USDT,
+      name,
+      name,
+      _A,
+      _fee,
+      _adminFee,
+      deployer, // admin
+      deployer, // manager
+      deployer, // pauser
+      RESILIENT_ORACLE
+    );
+
+    console.log("Created pool: ", name);
+    console.log("StableSwapPool LP token: ", _lp);
+    console.log("StableSwapPool: ", _pool);
+
+    // set price diff limit to 5%
+    StableSwapPool(_pool).changePriceDiffThreshold(5e16, 5e16);
+    console.log("Set price diff limit to 5%");
+  }
+
   function createPair_u(address deployer) public {
     // Create $U & USDT
     uint _A = 5000;
