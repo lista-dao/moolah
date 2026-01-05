@@ -10,6 +10,12 @@ interface IBrokerInterestRelayer {
    */
   function supplyToVault(uint256 amount) external;
 
+  /**
+   * @dev Broker transfers loan amount from Relayer to itself; due to repaying interest in LISTA
+   * @param amount The amount of loan to transfer
+   */
+  function transferLoan(uint256 amount) external;
+
   /// @dev ------- Events
   event AddedBroker(address indexed broker);
   event RemovedBroker(address indexed broker);

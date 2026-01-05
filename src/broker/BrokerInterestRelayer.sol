@@ -40,6 +40,9 @@ contract BrokerInterestRelayer is
   /// @dev vault token
   address public token;
 
+  /// @dev the amount of loan tokens lent to brokers
+  uint256 public loanDebt;
+
   // ------- Modifiers -------
   modifier onlyBroker() {
     require(brokers.contains(msg.sender), "relayer/not-broker");
@@ -116,6 +119,15 @@ contract BrokerInterestRelayer is
       // records supplied to vault event
       emit SuppliedToMoolahVault(balance);
     }
+  }
+
+  /**
+   * @dev Broker transfers loan amount from Relayer to itself; due to repaying interest in LISTA
+   * @param amount The amount of loan to transfer
+   */
+  function transferLoan(uint256 amount) external override nonReentrant onlyBroker {
+    loanDebt += amount;
+    IERC20(token).safeTransfer(msg.sender, amount);
   }
 
   /**
