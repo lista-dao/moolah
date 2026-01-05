@@ -34,6 +34,15 @@ struct LiquidationContext {
   address borrower; // the borrower being liquidated
 }
 
+struct GraceConfig {
+  /// @dev grace period in seconds; if users repay within the grace period after term end, no penalty will be charged
+  /// @dev e.g., 3 days = 3 * 24 * 3600
+  uint256 period;
+  /// @dev penalty rate for delayed repayment after grace period; e.g., 15% = 0.15 * RATE_SCALE
+  /// @dev e.g., if penaltyRate is 15%, user should pay additional 15% * userDebt as penalty after grace period
+  uint256 penaltyRate;
+}
+
 /// @dev Broker Base interface
 /// maintain lightweight for Moolah
 interface IBrokerBase {
@@ -109,6 +118,7 @@ interface IBroker is IBrokerBase {
     uint256 end,
     uint256 apr
   );
+  event GraceConfigUpdated(uint256 newPeriod, uint256 newPenaltyRate);
 
   /// ------------------------------
   ///        View functions

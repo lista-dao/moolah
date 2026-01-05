@@ -1,0 +1,252 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.28;
+
+import { ERC20Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
+import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+
+import { MerkleProof } from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+
+contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerableUpgradeable, PausableUpgradeable {
+  ///@dev Merkle tree root for credit score verification
+  bytes32 public merkleRoot;
+
+  /// @dev version id for the current merkle root; starts from 1 and increments by 1 for each new root
+  uint256 public versionId;
+
+  /// @dev Record of credit scores for each user
+  mapping(address => CreditScore) public creditScores;
+
+  struct CreditScore {
+    uint256 id; // version id of the credit score
+    uint256 score; // credit score value
+  }
+
+  /// @dev The amount of tokens minted to user; only affected by credit score changes
+  mapping(address => uint256) public userAmounts; // TODO: remove, dulicate of `creditScores.score`
+
+  /// @dev User's bad debt; should burn but unable to due to insufficient balance
+  mapping(address => uint256) public userBadDebts;
+
+  /// @dev the next merkle root to be set
+  bytes32 public pendingMerkleRoot;
+
+  /// @dev last time pending merkle root was set
+  uint256 public lastSetTime;
+
+  /// @dev the waiting period before accepting the pending merkle root; 1 day by default
+  uint256 public waitingPeriod;
+
+  // ------- Roles ------- //
+  bytes32 public constant MANAGER = keccak256("MANAGER");
+  bytes32 public constant PAUSER = keccak256("PAUSER");
+  bytes32 public constant BOT = keccak256("BOT");
+  bytes32 public constant TRANSFERER = keccak256("TRANSFERER");
+
+  // ------- Events ------- //
+  event SetBroker(address indexed _broker, bool _status);
+  event ScoreSynced(
+    address indexed _user,
+    uint256 _newScore,
+    uint256 _oldScore,
+    uint256 _versionId,
+    uint256 _lastVersionId
+  );
+  event SetPendingMerkleRoot(bytes32 indexed _pendingMerkleRoot, uint256 _setTime);
+  event AcceptMerkleRoot(bytes32 indexed _merkleRoot, uint256 _acceptTime, uint256 _versionId);
+
+  constructor() {
+    _disableInitializers();
+  }
+
+  function initialize(
+    address _admin,
+    address _manager,
+    address _bot,
+    address[] calldata _transferers, // brokers and moolah
+    string calldata _name,
+    string calldata _symbol
+  ) external initializer {
+    require(_admin != address(0), "Zero address");
+    require(_manager != address(0), "Zero address");
+    require(_bot != address(0), "Zero address");
+
+    __ERC20_init(_name, _symbol);
+    __AccessControl_init();
+
+    _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+    _grantRole(MANAGER, _manager);
+    _grantRole(BOT, _bot);
+
+    lastSetTime = type(uint256).max;
+    waitingPeriod = 1 days;
+
+    for (uint256 i = 0; i < _transferers.length; i++) {
+      _grantRole(TRANSFERER, _transferers[i]);
+    }
+    _setRoleAdmin(TRANSFERER, MANAGER);
+  }
+
+  function mint(address _to, uint256 _amount) external {
+    revert("Disabled");
+  }
+
+  /// @dev only Moolah can transfer
+  /// @param to The address of the recipient.
+  /// @param value The amount to be transferred.
+  /// @return bool Returns true on success, false otherwise.
+  function transfer(address to, uint256 value) public override onlyRole(TRANSFERER) returns (bool) {
+    address owner = _msgSender();
+    _transfer(owner, to, value);
+    return true;
+  }
+
+  /// @dev only Moolah can call transferFrom
+  function transferFrom(address from, address to, uint256 value) public override onlyRole(TRANSFERER) returns (bool) {
+    address spender = _msgSender();
+    _spendAllowance(from, spender, value);
+    _transfer(from, to, value);
+    return true;
+  }
+
+  function bulkSyncCreditScores(
+    address[] calldata _users,
+    uint256[] calldata _scores,
+    bytes32[][] calldata _proofs
+  ) external {
+    require(_users.length == _scores.length, "Mismatched inputs");
+    require(_users.length == _proofs.length, "Mismatched inputs");
+
+    for (uint256 i = 0; i < _users.length; i++) {
+      syncCreditScore(_users[i], _scores[i], _proofs[i]);
+    }
+  }
+
+  /**
+   * @dev Sync credit score for a user; requires a valid Merkle proof.
+   * @param _user The address of the user.
+   * @param _score The latest credit score of the user.
+   * @param _proof The Merkle proof for the user's latest credit score.
+   */
+  function syncCreditScore(address _user, uint256 _score, bytes32[] memory _proof) public {
+    require(merkleRoot != bytes32(0), "Invalid merkle root");
+
+    CreditScore storage userScore = creditScores[_user];
+
+    if (userScore.id != versionId) {
+      // verify merkle proof only if the version id is different
+      bytes32 leaf = keccak256(abi.encode(block.chainid, address(this), _user, _score, versionId));
+      require(MerkleProof.verify(_proof, merkleRoot, leaf), "Invalid proof");
+    }
+
+    _syncCreditScore(_user, _score, userScore.score);
+
+    emit ScoreSynced(_user, _score, userScore.score, versionId, userScore.id);
+
+    // update user's credit score and version id
+    userScore.score = _score;
+    userScore.id = versionId;
+  }
+
+  /**
+   * @dev Internal function to sync credit score and mint/burn tokens accordingly.
+   * @param _user The address of the user.
+   * @param _newScore The new credit score of the user.
+   * @param _lastScore The last credit score of the user.
+   */
+  function _syncCreditScore(address _user, uint256 _newScore, uint256 _lastScore) private {
+    if (_newScore > _lastScore) {
+      uint256 increaseAmount = _newScore - _lastScore;
+      userAmounts[_user] += increaseAmount;
+
+      // first cover bad debt if any
+      bool hasBadDebt = userBadDebts[_user] > 0;
+
+      if (hasBadDebt && increaseAmount >= userBadDebts[_user]) {
+        // fully cover bad debt
+        increaseAmount -= userBadDebts[_user];
+        userBadDebts[_user] = 0;
+      } else if (hasBadDebt) {
+        // partially cover bad debt
+        userBadDebts[_user] -= increaseAmount;
+        increaseAmount = 0;
+      }
+
+      _mint(_user, increaseAmount);
+    } else if (_newScore < _lastScore) {
+      uint256 decreaseAmount = _lastScore - _newScore;
+      userAmounts[_user] -= decreaseAmount;
+
+      uint256 actualBurned = _safeBurn(_user, decreaseAmount);
+      // bad debt = decreaseAmount - actualBurned
+      userBadDebts[_user] += (decreaseAmount - actualBurned);
+    } else {
+      // no score change; check balance against bad debt
+      if (userBadDebts[_user] > 0 && balanceOf(_user) > 0) {
+        uint256 actualBurned = _safeBurn(_user, userBadDebts[_user]);
+        userBadDebts[_user] -= actualBurned;
+      }
+    }
+  }
+
+  /**
+   * @dev Capped burn tokens from an account, ensuring not to exceed the account's balance.
+   * @param _account The address of the account to burn tokens from.
+   * @param _amount The expected amount to burn.
+   */
+  function _safeBurn(address _account, uint256 _amount) private returns (uint256) {
+    uint256 balance = balanceOf(_account);
+    uint256 burnAmount = _amount > balance ? balance : _amount;
+
+    if (burnAmount > 0) {
+      _burn(_account, burnAmount);
+    }
+
+    return burnAmount;
+  }
+
+  ///////// Below are functions for merkle root management with timelock /////////
+
+  /// @dev Set pending merkle root.
+  /// @param _merkleRoot New merkle root to be set as pending
+  function setPendingMerkleRoot(bytes32 _merkleRoot) external onlyRole(BOT) whenNotPaused {
+    require(
+      _merkleRoot != bytes32(0) &&
+        _merkleRoot != pendingMerkleRoot &&
+        _merkleRoot != merkleRoot &&
+        lastSetTime == type(uint256).max,
+      "Invalid new merkle root"
+    );
+
+    pendingMerkleRoot = _merkleRoot;
+    lastSetTime = block.timestamp;
+
+    emit SetPendingMerkleRoot(_merkleRoot, lastSetTime);
+  }
+
+  /// @dev Accept the pending merkle root; pending merkle root can only be accepted after 1 day of setting
+  function acceptMerkleRoot() external onlyRole(BOT) whenNotPaused {
+    require(pendingMerkleRoot != bytes32(0) && pendingMerkleRoot != merkleRoot, "Invalid pending merkle root");
+    require(block.timestamp >= lastSetTime + waitingPeriod, "Not ready to accept");
+
+    merkleRoot = pendingMerkleRoot;
+    pendingMerkleRoot = bytes32(0);
+    lastSetTime = type(uint256).max;
+    versionId += 1;
+
+    emit AcceptMerkleRoot(merkleRoot, block.timestamp, versionId);
+  }
+
+  /// @dev Revoke the pending merkle root by Manager
+  function revokePendingMerkleRoot() external onlyRole(MANAGER) {
+    require(pendingMerkleRoot != bytes32(0), "Pending merkle root is zero");
+
+    pendingMerkleRoot = bytes32(0);
+    lastSetTime = type(uint256).max;
+
+    emit SetPendingMerkleRoot(bytes32(0), lastSetTime);
+  }
+
+  function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+}
