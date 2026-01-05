@@ -153,7 +153,7 @@ contract SmartProvider is
     MOOLAH.supplyCollateral(marketParams, lpAmount, onBehalf, "");
 
     // sync balances after position change
-    _syncPosition(marketParams.id(), onBehalf, false);
+    _syncPosition(marketParams.id(), onBehalf);
 
     emit SupplyCollateral(onBehalf, TOKEN, lpAmount, 0, 0);
   }
@@ -246,7 +246,7 @@ contract SmartProvider is
     MOOLAH.supplyCollateral(marketParams, actualLpAmount, onBehalf, "");
 
     // sync balances after position change
-    _syncPosition(marketParams.id(), onBehalf, false);
+    _syncPosition(marketParams.id(), onBehalf);
 
     emit SupplyCollateral(onBehalf, TOKEN, actualLpAmount, amount0, amount1);
   }
@@ -280,7 +280,7 @@ contract SmartProvider is
     MOOLAH.withdrawCollateral(marketParams, collateralAmount, onBehalf, address(this));
 
     // sync balances after position change
-    _syncPosition(marketParams.id(), onBehalf, false);
+    _syncPosition(marketParams.id(), onBehalf);
 
     // burn collateral token
     IStableSwapLPCollateral(TOKEN).burn(address(this), collateralAmount);
@@ -325,7 +325,7 @@ contract SmartProvider is
     MOOLAH.withdrawCollateral(marketParams, actualBurnAmount, onBehalf, address(this));
 
     // sync balances after position change
-    _syncPosition(marketParams.id(), onBehalf, false);
+    _syncPosition(marketParams.id(), onBehalf);
 
     // burn collateral token
     IStableSwapLPCollateral(TOKEN).burn(address(this), actualBurnAmount);
@@ -368,7 +368,7 @@ contract SmartProvider is
     MOOLAH.withdrawCollateral(marketParams, collateralAmount, onBehalf, address(this));
 
     // sync balances after position change
-    _syncPosition(marketParams.id(), onBehalf, false);
+    _syncPosition(marketParams.id(), onBehalf);
 
     // burn collateral token
     IStableSwapLPCollateral(TOKEN).burn(address(this), collateralAmount);
@@ -406,7 +406,7 @@ contract SmartProvider is
 
   function liquidate(Id id, address borrower) external onlyMoolah {
     // sync balances after position change
-    _syncPosition(id, borrower, true);
+    _syncPosition(id, borrower);
   }
 
   /**
@@ -510,7 +510,7 @@ contract SmartProvider is
     }
   }
 
-  function _syncPosition(Id id, address account, bool isLiquidation) private returns (bool, uint256) {
+  function _syncPosition(Id id, address account) private returns (bool, uint256) {
     require(MOOLAH.idToMarketParams(id).collateralToken == TOKEN, "invalid market");
     uint256 userMarketSupplyCollateral = MOOLAH.position(id, account).collateral;
     if (MOOLAH.providers(id, TOKEN) != address(this)) {
@@ -538,7 +538,7 @@ contract SmartProvider is
    * @param _account user address to sync
    */
   function syncUserBalance(Id id, address _account) external {
-    (bool rebalanced, ) = _syncPosition(id, _account, false);
+    (bool rebalanced, ) = _syncPosition(id, _account);
     require(rebalanced, "already synced");
   }
 
@@ -550,7 +550,7 @@ contract SmartProvider is
     for (uint256 i = 0; i < _accounts.length; i++) {
       for (uint256 j = 0; j < ids.length; j++) {
         // sync user's total balance and market balance
-        _syncPosition(ids[j], _accounts[i], false);
+        _syncPosition(ids[j], _accounts[i]);
       }
     }
   }

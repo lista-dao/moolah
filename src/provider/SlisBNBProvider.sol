@@ -121,7 +121,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     MOOLAH.supplyCollateral(marketParams, assets, onBehalf, data);
 
     // rebalance user's lpToken
-    (, uint256 latestLpBalance) = _syncPosition(marketParams.id(), onBehalf, false);
+    (, uint256 latestLpBalance) = _syncPosition(marketParams.id(), onBehalf);
 
     emit Deposit(onBehalf, assets, latestLpBalance);
   }
@@ -140,7 +140,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     // withdraw from distributor
     MOOLAH.withdrawCollateral(marketParams, assets, onBehalf, address(this));
     // rebalance user's lpToken
-    _syncPosition(marketParams.id(), onBehalf, false);
+    _syncPosition(marketParams.id(), onBehalf);
 
     // transfer token to user
     IERC20(TOKEN).safeTransfer(receiver, assets);
@@ -152,7 +152,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
   /// @param borrower The address of the borrower.
   function liquidate(Id id, address borrower) external {
     require(msg.sender == address(MOOLAH), "only moolah can call this function");
-    _syncPosition(id, borrower, true);
+    _syncPosition(id, borrower);
   }
 
   /// @dev Returns whether the sender is authorized to manage `onBehalf`'s positions.
@@ -231,7 +231,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     return (true, newUserLp);
   }
 
-  function _syncPosition(Id id, address account, bool isLiquidation) internal returns (bool, uint256) {
+  function _syncPosition(Id id, address account) internal returns (bool, uint256) {
     require(MOOLAH.idToMarketParams(id).collateralToken == TOKEN, "invalid market");
     uint256 userMarketSupplyCollateral = MOOLAH.position(id, account).collateral;
     if (MOOLAH.providers(id, TOKEN) != address(this)) {
@@ -304,7 +304,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
    * @param _account user address to sync
    */
   function syncUserLp(Id id, address _account) external {
-    (bool rebalanced, ) = _syncPosition(id, _account, false);
+    (bool rebalanced, ) = _syncPosition(id, _account);
     require(rebalanced, "already synced");
   }
 
@@ -316,7 +316,7 @@ contract SlisBNBProvider is UUPSUpgradeable, AccessControlEnumerableUpgradeable 
     for (uint256 i = 0; i < _accounts.length; i++) {
       for (uint256 j = 0; j < ids.length; j++) {
         // sync user's lpToken balance
-        _syncPosition(ids[j], _accounts[i], false);
+        _syncPosition(ids[j], _accounts[i]);
       }
     }
   }
