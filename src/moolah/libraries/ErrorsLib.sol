@@ -104,4 +104,6 @@ library ErrorsLib {
 
   /// @notice Thrown when the caller is not a broker.
   string internal constant NOT_BROKER = "not broker";
+
+  string internal constant EXCEED_MPC_CAP = "exceed mpc cap";
 }

@@ -24,7 +24,6 @@ contract SlisBNBProviderTest is BaseTest {
     DELEGATOR = makeAddr("DELEGATOR");
 
     lpToken = new MockLpToken();
-
     stakeManager = new MockStakeManager();
     stakeManager.setExchangeRate(1 ether);
 

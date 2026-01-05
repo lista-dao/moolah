@@ -22,6 +22,7 @@ import { StableSwapFactory } from "../../src/dex/StableSwapFactory.sol";
 import { Liquidator } from "../../src/liquidator/Liquidator.sol";
 import { PublicLiquidator } from "../../src/liquidator/PublicLiquidator.sol";
 import { MockOneInch } from "../liquidator/mocks/MockOneInch.sol";
+import { SlisBNBxMinter, ISlisBNBx } from "../../src/utils/SlisBNBxMinter.sol";
 
 contract SmartProviderTest is Test {
   address constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
@@ -1130,10 +1131,68 @@ contract SmartProviderTest is Test {
     vm.expectRevert("token blacklisted");
     moolah.flashLoan(address(lpCollateral), 100 ether, "");
   }
-  function _isLiquidatable(bytes32 id, address borrower) internal view returns (bool) {
-    return
-      moolah.isLiquidationWhitelist(Id.wrap(id), address(0)) ||
-      publicLiquidator.marketWhitelist(id) ||
-      publicLiquidator.marketUserWhitelist(id, borrower);
+
+  function test_getUserBalanceInBnb() public {
+    test_supplyDexLp();
+    assertEq(smartProvider.userTotalDeposit(user2), 0);
+
+    address minter = deploy_slisBNBxMinter();
+
+    // grant manager
+    vm.startPrank(admin);
+    bytes32 MANAGER = keccak256("MANAGER");
+    smartProvider.grantRole(MANAGER, manager);
+    vm.stopPrank();
+    assertTrue(smartProvider.hasRole(MANAGER, manager));
+
+    // set minter
+    vm.startPrank(manager);
+    moolah.setProvider(marketParams.id(), address(smartProvider), true);
+    smartProvider.setSlisBNBxMinter(minter);
+    assertEq(smartProvider.slisBNBxMinter(), minter);
+
+    // sync user2's data
+    smartProvider.syncUserBalance(marketParams.id(), user2);
+
+    uint256 user2BalanceInBnb = smartProvider.getUserBalanceInBnb(user2);
+    console.log("user2BalanceInBnb: ", user2BalanceInBnb);
+
+    (, , uint256 user2Collateral) = moolah.position(marketParams.id(), user2);
+    uint256 bnbPrice = smartProvider.peek(BNB_ADDRESS);
+    uint256 lpPrice = smartProvider.peek(address(lp));
+    assertApproxEqRel(user2BalanceInBnb * bnbPrice, user2Collateral * lpPrice, 3e16); // within 3%
+  }
+
+  function deploy_slisBNBxMinter() public returns (address) {
+    address slisBnbx = 0x4b30fcAA7945fE9fDEFD2895aae539ba102Ed6F6;
+
+    address[] memory modules = new address[](1);
+    modules[0] = address(smartProvider);
+
+    SlisBNBxMinter.ModuleConfig[] memory moduleConfigs = new SlisBNBxMinter.ModuleConfig[](1);
+    moduleConfigs[0] = SlisBNBxMinter.ModuleConfig({
+      discount: 2e4, // 2%
+      feeRate: 3e4, // 3%
+      moduleAddress: address(smartProvider)
+    });
+
+    SlisBNBxMinter impl = new SlisBNBxMinter(slisBnbx);
+    ERC1967Proxy proxy = new ERC1967Proxy(
+      address(impl),
+      abi.encodeWithSelector(SlisBNBxMinter.initialize.selector, admin, manager, modules, moduleConfigs)
+    );
+
+    SlisBNBxMinter minter = SlisBNBxMinter(address(proxy));
+
+    // add MPC
+    address mpc = makeAddr("mpc");
+    vm.prank(manager);
+    minter.addMPCWallet(mpc, 1_000_000_000 ether);
+
+    // set minter to slisBNBx
+    vm.prank(0x702115D6d3Bbb37F407aae4dEcf9d09980e28ebc);
+    ISlisBNBx(slisBnbx).addMinter(address(minter));
+
+    return address(minter);
   }
 }
