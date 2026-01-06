@@ -6,6 +6,7 @@ import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgrade
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 import { MarketParamsLib } from "../moolah/libraries/MarketParamsLib.sol";
 import { SharesMathLib } from "../moolah/libraries/SharesMathLib.sol";
@@ -18,6 +19,7 @@ import { ISmartProvider } from "./interfaces/IProvider.sol";
 import { IStableSwap, IStableSwapPoolInfo, StableSwapType } from "../dex/interfaces/IStableSwap.sol";
 import { IStableSwapLPCollateral } from "../dex/interfaces/IStableSwapLPCollateral.sol";
 import { IOracle, TokenConfig } from "../moolah/interfaces/IOracle.sol";
+import { ISlisBNBxMinter } from "../utils/interfaces/ISlisBNBx.sol";
 
 /**
  * @title SmartProvider
@@ -52,7 +54,17 @@ contract SmartProvider is
   /// @dev resilient oracle address
   address public resilientOracle;
 
+  /// @dev user account > market id > amount of token deposited
+  mapping(address => mapping(Id => uint256)) public userMarketDeposit;
+
+  /// @dev user account > total amount of token deposited
+  mapping(address => uint256) public userTotalDeposit;
+
+  /// @dev slisBNBxMinter address
+  address public slisBNBxMinter;
+
   address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+  bytes32 public constant MANAGER = keccak256("MANAGER");
 
   /* ------------------ Events ------------------ */
   event SupplyCollateral(
@@ -72,16 +84,9 @@ contract SmartProvider is
     address receiver
   );
 
-  event SmartLiquidation(
-    address indexed liquidator,
-    address indexed collateralToken,
-    address dexLP,
-    uint256 seizedAssets,
-    uint256 minAmount0,
-    uint256 minAmount1
-  );
-
   event RedeemLpCollateral(address indexed liquidator, uint256 lpAmount, uint256 token0Amount, uint256 token1Amount);
+  event SlisBNBxMinterChanged(address newSlisBNBxMinter);
+  event RebalanceFailed(string message);
 
   modifier onlyMoolah() {
     require(msg.sender == address(MOOLAH), "not moolah");
@@ -147,6 +152,9 @@ contract SmartProvider is
     IERC20(TOKEN).safeIncreaseAllowance(address(MOOLAH), lpAmount);
     MOOLAH.supplyCollateral(marketParams, lpAmount, onBehalf, "");
 
+    // sync balances after position change
+    _syncPosition(marketParams.id(), onBehalf);
+
     emit SupplyCollateral(onBehalf, TOKEN, lpAmount, 0, 0);
   }
 
@@ -168,6 +176,9 @@ contract SmartProvider is
 
     // withdraw collateral token from moolah
     MOOLAH.withdrawCollateral(marketParams, assets, onBehalf, address(this));
+
+    // sync balances after position change
+    _syncPosition(marketParams.id(), onBehalf);
 
     // burn collateral token
     IStableSwapLPCollateral(TOKEN).burn(address(this), assets);
@@ -234,6 +245,9 @@ contract SmartProvider is
     IERC20(TOKEN).safeIncreaseAllowance(address(MOOLAH), actualLpAmount);
     MOOLAH.supplyCollateral(marketParams, actualLpAmount, onBehalf, "");
 
+    // sync balances after position change
+    _syncPosition(marketParams.id(), onBehalf);
+
     emit SupplyCollateral(onBehalf, TOKEN, actualLpAmount, amount0, amount1);
   }
 
@@ -264,6 +278,9 @@ contract SmartProvider is
 
     // withdraw collateral
     MOOLAH.withdrawCollateral(marketParams, collateralAmount, onBehalf, address(this));
+
+    // sync balances after position change
+    _syncPosition(marketParams.id(), onBehalf);
 
     // burn collateral token
     IStableSwapLPCollateral(TOKEN).burn(address(this), collateralAmount);
@@ -307,6 +324,9 @@ contract SmartProvider is
     // withdraw collateral
     MOOLAH.withdrawCollateral(marketParams, actualBurnAmount, onBehalf, address(this));
 
+    // sync balances after position change
+    _syncPosition(marketParams.id(), onBehalf);
+
     // burn collateral token
     IStableSwapLPCollateral(TOKEN).burn(address(this), actualBurnAmount);
 
@@ -347,6 +367,9 @@ contract SmartProvider is
     // withdraw collateral
     MOOLAH.withdrawCollateral(marketParams, collateralAmount, onBehalf, address(this));
 
+    // sync balances after position change
+    _syncPosition(marketParams.id(), onBehalf);
+
     // burn collateral token
     IStableSwapLPCollateral(TOKEN).burn(address(this), collateralAmount);
 
@@ -381,7 +404,10 @@ contract SmartProvider is
     }
   }
 
-  function liquidate(Id id, address borrower) external onlyMoolah {}
+  function liquidate(Id id, address borrower) external onlyMoolah {
+    // sync balances after position change
+    _syncPosition(id, borrower);
+  }
 
   /**
    * @notice Liquidates a position by burning the seized collateral token and removing liquidity from the stableswap pool.
@@ -482,6 +508,81 @@ contract SmartProvider is
     } else {
       return IOracle(resilientOracle).getTokenConfig(_token);
     }
+  }
+
+  function _syncPosition(Id id, address account) private returns (bool, uint256) {
+    require(MOOLAH.idToMarketParams(id).collateralToken == TOKEN, "invalid market");
+    uint256 userMarketSupplyCollateral = MOOLAH.position(id, account).collateral;
+    if (MOOLAH.providers(id, TOKEN) != address(this)) {
+      userMarketSupplyCollateral = 0;
+    }
+    if (userMarketSupplyCollateral >= userMarketDeposit[account][id]) {
+      uint256 depositAmount = userMarketSupplyCollateral - userMarketDeposit[account][id];
+      userTotalDeposit[account] += depositAmount;
+    } else {
+      uint256 withdrawAmount = userMarketDeposit[account][id] - userMarketSupplyCollateral;
+      userTotalDeposit[account] -= withdrawAmount;
+    }
+    userMarketDeposit[account][id] = userMarketSupplyCollateral;
+
+    if (slisBNBxMinter == address(0)) {
+      return (false, 0);
+    } else {
+      return ISlisBNBxMinter(slisBNBxMinter).rebalance(account);
+    }
+  }
+
+  /* ----------------------- slisBNBx Re-balancing ----------------------- */
+  /**
+   * @dev sync user's slisBNBx balance to retain a consistent ratio with token balance
+   * @param _account user address to sync
+   */
+  function syncUserBalance(Id id, address _account) external {
+    (bool rebalanced, ) = _syncPosition(id, _account);
+    require(rebalanced, "already synced");
+  }
+
+  /**
+   * @dev sync multiple user's slisBNBx balance to retain a consistent ratio with token balance
+   * @param _accounts user address to sync
+   */
+  function bulkSyncUserBalance(Id[] calldata ids, address[] calldata _accounts) external {
+    for (uint256 i = 0; i < _accounts.length; i++) {
+      for (uint256 j = 0; j < ids.length; j++) {
+        // sync user's total balance and market balance
+        _syncPosition(ids[j], _accounts[i]);
+      }
+    }
+  }
+
+  /// @dev Returns the user's lp collateral value in BNB.
+  /// @param account The address of the user.
+  function getUserBalanceInBnb(address account) external view returns (uint256) {
+    // invoke pool's `get_virtual_price` to ensure the underlying pool not in reentrant state
+    IStableSwap(dex).get_virtual_price();
+
+    // how many lp tokens the account has as collateral
+    uint256 balance = userTotalDeposit[account];
+
+    // convert lp tokens to bnb value
+    uint256[2] memory amounts = IStableSwapPoolInfo(dexInfo).calc_coins_amount(dex, balance);
+    uint256 token0Price = _peek(token(0)); // 8 decimals
+    uint256 token1Price = _peek(token(1)); // 8 decimals
+    uint256 dps0 = (token(0) == BNB_ADDRESS) ? 18 : IERC20Metadata(token(0)).decimals();
+    uint256 dps1 = (token(1) == BNB_ADDRESS) ? 18 : IERC20Metadata(token(1)).decimals();
+
+    // calculate lp value in BNB
+    uint256 value0 = ((amounts[0] * token0Price) * 1e18) / (10 ** dps0);
+    uint256 value1 = ((amounts[1] * token1Price) * 1e18) / (10 ** dps1);
+    return (value0 + value1) / _peek(BNB_ADDRESS);
+  }
+
+  /// @dev Sets the slisBNBxMinter address.
+  function setSlisBNBxMinter(address _slisBNBxMinter) external onlyRole(MANAGER) {
+    require(_slisBNBxMinter != address(0), "zero address provided");
+    slisBNBxMinter = _slisBNBxMinter;
+
+    emit SlisBNBxMinterChanged(_slisBNBxMinter);
   }
 
   receive() external payable {
