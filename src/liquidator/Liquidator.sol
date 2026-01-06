@@ -39,7 +39,14 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
   event MarketWhitelistChanged(bytes32 id, bool added);
   event PairWhitelistChanged(address pair, bool added);
   event SmartProvidersChanged(address provider, bool added);
-  event SellToken(address pair, address tokenIn, address tokenOut, uint256 amountIn, uint256 actualAmountOut);
+  event SellToken(
+    address pair,
+    address spender,
+    address tokenIn,
+    address tokenOut,
+    uint256 amountIn,
+    uint256 actualAmountOut
+  );
   event SmartLiquidation(
     bytes32 indexed id,
     address indexed lpToken,
@@ -176,6 +183,8 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     uint256 amountOutMin,
     bytes calldata swapData
   ) external nonReentrant onlyRole(BOT) {
+    require(pair != spender, "pair and spender cannot be same address");
+    require(pairWhitelist[spender], NotWhitelisted());
     _sellToken(pair, spender, tokenIn, tokenOut, amountIn, amountOutMin, swapData);
   }
 
@@ -191,7 +200,6 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     require(tokenWhitelist[tokenIn], NotWhitelisted());
     require(tokenWhitelist[tokenOut], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());
-    require(pairWhitelist[spender], NotWhitelisted());
     require(amountIn > 0, "amountIn zero");
 
     require(tokenIn.balanceOf(address(this)) >= amountIn, ExceedAmount());
@@ -211,7 +219,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
 
     tokenIn.safeApprove(spender, 0);
 
-    emit SellToken(pair, tokenIn, tokenOut, actualAmountIn, actualAmountOut);
+    emit SellToken(pair, spender, tokenIn, tokenOut, actualAmountIn, actualAmountOut);
   }
 
   /// @dev sell BNB.
@@ -246,7 +254,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     require(actualAmountIn <= amountIn, ExceedAmount());
     require(actualAmountOut >= amountOutMin, NoProfit());
 
-    emit SellToken(pair, BNB_ADDRESS, tokenOut, amountIn, actualAmountOut);
+    emit SellToken(pair, pair, BNB_ADDRESS, tokenOut, amountIn, actualAmountOut);
   }
 
   /// @dev flash liquidates a position.
