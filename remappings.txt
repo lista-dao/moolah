@@ -10,3 +10,4 @@ vault-allocator=src/vault-allocator
 forge-std=lib/forge-std/src
 timelock=src/timelock
 revenue=src/revenue
+murky=lib/murky
