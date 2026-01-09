@@ -1,0 +1,71 @@
+[bsc]
+enendpoint_url = "${BSC_RPC_URL}"
+
+[bsc.address]
+### Tokens
+tokens = [
+    "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
+    "0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c",
+    "0x55d398326f99059fF775485246999027B3197955",
+    "0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d",
+]
+
+### Oracles
+oracles = [
+    "0xf3afD82A4071f272F403dC176916141f44E6c750"
+]
+
+### IRMs
+irms = [
+    "0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c",
+    "0x5F9f9173B405C6CEAfa7f98d09e4B8447e9797E6"
+]
+
+[bsc.uint]
+### LLTVs
+lltvs = [
+    330000000000000000,
+    500000000000000000,
+    600000000000000000,
+    700000000000000000,
+    750000000000000000,
+    800000000000000000,
+    850000000000000000,
+    860000000000000000,
+    865000000000000000,
+    900000000000000000,
+    915000000000000000,
+    965000000000000000
+]
+
+[bsc.string]
+tokenNames = [
+    "WBNB",
+    "BTCB",
+    "USDT",
+    "USD1",
+]
+
+oracleNames = [
+    "MULTI_ORACLE"
+]
+
+irmNames = [
+    "IRM",
+    "ALPHA_IRM"
+]
+
+lltvNames = [
+    "LLTV_33",
+    "LLTV_50",
+    "LLTV_60",
+    "LLTV_70",
+    "LLTV_75",
+    "LLTV_80",
+    "LLTV_85",
+    "LLTV_86",
+    "LLTV_865",
+    "LLTV_90",
+    "LLTV_915",
+    "LLTV_965"
+]
