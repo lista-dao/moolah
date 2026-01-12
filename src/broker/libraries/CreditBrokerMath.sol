@@ -176,7 +176,8 @@ library CreditBrokerMath {
   /**
    * @dev Get the penalty for a credit position if repaid after grace period
    *
-   * | ---- Fixed term --- | ---- Grace period ---- | --- Penalty applied after due time ---
+   * | ---- Fixed term --- | ---- Grace period ---- | After due time
+   * | --------------- no   penalty --------------- | penalty applies
    * start                 end                    dueTime
    *
    * @param remainingPrincipal The remaining principal amount
@@ -207,6 +208,41 @@ library CreditBrokerMath {
 
     // penalty = repayAmt * penaltyRate
     return Math.mulDiv(repayAmt, graceConfig.penaltyRate, RATE_SCALE, Math.Rounding.Ceil);
+  }
+
+  /**
+   * @dev Calculate the max LISTA amount accpetable for repaying interest
+   */
+  function getMaxListaForInterestRepay(
+    FixedLoanPosition memory position,
+    uint256 listaPrice,
+    uint256 discountRate
+  ) public view returns (uint256) {
+    // get outstanding accrued interest
+    uint256 accruedInterest = _getAccruedInterestForFixedPosition(position) - position.interestRepaid;
+
+    uint256 interestAfterDiscount = Math.mulDiv(
+      accruedInterest,
+      RATE_SCALE - discountRate,
+      RATE_SCALE,
+      Math.Rounding.Ceil
+    );
+
+    // convert interest amount to LISTA amount
+    return Math.mulDiv(interestAfterDiscount, RATE_SCALE, listaPrice, Math.Rounding.Ceil);
+  }
+
+  /**
+   * @dev Calculate loan token amount equivalent to given LISTA amount
+   */
+  function getInterestAmountFromLista(
+    uint256 listaAmount,
+    uint256 listaPrice,
+    uint256 discountRate
+  ) public view returns (uint256) {
+    // convert LISTA amount to loan token amount with discount
+    uint256 loanTokenAmount = Math.mulDiv(listaAmount, listaPrice, RATE_SCALE, Math.Rounding.Ceil);
+    return Math.mulDiv(loanTokenAmount, RATE_SCALE, RATE_SCALE - discountRate, Math.Rounding.Ceil);
   }
 
   /**

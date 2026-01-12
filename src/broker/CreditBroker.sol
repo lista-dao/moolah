@@ -278,18 +278,21 @@ contract CreditBroker is
     uint256 posId,
     address onBehalf
   ) external override marketIdSet whenNotPaused nonReentrant {
-    //    uint256 accruedInterest = _getAccruedInterestOnRepay(_getFixedPositionByPosId(onBehalf, posId));
-    //    uint256 listaPrice = IOracle(ORACLE).peek(LISTA);
+    uint256 listaPrice = IOracle(ORACLE).peek(LISTA);
+    uint256 maxListaAmount = CreditBrokerMath.getMaxListaForInterestRepay(
+      _getFixedPositionByPosId(onBehalf, posId),
+      listaPrice,
+      listaDiscountRate
+    );
 
-    //    uint256 maxListaValue = (accruedInterest * (RATE_SCALE - listaDiscountRate)) / RATE_SCALE;
-    (uint256 maxListaAmount, uint256 listaPrice) = _getPayableLista(_getFixedPositionByPosId(onBehalf, posId));
+    if (listaAmount > maxListaAmount) {
+      listaAmount = maxListaAmount;
+    }
 
-    listaAmount = listaAmount > maxListaAmount ? maxListaAmount : listaAmount;
-
-    // transfer LISTA from msg.sender, to Relayer
+    // transfer LISTA from msg.sender to Relayer
     IERC20(LISTA).safeTransferFrom(msg.sender, RELAYER, listaAmount);
 
-    uint256 interestAmount = (listaAmount * listaPrice * RATE_SCALE) / (RATE_SCALE - listaDiscountRate) / 1e8;
+    uint256 interestAmount = CreditBrokerMath.getInterestAmountFromLista(listaAmount, listaPrice, listaDiscountRate);
 
     // transfer interest amount from Relayer to address(this)
     ICreditBrokerInterestRelayer(RELAYER).transferLoan(interestAmount);
@@ -495,20 +498,6 @@ contract CreditBroker is
     _validatePositions(user);
     // emit event
     emit FixedLoanPositionCreated(user, fixedPosUuid, amount, start, end, term.apr, termId);
-  }
-
-  function _getPayableLista(FixedLoanPosition memory position) internal view returns (uint256, uint256) {
-    // remaining principal before repayment
-    uint256 remainingPrincipal = position.principal - position.principalRepaid;
-
-    // get outstanding accrued interest
-    uint256 accruedInterest = _getAccruedInterestForFixedPosition(position) - position.interestRepaid;
-    uint256 listaPrice = IOracle(ORACLE).peek(LISTA);
-
-    uint256 maxListaValue = (accruedInterest * (RATE_SCALE - listaDiscountRate)) / RATE_SCALE;
-    uint256 payableListaAmount = (maxListaValue * 1e8) / listaPrice;
-
-    return (payableListaAmount, listaPrice);
   }
 
   function _repay(uint256 amount, uint256 posId, address onBehalf) internal {
