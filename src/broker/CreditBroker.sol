@@ -542,10 +542,15 @@ contract CreditBroker is
     // then repay principal if there is any amount left
     if (repayPrincipalAmt > 0) {
       // ----- delay penalty
-      // check penalty if user is repaying after grace period ends
+      // check delay penalty if user is repaying after grace period ends
       // penalty = 15% * debt
-      uint256 debt = remainingPrincipal + accruedInterest;
-      penalty = _getDelayPenalty(repayPrincipalAmt, remainingPrincipal, debt, position.end);
+      penalty = CreditBrokerMath.getPenaltyForCreditPosition(
+        repayPrincipalAmt,
+        remainingPrincipal,
+        accruedInterest,
+        position.end,
+        graceConfig
+      );
 
       // supply penalty into vault as revenue
       if (penalty > 0) {
@@ -718,32 +723,6 @@ contract CreditBroker is
       }
     }
     revert("broker/position-not-found");
-  }
-
-  ///  | ---- Fixed term --- | ---- Grace period ---- |
-  /// start                 end                    dueTime
-  function _getDelayPenalty(
-    uint256 repayAmt,
-    uint256 remainingPrincipal,
-    uint256 debt,
-    uint256 endTime
-  ) internal view returns (uint256 penalty) {
-    if (graceConfig.period == 0) return 0;
-
-    uint256 dueTime = endTime + graceConfig.period;
-    // if within grace period, no penalty
-    if (block.timestamp <= dueTime) return 0;
-
-    // maximum repayable amount = remaining principal + penalty on the debt
-    uint256 maxRepayable = remainingPrincipal + (debt * graceConfig.penaltyRate) / RATE_SCALE;
-
-    // if repay amount exceeds max repayable (debt + penalty), cap it
-    if (repayAmt > maxRepayable) {
-      repayAmt = maxRepayable;
-    }
-
-    // calculate penalty on the debt; 15%
-    penalty = (repayAmt * graceConfig.penaltyRate) / RATE_SCALE;
   }
 
   /**
