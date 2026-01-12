@@ -23,11 +23,9 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
     uint256 score; // credit score value
   }
 
-  /// @dev The amount of tokens minted to user; only affected by credit score changes
-  mapping(address => uint256) public userAmounts; // TODO: remove, dulicate of `creditScores.score`
-
-  /// @dev User's bad debt; should burn but unable to due to insufficient balance
-  mapping(address => uint256) public userBadDebts;
+  /// @dev The accounted amount for each user: balance + deposits(open positions)
+  /// @notice if userAmounts[user] > creditScores[user].score, which means user holds more tokens than their credit score allows, they have bad debt
+  mapping(address => uint256) public userAmounts;
 
   /// @dev the next merkle root to be set
   bytes32 public pendingMerkleRoot;
@@ -88,7 +86,7 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
     _setRoleAdmin(TRANSFERER, MANAGER);
   }
 
-  function mint(address _to, uint256 _amount) external {
+  function mint(address, uint256) external {
     revert("Disabled");
   }
 
@@ -156,36 +154,33 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
    * @param _lastScore The last credit score of the user.
    */
   function _syncCreditScore(address _user, uint256 _newScore, uint256 _lastScore) private {
+    uint256 debt = debtOf(_user);
+
     if (_newScore > _lastScore) {
-      uint256 increaseAmount = _newScore - _lastScore;
-      userAmounts[_user] += increaseAmount;
-
-      // first cover bad debt if any
-      bool hasBadDebt = userBadDebts[_user] > 0;
-
-      if (hasBadDebt && increaseAmount >= userBadDebts[_user]) {
+      // 1. score increase
+      if (debt > 0 && _newScore >= userAmounts[_user]) {
         // fully cover bad debt
-        increaseAmount -= userBadDebts[_user];
-        userBadDebts[_user] = 0;
-      } else if (hasBadDebt) {
+        _mint(_user, _newScore - userAmounts[_user]);
+        userAmounts[_user] = _newScore;
+      } else if (debt > 0) {
         // partially cover bad debt
-        userBadDebts[_user] -= increaseAmount;
-        increaseAmount = 0;
+        uint256 actualBurned = _safeBurn(_user, debt);
+        userAmounts[_user] -= actualBurned;
+      } else {
+        // no bad debt, just mint the difference
+        _mint(_user, _newScore - _lastScore);
+        userAmounts[_user] += (_newScore - _lastScore);
       }
-
-      _mint(_user, increaseAmount);
     } else if (_newScore < _lastScore) {
+      // 2. score decrease
       uint256 decreaseAmount = _lastScore - _newScore;
-      userAmounts[_user] -= decreaseAmount;
-
       uint256 actualBurned = _safeBurn(_user, decreaseAmount);
-      // bad debt = decreaseAmount - actualBurned
-      userBadDebts[_user] += (decreaseAmount - actualBurned);
+      userAmounts[_user] -= actualBurned;
     } else {
-      // no score change; check balance against bad debt
-      if (userBadDebts[_user] > 0 && balanceOf(_user) > 0) {
-        uint256 actualBurned = _safeBurn(_user, userBadDebts[_user]);
-        userBadDebts[_user] -= actualBurned;
+      // 3. no score change; check balance against bad debt
+      if (debt > 0 && balanceOf(_user) > 0) {
+        uint256 actualBurned = _safeBurn(_user, debt);
+        userAmounts[_user] -= actualBurned;
       }
     }
   }
@@ -204,6 +199,11 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
     }
 
     return burnAmount;
+  }
+
+  function debtOf(address _user) public view returns (uint256) {
+    uint256 score = creditScores[_user].score;
+    return userAmounts[_user] > score ? userAmounts[_user] - score : 0;
   }
 
   ///////// Below are functions for merkle root management with timelock /////////

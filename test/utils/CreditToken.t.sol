@@ -105,6 +105,7 @@ contract CreditTokenTest is Test {
     return score;
   }
 
+  // Sync credit score: 0 -> 300
   function test_syncCreditScore() public {
     test_acceptMerkleRoot();
 
@@ -113,22 +114,23 @@ contract CreditTokenTest is Test {
     assertEq(_getUserScore(user1), 0);
     assertEq(_getUserScoreId(user1), 0);
     assertEq(creditToken.userAmounts(user1), 0);
-    assertEq(creditToken.userBadDebts(user1), 0);
+    assertEq(creditToken.debtOf(user1), 0);
 
     uint256 score = 300 ether; // Example credit score = 300
     // Sync credit score
     creditToken.syncCreditScore(user1, score, proof);
 
     // Check credit balance
-    assertEq(creditToken.balanceOf(user1), score);
+    assertEq(creditToken.balanceOf(user1), score, "Credit balance not updated correctly");
 
     // Check stored credit score
-    assertEq(_getUserScore(user1), score);
-    assertEq(_getUserScoreId(user1), creditToken.versionId());
-    assertEq(creditToken.userAmounts(user1), score);
-    assertEq(creditToken.userBadDebts(user1), 0);
+    assertEq(_getUserScore(user1), score, "Credit score not updated correctly");
+    assertEq(_getUserScoreId(user1), creditToken.versionId(), "Credit score ID not updated correctly");
+    assertEq(creditToken.userAmounts(user1), score, "User amount not updated correctly");
+    assertEq(creditToken.debtOf(user1), 0, "Debt should be zero");
   }
 
+  // Decrease credit score: 0 -> 300 -> 100, no bad debt
   function test_decreaseCreditScoreWithoutBadDebt() public {
     test_syncCreditScore();
     uint256 decreasedScore = 100 ether; // Decrease credit score to 100
@@ -146,9 +148,10 @@ contract CreditTokenTest is Test {
     assertEq(_getUserScore(user1), decreasedScore);
     assertEq(_getUserScoreId(user1), creditToken.versionId());
     assertEq(creditToken.userAmounts(user1), decreasedScore);
-    assertEq(creditToken.userBadDebts(user1), 0);
+    assertEq(creditToken.debtOf(user1), 0);
   }
 
+  // Decrease credit score: 0 -> 300 -> 100, with bad debt 200
   function test_decreaseCreditScoreWithBadDebt() public {
     test_syncCreditScore();
 
@@ -170,7 +173,7 @@ contract CreditTokenTest is Test {
     assertEq(creditToken.balanceOf(user1), 0);
     assertEq(_getUserScore(user1), 300 ether);
     assertEq(creditToken.userAmounts(user1), 300 ether);
-    assertEq(creditToken.userBadDebts(user1), 0);
+    assertEq(creditToken.debtOf(user1), 0);
 
     // Now decrease credit score to 100, which should create bad debt of 200
     uint256 decreasedScore = 100 ether;
@@ -184,11 +187,11 @@ contract CreditTokenTest is Test {
     assertEq(creditToken.balanceOf(user1), 0); // still 0
     // Check last synced score (should reflect bad debt of 200)
     assertEq(_getUserScore(user1), 100 ether);
-    assertEq(creditToken.userAmounts(user1), 100 ether);
-    assertEq(creditToken.userBadDebts(user1), 200 ether);
+    assertEq(creditToken.userAmounts(user1), 300 ether);
+    assertEq(creditToken.debtOf(user1), 200 ether);
   }
 
-  // Now increase credit score to 250, (300 -> 100 -> 250) which should cover parially bad debt of 200 by 150
+  // Now increase credit score to 250, (0 -> 300 -> 100 -> 250) which should cover parially bad debt of 200 by 150
   function test_hasBadDebtThenCoverParially() public {
     test_decreaseCreditScoreWithBadDebt();
 
@@ -206,8 +209,8 @@ contract CreditTokenTest is Test {
     // Check last synced score (should reflect new score of 250 and remaining bad debt of 50)
     assertEq(_getUserScore(user1), 250 ether);
     assertEq(_getUserScoreId(user1), creditToken.versionId());
-    assertEq(creditToken.userAmounts(user1), 250 ether);
-    assertEq(creditToken.userBadDebts(user1), 50 ether);
+    assertEq(creditToken.userAmounts(user1), 300 ether); // no change because no changes in either balance or deposits
+    assertEq(creditToken.debtOf(user1), 50 ether); // bad debt reduced to 50
   }
 
   // Now increase credit score to 300, (300 -> 100 -> 300) which should cover bad debt of 200 exactly
@@ -227,7 +230,7 @@ contract CreditTokenTest is Test {
     assertEq(_getUserScore(user1), 300 ether);
     assertEq(_getUserScoreId(user1), creditToken.versionId());
     assertEq(creditToken.userAmounts(user1), 300 ether);
-    assertEq(creditToken.userBadDebts(user1), 0); // bad debt cleared
+    assertEq(creditToken.debtOf(user1), 0); // bad debt cleared
   }
 
   // Increase credit score to 350, (300 -> 100 -> 350) which should cover bad debt of 200 and mint 50 tokens
@@ -247,7 +250,7 @@ contract CreditTokenTest is Test {
     assertEq(_getUserScore(user1), 350 ether);
     assertEq(_getUserScoreId(user1), creditToken.versionId());
     assertEq(creditToken.userAmounts(user1), 350 ether);
-    assertEq(creditToken.userBadDebts(user1), 0); // bad debt cleared
+    assertEq(creditToken.debtOf(user1), 0); // bad debt cleared
   }
 
   // user1 somehow got 80 credit tokens, no score change but has bad debt of 200; should burn 80 tokens and reduce bad debt to 120
@@ -256,6 +259,8 @@ contract CreditTokenTest is Test {
 
     vm.prank(broker1);
     creditToken.transfer(user1, 80 ether);
+    uint prevUserAmount = creditToken.userAmounts(user1);
+    uint prevDebt = creditToken.debtOf(user1);
 
     assertEq(creditToken.balanceOf(user1), 80 ether);
     uint256 lastScore = _getUserScore(user1);
@@ -268,8 +273,40 @@ contract CreditTokenTest is Test {
     // Check last synced score
     assertEq(_getUserScore(user1), lastScore);
     assertEq(_getUserScoreId(user1), creditToken.versionId());
-    assertEq(creditToken.userAmounts(user1), lastScore);
-    assertEq(creditToken.userBadDebts(user1), 120 ether); // bad debt reduced to 120
+    assertEq(creditToken.userAmounts(user1), prevUserAmount - 80 ether); // user amount increased by 80 due to burning
+    assertEq(creditToken.debtOf(user1), prevDebt - 80 ether); // bad debt reduced by 80
+  }
+
+  // 0 -> 100 -> 80, with bad debt of 15
+  function test_userAmounts() public {
+    // First set score to 100
+    _generateTree(user1, 100 ether, creditToken.versionId() + 1);
+    test_acceptMerkleRoot();
+    creditToken.syncCreditScore(user1, 100 ether, proof);
+
+    assertEq(creditToken.balanceOf(user1), 100 ether);
+    assertEq(creditToken.userAmounts(user1), 100 ether);
+    assertEq(creditToken.debtOf(user1), 0);
+
+    // Now broker takes 95 tokens, leaving user1 with 5 tokens
+    vm.prank(user1);
+    creditToken.approve(broker1, 100 ether);
+    vm.prank(broker1);
+    creditToken.transferFrom(user1, broker1, 95 ether);
+
+    assertEq(creditToken.balanceOf(user1), 5 ether);
+    assertEq(creditToken.userAmounts(user1), 100 ether);
+    assertEq(creditToken.debtOf(user1), 0);
+
+    // Now decrease score to 80
+    _generateTree(user1, 80 ether, creditToken.versionId() + 1);
+    test_acceptMerkleRoot();
+    creditToken.syncCreditScore(user1, 80 ether, proof);
+
+    // Check final states
+    assertEq(creditToken.balanceOf(user1), 0); // all 5 tokens burned
+    assertEq(creditToken.userAmounts(user1), 95 ether); // user amount reduced by 5 due to burning
+    assertEq(creditToken.debtOf(user1), 15 ether); // bad debt of 15 (95 - 80)
   }
 
   function _generateTree(address _account, uint256 _score, uint256 _versionId) public {
