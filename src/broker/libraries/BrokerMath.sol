@@ -14,7 +14,7 @@ import { PriceLib } from "../../moolah/libraries/PriceLib.sol";
 import { IRateCalculator } from "../interfaces/IRateCalculator.sol";
 
 uint256 constant RATE_SCALE = 10 ** 27;
-uint256 constant ONE_USD = 1e8;
+uint256 constant LISUSD_PRICE = 1e8;
 
 library BrokerMath {
   using MathLib for uint128;
@@ -38,7 +38,7 @@ library BrokerMath {
     Id marketId = broker.MARKET_ID();
     // loan token's price never changes
     if (token == loanToken) {
-      return ONE_USD; // lisUSD or USDT or U price
+      return LISUSD_PRICE;
     } else if (token == collateralToken) {
       /*
         Broker accrues interest, so collateral price is adjusted downward,
@@ -50,18 +50,13 @@ library BrokerMath {
         new collateral price  = A - (B-C)/D
       */
       // the total debt of the user (principal + interest)
-      uint256 debtAtBroker = 0;
-      if (rateCalculator == address(0)) {
-        debtAtBroker = broker.getUserTotalDebt(user);
-      } else {
-        debtAtBroker = getTotalDebt(
-          broker.userFixedPositions(user),
-          broker.userDynamicPosition(user),
-          IRateCalculator(rateCalculator).getRate(address(this))
-        );
-      }
+      uint256 debtAtBroker = getTotalDebt(
+        broker.userFixedPositions(user),
+        broker.userDynamicPosition(user),
+        IRateCalculator(rateCalculator).getRate(address(this))
+      );
       // fetch collateral price from oracle
-      uint256 collateralPrice = rateCalculator == address(0) ? ONE_USD : IOracle(oracle).peek(collateralToken);
+      uint256 collateralPrice = IOracle(oracle).peek(collateralToken);
       // get user's position info
       Position memory _position = moolah.position(marketId, user);
       // in case there is no collaterals
