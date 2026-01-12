@@ -7,7 +7,7 @@ import { UtilsLib } from "../../moolah/libraries/UtilsLib.sol";
 import { MathLib, WAD } from "../../moolah/libraries/MathLib.sol";
 import { SharesMathLib } from "../../moolah/libraries/SharesMathLib.sol";
 import { Id, IMoolah, MarketParams, Market, Position } from "../../moolah/interfaces/IMoolah.sol";
-import { ICreditBroker, FixedLoanPosition } from "../interfaces/ICreditBroker.sol";
+import { ICreditBroker, FixedLoanPosition, GraceConfig } from "../interfaces/ICreditBroker.sol";
 import { IOracle } from "../../moolah/interfaces/IOracle.sol";
 import { PriceLib } from "../../moolah/libraries/PriceLib.sol";
 
@@ -171,6 +171,42 @@ library CreditBrokerMath {
       2,
       Math.Rounding.Ceil
     );
+  }
+
+  /**
+   * @dev Get the penalty for a credit position if repaid after grace period
+   *
+   * | ---- Fixed term --- | ---- Grace period ---- | --- Penalty applied after due time ---
+   * start                 end                    dueTime
+   *
+   * @param remainingPrincipal The remaining principal amount
+   * @param repayAmt The actual repay amount (repay amount excluded accrued interest)
+   */
+  function getPenaltyForCreditPosition(
+    uint256 repayAmt,
+    uint256 remainingPrincipal,
+    uint256 accruedInterest,
+    uint256 endTime,
+    GraceConfig memory graceConfig
+  ) public view returns (uint256) {
+    if (graceConfig.period == 0) return 0;
+
+    uint256 dueTime = endTime + graceConfig.period;
+    // if within grace period, no penalty
+    if (block.timestamp <= dueTime) return 0;
+
+    // maximum repayable amount = remaining principal + penalty on the debt
+    uint256 debt = remainingPrincipal + accruedInterest;
+    uint256 maxPenalty = Math.mulDiv(debt, graceConfig.penaltyRate, RATE_SCALE, Math.Rounding.Ceil);
+    uint256 maxRepayable = remainingPrincipal + maxPenalty;
+
+    // if repay amount clears all debt, charge maximum penalty
+    if (repayAmt >= maxRepayable) {
+      return maxPenalty;
+    }
+
+    // penalty = repayAmt * penaltyRate
+    return Math.mulDiv(repayAmt, graceConfig.penaltyRate, RATE_SCALE, Math.Rounding.Ceil);
   }
 
   /**

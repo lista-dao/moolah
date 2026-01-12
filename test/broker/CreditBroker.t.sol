@@ -799,7 +799,7 @@ contract CreditBrokerTest is Test {
     assertEq(afterPositions.length, 0, "fixed position not removed");
 
     uint userUsdtBalance = USDT.balanceOf(borrower);
-    //    assertApproxEqAbs(userUsdtBalance, beforeBalance - debt, 1e16, "unexpected user USDT balance after repay");
+    assertApproxEqAbs(userUsdtBalance, beforeBalance - debt, 1e16, "unexpected user USDT balance after repay");
     assertEq(creditToken.balanceOf(borrower), COLLATERAL, "unexpected user collateral balance after withdraw");
   }
 
@@ -1107,5 +1107,53 @@ contract CreditBrokerTest is Test {
       accruedInterest,
       "interest should not increase after term end"
     );
+  }
+
+  function test_getPenaltyForCreditPosition_clearDebt() public {
+    // mock a grace config
+    GraceConfig memory graceConfig = GraceConfig({ period: 3 days, penaltyRate: 15 * 1e25 });
+
+    // skip past end + grace period
+    skip(45 days);
+    uint256 repayAmt = 1000 ether;
+    uint256 remainingPrincipal = 500 ether;
+    uint256 accruedInterest = 20 ether;
+    uint256 endTime = block.timestamp - 15 days; // should be penalized
+
+    uint256 penalty = CreditBrokerMath.getPenaltyForCreditPosition(
+      repayAmt,
+      remainingPrincipal,
+      accruedInterest,
+      endTime,
+      graceConfig
+    );
+
+    // expected penalty = debt * penaltyRate
+    uint256 expectedPenalty = (520 ether * 15) / 100; // 15% * debt
+
+    assertApproxEqAbs(penalty, expectedPenalty, 1e15, "penalty mismatch");
+  }
+
+  function test_getPenaltyForCreditPosition_partial() public {
+    // mock a grace config
+    GraceConfig memory graceConfig = GraceConfig({ period: 3 days, penaltyRate: 15 * 1e25 });
+
+    // skip past end + grace period
+    skip(45 days);
+    uint256 repayAmt = 510 ether;
+    uint256 remainingPrincipal = 500 ether;
+    uint256 accruedInterest = 20 ether;
+    uint256 endTime = block.timestamp - 15 days; // should be penalized
+
+    uint256 penalty = CreditBrokerMath.getPenaltyForCreditPosition(
+      repayAmt,
+      remainingPrincipal,
+      accruedInterest,
+      endTime,
+      graceConfig
+    );
+    // expected penalty = repayAmt * penaltyRate
+    uint256 expectedPenalty = (510 ether * 15) / 100; // 15% * repaid amount
+    assertApproxEqAbs(penalty, expectedPenalty, 1e15, "penalty mismatch");
   }
 }
