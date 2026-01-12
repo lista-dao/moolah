@@ -10,9 +10,9 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
-import { IBroker, DynamicLoanPosition, FixedLoanPosition, FixedTermAndRate, GraceConfig } from "./interfaces/IBroker.sol";
-import { BrokerMath, RATE_SCALE } from "./libraries/BrokerMath.sol";
-import { IBrokerInterestRelayer } from "./interfaces/IBrokerInterestRelayer.sol";
+import { ICreditBroker, FixedLoanPosition, FixedTermAndRate, GraceConfig } from "./interfaces/ICreditBroker.sol";
+import { CreditBrokerMath, RATE_SCALE } from "./libraries/CreditBrokerMath.sol";
+import { ICreditBrokerInterestRelayer } from "./interfaces/ICreditBrokerInterestRelayer.sol";
 
 import { MarketParamsLib } from "../moolah/libraries/MarketParamsLib.sol";
 import { SharesMathLib } from "../moolah/libraries/SharesMathLib.sol";
@@ -24,16 +24,16 @@ import { ICreditToken } from "../utils/interfaces/ICreditToken.sol";
 
 /// @title Credit Loan Broker for Lista Lending
 /// @author Lista DAO
-/// @notice This contract allows users to borrow token(LisUSD in general) by depositing collateral to moolah
+/// @notice This contract allows users to borrow fixed-rate, fixed-term loans using credits as collateral.
 /// @dev
 /// - all borrow and repay has to be done through the broker, broker manages the positions
-/// - User can have multiple fixed rate & terms position and a single dynamic position at the same time
+/// - collateral token is a credit token, which syncs user's credit score on every supply/withdraw
 contract CreditBroker is
   UUPSUpgradeable,
   AccessControlEnumerableUpgradeable,
   PausableUpgradeable,
   ReentrancyGuardUpgradeable,
-  IBroker
+  ICreditBroker
 {
   using SafeERC20 for IERC20;
   using MarketParamsLib for MarketParams;
@@ -53,7 +53,6 @@ contract CreditBroker is
   uint256 public constant MAX_FIXED_TERM_APR = 13e26; // 1.3 * RATE_SCALE = 30% MAX APR
   uint256 public constant MIN_FIXED_TERM_APR = 105 * 1e25; // 0.05 * RATE_SCALE = 5% MIN APR
   uint256 public constant MAX_REPAY_EXTENSION_COUNT = 3; // max 3 extensions
-  uint256 public constant MAX_EXTENSION_PERIOD = 30 days; // max 30 days extension period ?
 
   address public LOAN_TOKEN;
   /// @dev credit token address
@@ -164,7 +163,7 @@ contract CreditBroker is
     graceConfig.period = 3 days;
     graceConfig.penaltyRate = 15 * 1e25; // 15% = 0.15 * RATE_SCALE
 
-    listaDiscountRate = 20 * 1e25; // 20% discount
+    listaDiscountRate = 20 * 1e25; // 20% discount if repaying interest with LISTA
 
     emit GraceConfigUpdated(graceConfig.period, graceConfig.penaltyRate);
   }
@@ -177,6 +176,7 @@ contract CreditBroker is
    * @dev supply collateral(credit token) to Moolah
    * @param marketParams The market parameters
    * @param amount The amount of credit token to supply
+   * @param score The credit score of the user
    * @param proof The merkle proof for credit score sync
    */
   function supplyCollateral(
@@ -184,10 +184,19 @@ contract CreditBroker is
     uint256 amount,
     uint256 score,
     bytes32[] calldata proof
-  ) external marketIdSet whenNotPaused nonReentrant {
+  ) external override marketIdSet whenNotPaused nonReentrant {
     _supplyCollateral(marketParams, amount, score, proof);
   }
 
+  /**
+   * @dev supply collateral(credit token) and borrow an fixed amount with fixed term and rate
+   * @param marketParams The market parameters
+   * @param collateralAmount The amount of credit token to supply
+   * @param borrowAmount amount to borrow
+   * @param termId The ID of the term
+   * @param score The credit score of the user
+   * @param proof The merkle proof for credit score
+   */
   function supplyAndBorrow(
     MarketParams memory marketParams,
     uint256 collateralAmount,
@@ -195,7 +204,7 @@ contract CreditBroker is
     uint256 termId,
     uint256 score,
     bytes32[] calldata proof
-  ) external marketIdSet whenNotPaused whenBorrowNotPaused nonReentrant {
+  ) external override marketIdSet whenNotPaused whenBorrowNotPaused nonReentrant {
     _supplyCollateral(marketParams, collateralAmount, score, proof);
     _borrow(borrowAmount, termId);
   }
@@ -225,7 +234,7 @@ contract CreditBroker is
     uint256 amount,
     uint256 score,
     bytes32[] calldata proof
-  ) external marketIdSet whenNotPaused nonReentrant {
+  ) external override marketIdSet whenNotPaused nonReentrant {
     _withdrawCollateral(marketParams, amount, score, proof);
   }
 
@@ -236,7 +245,7 @@ contract CreditBroker is
     uint256 posId,
     uint256 score,
     bytes32[] calldata proof
-  ) external marketIdSet whenNotPaused nonReentrant {
+  ) external override marketIdSet whenNotPaused nonReentrant {
     _repay(repayAmount, posId, msg.sender);
     _withdrawCollateral(marketParams, collateralAmount, score, proof);
   }
@@ -258,13 +267,17 @@ contract CreditBroker is
 
   /**
    * @dev Repay interest with LISTA token at a discount
+   * @param loanTokenAmount The amount of loan token to repay apart from LISTA repayment
+   * @param listaAmount The amount of LISTA token to use for interest repayment
+   * @param posId The ID of the fixed position to repay
+   * @param onBehalf The address of the user whose position to repay
    */
   function repayInterestWithLista(
     uint256 loanTokenAmount,
     uint256 listaAmount,
     uint256 posId,
     address onBehalf
-  ) external marketIdSet whenNotPaused nonReentrant {
+  ) external override marketIdSet whenNotPaused nonReentrant {
     //    uint256 accruedInterest = _getAccruedInterestOnRepay(_getFixedPositionByPosId(onBehalf, posId));
     //    uint256 listaPrice = IOracle(ORACLE).peek(LISTA);
 
@@ -279,7 +292,7 @@ contract CreditBroker is
     uint256 interestAmount = (listaAmount * listaPrice * RATE_SCALE) / (RATE_SCALE - listaDiscountRate) / 1e8;
 
     // transfer interest amount from Relayer to address(this)
-    IBrokerInterestRelayer(RELAYER).transferLoan(interestAmount);
+    ICreditBrokerInterestRelayer(RELAYER).transferLoan(interestAmount);
 
     loanTokenAmount += interestAmount;
 
@@ -317,7 +330,7 @@ contract CreditBroker is
   function peek(address token, address user) public view override marketIdSet returns (uint256 price) {
     require(user != address(0), "broker/zero-address");
     require(token == COLLATERAL_TOKEN || token == LOAN_TOKEN, "broker/unsupported-token");
-    price = BrokerMath.peek(token, user, address(MOOLAH), address(0), address(ORACLE));
+    price = CreditBrokerMath.peek(token, user, address(MOOLAH), address(ORACLE));
   }
 
   /**
@@ -339,7 +352,7 @@ contract CreditBroker is
     FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
 
     uint256 dueTime = position.end + graceConfig.period;
-    return block.timestamp > dueTime && position.principal > position.principalRepaid;
+    return block.timestamp > dueTime;
   }
 
   /**
@@ -363,12 +376,6 @@ contract CreditBroker is
   }
 
   /**
-   * @dev Get the dynamic loan position of a user; returns an empty struct
-   * @return The DynamicLoanPosition struct
-   */
-  function userDynamicPosition(address user) external view override returns (DynamicLoanPosition memory) {}
-
-  /**
    * @dev Get the total debt of a user (dynamic + fixed)
    * @param user The address of the user
    */
@@ -379,7 +386,7 @@ contract CreditBroker is
       // add principal
       totalDebt += _fixedPos.principal - _fixedPos.principalRepaid;
       // add interest
-      totalDebt += BrokerMath.getAccruedInterestForFixedPosition(_fixedPos) - _fixedPos.interestRepaid;
+      totalDebt += CreditBrokerMath.getAccruedInterestForFixedPosition(_fixedPos) - _fixedPos.interestRepaid;
     }
   }
 
@@ -401,7 +408,7 @@ contract CreditBroker is
     require(amount > 0, "broker/zero-amount");
     require(user != address(0), "broker/zero-address");
     FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
-    (interestRepaid, penalty, principalRepaid) = BrokerMath.previewRepayFixedLoanPosition(position, amount);
+    (interestRepaid, penalty, principalRepaid) = CreditBrokerMath.previewRepayFixedLoanPosition(position, amount);
   }
 
   ///////////////////////////////////////
@@ -657,7 +664,7 @@ contract CreditBroker is
       // approve to relayer
       IERC20(LOAN_TOKEN).safeIncreaseAllowance(RELAYER, interest);
       // supply interest to relayer to be deposited into vault
-      IBrokerInterestRelayer(RELAYER).supplyToVault(interest);
+      ICreditBrokerInterestRelayer(RELAYER).supplyToVault(interest);
     }
   }
 
@@ -744,7 +751,7 @@ contract CreditBroker is
    * @param position The fixed loan position to get the interest for
    */
   function _getAccruedInterestForFixedPosition(FixedLoanPosition memory position) internal view returns (uint256) {
-    return BrokerMath.getAccruedInterestForFixedPosition(position);
+    return CreditBrokerMath.getAccruedInterestForFixedPosition(position);
   }
 
   /**
@@ -756,7 +763,7 @@ contract CreditBroker is
     FixedLoanPosition memory position,
     uint256 repayAmt
   ) internal view returns (uint256 penalty) {
-    return BrokerMath.getPenaltyForFixedPosition(position, repayAmt);
+    return CreditBrokerMath.getPenaltyForFixedPosition(position, repayAmt);
   }
 
   /**
@@ -781,33 +788,13 @@ contract CreditBroker is
     require(isValid, "broker/position-below-min-loan");
   }
 
-  ///////////////////////////////////////
-  /////      Reverted functions     /////
-  ///////////////////////////////////////
-
-  function borrow(uint256) external override {
-    revert("creditBroker/only-fixed-term-borrow");
-  }
-
-  function repay(uint256, address) external override {
-    revert("creditBroker/only-fixed-term-repay");
-  }
-
-  function convertDynamicToFixed(uint256, uint256) external override {
-    revert("creditBroker/not-support-convert-dynamic-to-fixed");
-  }
-
-  function refinanceMaturedFixedPositions(address, uint256[] calldata) external override {
-    revert("creditBroker/not-support-refinance");
-  }
-
   function liquidate(
     MarketParams memory,
     address,
     uint256,
     uint256,
     bytes calldata
-  ) external override marketIdSet whenNotPaused nonReentrant {
+  ) external marketIdSet whenNotPaused nonReentrant {
     revert("creditBroker/not-support-liquidation");
   }
 

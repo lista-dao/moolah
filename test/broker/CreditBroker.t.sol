@@ -13,10 +13,9 @@ import { IrmMockZero } from "../../src/moolah/mocks/IrmMock.sol";
 import { ERC20Mock } from "../../src/moolah/mocks/ERC20Mock.sol";
 
 import { CreditBroker } from "../../src/broker/CreditBroker.sol";
-import { BrokerInterestRelayer } from "../../src/broker/BrokerInterestRelayer.sol";
-import { IRateCalculator } from "../../src/broker/interfaces/IRateCalculator.sol";
-import { IBroker, FixedLoanPosition, DynamicLoanPosition, FixedTermAndRate, GraceConfig } from "../../src/broker/interfaces/IBroker.sol";
-import { BrokerMath, RATE_SCALE } from "../../src/broker/libraries/BrokerMath.sol";
+import { CreditBrokerInterestRelayer } from "../../src/broker/CreditBrokerInterestRelayer.sol";
+import { ICreditBroker, FixedLoanPosition, FixedTermAndRate, GraceConfig } from "../../src/broker/interfaces/ICreditBroker.sol";
+import { CreditBrokerMath, RATE_SCALE } from "../../src/broker/libraries/CreditBrokerMath.sol";
 import { MoolahVault } from "../../src/moolah-vault/MoolahVault.sol";
 import { MarketAllocation } from "../../src/moolah-vault/interfaces/IMoolahVault.sol";
 
@@ -40,7 +39,7 @@ contract CreditBrokerTest is Test {
   IMoolah public moolah;
   CreditBroker public broker;
   MoolahVault public vault;
-  BrokerInterestRelayer public relayer;
+  CreditBrokerInterestRelayer public relayer;
 
   // Market commons
   MarketParams public marketParams;
@@ -112,12 +111,12 @@ contract CreditBrokerTest is Test {
     // Vault (only used as supply receiver for interest in tests)
     vault = new MoolahVault(address(moolah), address(USDT));
 
-    // BrokerInterestRelayer
-    BrokerInterestRelayer relayerImpl = new BrokerInterestRelayer();
+    // CreditBrokerInterestRelayer
+    CreditBrokerInterestRelayer relayerImpl = new CreditBrokerInterestRelayer();
     ERC1967Proxy relayerProxy = new ERC1967Proxy(
       address(relayerImpl),
       abi.encodeWithSelector(
-        BrokerInterestRelayer.initialize.selector,
+        CreditBrokerInterestRelayer.initialize.selector,
         ADMIN,
         MANAGER,
         address(moolah),
@@ -125,7 +124,7 @@ contract CreditBrokerTest is Test {
         address(USDT)
       )
     );
-    relayer = BrokerInterestRelayer(address(relayerProxy));
+    relayer = CreditBrokerInterestRelayer(address(relayerProxy));
 
     // Deploy CreditBroker proxy first (used as oracle by the market)
     CreditBroker bImpl = new CreditBroker(address(moolah), address(relayer), address(oracle), address(LISTA));
@@ -234,9 +233,6 @@ contract CreditBrokerTest is Test {
   }
 
   function _totalPrincipalAtBroker(address user) internal view returns (uint256 totalPrincipal) {
-    DynamicLoanPosition memory dyn = broker.userDynamicPosition(user);
-    totalPrincipal += dyn.principal;
-    console.log("[_totalPrincipalAtBroker] dynamic principal: ", dyn.principal);
     FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(user);
     for (uint256 i = 0; i < fixedPositions.length; i++) {
       totalPrincipal += fixedPositions[i].principal - fixedPositions[i].principalRepaid;
@@ -249,26 +245,22 @@ contract CreditBrokerTest is Test {
       console.log(
         "[_totalPrincipalAtBroker] interestRepaid: %s accruedInterest: %s",
         fixedPositions[i].interestRepaid,
-        BrokerMath.getAccruedInterestForFixedPosition(fixedPositions[i])
+        CreditBrokerMath.getAccruedInterestForFixedPosition(fixedPositions[i])
       );
     }
   }
 
   function _totalInterestAtBroker(address user) internal view returns (uint256 totalInterest) {
     FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(user);
-    DynamicLoanPosition memory dynamicPosition = broker.userDynamicPosition(user);
-    //    uint256 currentRate = rateCalc.getRate(address(broker));
     uint256 totalDebt;
-    // [1] total debt from fixed position
+    // total debt from fixed position
     for (uint256 i = 0; i < fixedPositions.length; i++) {
       FixedLoanPosition memory _fixedPos = fixedPositions[i];
       // add principal
       totalDebt += _fixedPos.principal - _fixedPos.principalRepaid;
       // add interest
-      totalDebt += BrokerMath.getAccruedInterestForFixedPosition(_fixedPos) - _fixedPos.interestRepaid;
+      totalDebt += CreditBrokerMath.getAccruedInterestForFixedPosition(_fixedPos) - _fixedPos.interestRepaid;
     }
-    // [2] total debt from dynamic position
-    //    totalDebt += BrokerMath.denormalizeBorrowAmount(dynamicPosition.normalizedDebt, currentRate);
 
     totalInterest = totalDebt - _totalPrincipalAtBroker(user);
   }
@@ -338,7 +330,7 @@ contract CreditBrokerTest is Test {
     test_supplyCollateral();
 
     assertEq(creditToken.balanceOf(borrower), 0);
-    //    assertEq(creditToken.lastSyncedScores(borrower), int(COLLATERAL));
+
     vm.expectRevert("broker/insufficient-credit-balance");
     vm.prank(borrower);
     broker.supplyCollateral(marketParams, COLLATERAL, COLLATERAL, proof);
@@ -575,7 +567,7 @@ contract CreditBrokerTest is Test {
     assertEq(beforePositions.length, 1, "missing fixed position");
     FixedLoanPosition memory beforePos = beforePositions[0];
     uint256 posId = beforePos.posId;
-    uint256 interestDue = BrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.interestRepaid;
+    uint256 interestDue = CreditBrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.interestRepaid;
     assertGt(interestDue, 0, "interest did not accrue");
 
     uint256 principalPortion = 40 ether;
@@ -607,7 +599,7 @@ contract CreditBrokerTest is Test {
     );
 
     // interest should be fully cleared after the partial principal repayment
-    uint256 residualInterest = BrokerMath.getAccruedInterestForFixedPosition(afterPos) - afterPos.interestRepaid;
+    uint256 residualInterest = CreditBrokerMath.getAccruedInterestForFixedPosition(afterPos) - afterPos.interestRepaid;
     assertEq(residualInterest, 0, "interest outstanding after repay");
 
     uint256 sharesBurned = uint256(posBefore.borrowShares) - uint256(posAfter.borrowShares);
@@ -657,7 +649,7 @@ contract CreditBrokerTest is Test {
     uint256 posId = beforePos.posId;
 
     uint256 remainingPrincipal = beforePos.principal - beforePos.principalRepaid;
-    uint256 interestDue = BrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.interestRepaid;
+    uint256 interestDue = CreditBrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.interestRepaid;
     //    uint256 penalty = BrokerMath.getPenaltyForFixedPosition(beforePos, remainingPrincipal);
     uint256 penalty = 0; // no early repayment penalty for credit loan
 
@@ -734,7 +726,7 @@ contract CreditBrokerTest is Test {
     uint256 posId = beforePos.posId;
     assertFalse(broker.isPositionPenalized(borrower, posId), "position should not be penalized");
 
-    uint256 interestDue = BrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.interestRepaid;
+    uint256 interestDue = CreditBrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.interestRepaid;
     assertGt(interestDue, 0, "interest did not accrue");
     assertApproxEqAbs(interestDue, 1.9178 ether, 1e14, "unexpected interest due");
 
@@ -784,7 +776,7 @@ contract CreditBrokerTest is Test {
     uint256 posId = beforePos.posId;
     assertTrue(broker.isPositionPenalized(borrower, posId), "position should be penalized");
 
-    uint256 interestDue = BrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.interestRepaid;
+    uint256 interestDue = CreditBrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.interestRepaid;
     assertApproxEqAbs(interestDue, 1.9178 ether, 1e14, "unexpected interest due");
 
     uint256 debt = beforePos.principal - beforePos.principalRepaid + interestDue;
@@ -929,12 +921,6 @@ contract CreditBrokerTest is Test {
     skip(1 days);
     uint256 p1 = broker.peek(address(creditToken), borrower);
     assertLt(p1, p0, "collateral price did not decrease");
-  }
-
-  function test_refinance_onlyBot_Reverts() public {
-    uint256[] memory posIds = new uint256[](0);
-    vm.expectRevert(); // AccessControlUnauthorizedAccount
-    broker.refinanceMaturedFixedPositions(borrower, posIds);
   }
 
   function test_peekUnsupportedToken_Reverts() public {
@@ -1083,5 +1069,43 @@ contract CreditBrokerTest is Test {
 
     vm.prank(borrower);
     broker.repay(minLoan, posId, borrower);
+  }
+
+  function test_getAccruedInterestForFixedPosition() public {
+    // Setup a fixed term product
+    uint256 termId = 1;
+    uint256 duration = 365 days;
+    uint256 apr = 13e26; // 30%
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr });
+
+    vm.prank(BOT);
+    broker.updateFixedTermAndRate(term, false);
+
+    // mock a fixed position
+    FixedLoanPosition memory position = FixedLoanPosition({
+      posId: 1,
+      principal: 1_000 ether,
+      apr: apr,
+      start: block.timestamp,
+      end: block.timestamp + duration,
+      lastRepaidTime: block.timestamp,
+      interestRepaid: 0,
+      principalRepaid: 0
+    });
+
+    // skip duration
+    skip(365 days);
+    uint256 accruedInterest = CreditBrokerMath.getAccruedInterestForFixedPosition(position);
+    // expected interest = principal * apr * timeElapsed / YEAR_SECONDS / RATE_SCALE
+    uint256 expectedInterest = (1_000 ether * 30) / 100; // 300 ether
+    assertApproxEqAbs(accruedInterest, expectedInterest, 1e15, "accrued interest mismatch");
+
+    // skip a few days after expiry, interest should not increase
+    skip(10 days);
+    assertEq(
+      CreditBrokerMath.getAccruedInterestForFixedPosition(position),
+      accruedInterest,
+      "interest should not increase after term end"
+    );
   }
 }
