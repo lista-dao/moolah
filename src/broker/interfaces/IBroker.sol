@@ -119,6 +119,7 @@ interface IBroker is IBrokerBase {
     uint256 apr
   );
   event GraceConfigUpdated(uint256 newPeriod, uint256 newPenaltyRate);
+  event PaidOffPenalizedPosition(address indexed user, uint256 posId, uint256 paidOffTime);
 
   /// ------------------------------
   ///        View functions

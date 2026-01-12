@@ -87,18 +87,9 @@ contract CreditBroker is
   // --- Grace config ---
   GraceConfig public graceConfig;
 
-  /// @dev record paid off penalized positions
-  mapping(uint256 => ClosedPenalizedPosition) public closedPenalizedPositions;
-
   /// @dev discount rate for repaying interest with LISTA token
   /// @dev 20% discount = 20 * 1e25; means user only need to pay 80% of interest in LISTA token
   uint256 listaDiscountRate;
-
-  struct ClosedPenalizedPosition {
-    address user;
-    uint256 posId;
-    uint256 paidOffTime;
-  }
 
   // ------- Modifiers -------
   modifier onlyMoolah() {
@@ -372,21 +363,6 @@ contract CreditBroker is
   }
 
   /**
-   * @dev Check if a penalized user has paid off a fixed position with penalty
-   * @param user The address of the user
-   * @param posId The ID of the fixed position
-   * @return True if the user has paid off the penalized position, false otherwise
-   * @return paidOffTime The timestamp when the position was paid off
-   */
-  function hasPenalizedUserPaidOff(address user, uint256 posId) external view returns (bool, uint256) {
-    ClosedPenalizedPosition memory paidOffRecord = closedPenalizedPositions[posId];
-    if (paidOffRecord.user == user) {
-      return (true, paidOffRecord.paidOffTime);
-    }
-    return (false, 0);
-  }
-
-  /**
    * @dev Get the dynamic loan position of a user; returns an empty struct
    * @return The DynamicLoanPosition struct
    */
@@ -587,13 +563,9 @@ contract CreditBroker is
     if (position.principalRepaid >= position.principal) {
       // removes it from user's fixed positions
       _removeFixedPositionByPosId(onBehalf, posId);
-      // record paid off penalized position
+      // log paid off penalized position
       if (penalty > 0) {
-        closedPenalizedPositions[posId] = ClosedPenalizedPosition({
-          user: onBehalf,
-          posId: posId,
-          paidOffTime: block.timestamp
-        });
+        emit PaidOffPenalizedPosition(user, posId, block.timestamp);
       }
     } else {
       // update position
