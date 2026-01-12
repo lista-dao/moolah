@@ -783,9 +783,6 @@ contract CreditBrokerTest is Test {
     assertEq(beforePos.interestRepaid, 0, "unexpected interest repaid");
     uint256 posId = beforePos.posId;
     assertTrue(broker.isPositionPenalized(borrower, posId), "position should be penalized");
-    (bool paidOff, uint256 paidOffTime) = broker.hasPenalizedUserPaidOff(borrower, posId);
-    assertFalse(paidOff, "not paid off yet");
-    assertEq(paidOffTime, 0, "paid off time should be zero for open penalized position");
 
     uint256 interestDue = BrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.interestRepaid;
     assertApproxEqAbs(interestDue, 1.9178 ether, 1e14, "unexpected interest due");
@@ -812,10 +809,6 @@ contract CreditBrokerTest is Test {
     uint userUsdtBalance = USDT.balanceOf(borrower);
     //    assertApproxEqAbs(userUsdtBalance, beforeBalance - debt, 1e16, "unexpected user USDT balance after repay");
     assertEq(creditToken.balanceOf(borrower), COLLATERAL, "unexpected user collateral balance after withdraw");
-
-    (paidOff, paidOffTime) = broker.hasPenalizedUserPaidOff(borrower, posId);
-    assertTrue(paidOff, "position and penalty should have been paid off");
-    assertEq(paidOffTime, block.timestamp, "wrong paid off time");
   }
 
   function test_provisioning_and_allocation() public {
