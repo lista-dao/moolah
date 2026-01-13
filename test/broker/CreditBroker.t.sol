@@ -849,6 +849,7 @@ contract CreditBrokerTest is Test {
   }
 
   function test_borrowFixedTermNotFound_Reverts() public {
+    test_supplyCollateral();
     vm.expectRevert(bytes("broker/term-not-found"));
     vm.prank(borrower);
     broker.borrow(100 ether, 999, COLLATERAL, proof);
