@@ -215,11 +215,17 @@ contract CreditBroker is
    *      but user can repay the loan at any time
    * @param amount amount to borrow
    * @param termId The ID of the term
+   * @param score The credit score of the user
+   * @param proof The merkle proof for credit score
    */
   function borrow(
     uint256 amount,
-    uint256 termId
+    uint256 termId,
+    uint256 score,
+    bytes32[] calldata proof
   ) external override marketIdSet whenNotPaused whenBorrowNotPaused nonReentrant {
+    // sync credit score before borrowing
+    ICreditToken(COLLATERAL_TOKEN).syncCreditScore(msg.sender, score, proof);
     _borrow(amount, termId);
   }
 
@@ -300,6 +306,8 @@ contract CreditBroker is
     loanTokenAmount += interestAmount;
 
     _repay(loanTokenAmount, posId, onBehalf);
+
+    emit RepayInterestWithLista(onBehalf, posId, interestAmount, listaAmount, listaPrice);
   }
 
   ///////////////////////////////////////
@@ -389,7 +397,7 @@ contract CreditBroker is
       // add principal
       totalDebt += _fixedPos.principal - _fixedPos.principalRepaid;
       // add interest
-      totalDebt += CreditBrokerMath.getAccruedInterestForFixedPosition(_fixedPos) - _fixedPos.interestRepaid;
+      totalDebt += CreditBrokerMath.getInterestForFixedPosition(_fixedPos) - _fixedPos.interestRepaid;
     }
   }
 
@@ -413,10 +421,6 @@ contract CreditBroker is
     FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
     (interestRepaid, penalty, principalRepaid) = CreditBrokerMath.previewRepayFixedLoanPosition(position, amount);
   }
-
-  ///////////////////////////////////////
-  /////        Bot functions        /////
-  ///////////////////////////////////////
 
   ///////////////////////////////////////
   /////      Internal functions     /////
@@ -479,6 +483,7 @@ contract CreditBroker is
     // update state for user's fixed positions
     fixedLoanPositions[user].push(
       FixedLoanPosition({
+        termType: term.termType,
         posId: fixedPosUuid,
         principal: amount,
         apr: term.apr,
@@ -510,12 +515,10 @@ contract CreditBroker is
 
     // remaining principal before repayment
     uint256 remainingPrincipal = position.principal - position.principalRepaid;
-
-    // get outstanding accrued interest
-    uint256 accruedInterest = _getAccruedInterestForFixedPosition(position) - position.interestRepaid;
+    uint256 remainingInterest = CreditBrokerMath.getInterestForFixedPosition(position) - position.interestRepaid;
 
     // initialize repay amounts
-    uint256 repayInterestAmt = amount < accruedInterest ? amount : accruedInterest;
+    uint256 repayInterestAmt = amount < remainingInterest ? amount : remainingInterest;
     uint256 repayPrincipalAmt = amount - repayInterestAmt;
 
     // repay interest first, it might be zero if user just repaid before
@@ -536,7 +539,7 @@ contract CreditBroker is
       penalty = CreditBrokerMath.getPenaltyForCreditPosition(
         repayPrincipalAmt,
         remainingPrincipal,
-        accruedInterest,
+        remainingInterest,
         position.end,
         graceConfig
       );
@@ -712,14 +715,6 @@ contract CreditBroker is
       }
     }
     revert("broker/position-not-found");
-  }
-
-  /**
-   * @dev Get the interest for a fixed loan position
-   * @param position The fixed loan position to get the interest for
-   */
-  function _getAccruedInterestForFixedPosition(FixedLoanPosition memory position) internal view returns (uint256) {
-    return CreditBrokerMath.getAccruedInterestForFixedPosition(position);
   }
 
   /**

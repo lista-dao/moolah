@@ -40,9 +40,6 @@ contract CreditBrokerInterestRelayer is
   /// @dev vault token
   address public token;
 
-  /// @dev the amount of loan tokens lent to brokers
-  uint256 public loanDebt;
-
   // ------- Modifiers -------
   modifier onlyBroker() {
     require(brokers.contains(msg.sender), "relayer/not-broker");
@@ -126,8 +123,9 @@ contract CreditBrokerInterestRelayer is
    * @param amount The amount of loan to transfer
    */
   function transferLoan(uint256 amount) external override nonReentrant onlyBroker {
-    loanDebt += amount;
     IERC20(token).safeTransfer(msg.sender, amount);
+
+    emit LoanTransferred(msg.sender, amount);
   }
 
   /**

@@ -8,6 +8,7 @@ import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 import { MerkleProof } from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
+/// Collateral token
 contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerableUpgradeable, PausableUpgradeable {
   ///@dev Merkle tree root for credit score verification
   bytes32 public merkleRoot;
@@ -25,7 +26,7 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
 
   /// @dev The accounted amount for each user: balance + deposits(open positions)
   /// @notice if userAmounts[user] > creditScores[user].score, which means user holds more tokens than their credit score allows, they have bad debt
-  mapping(address => uint256) public userAmounts;
+  mapping(address => uint256) public userAmounts; // deposits, portfolio value
 
   /// @dev the next merkle root to be set
   bytes32 public pendingMerkleRoot;
@@ -136,15 +137,15 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
       // verify merkle proof only if the version id is different
       bytes32 leaf = keccak256(abi.encode(block.chainid, address(this), _user, _score, versionId));
       require(MerkleProof.verify(_proof, merkleRoot, leaf), "Invalid proof");
+
+      // update user's credit score and version id
+      userScore.score = _score;
+      userScore.id = versionId;
     }
 
     _syncCreditScore(_user, _score, userScore.score);
 
     emit ScoreSynced(_user, _score, userScore.score, versionId, userScore.id);
-
-    // update user's credit score and version id
-    userScore.score = _score;
-    userScore.id = versionId;
   }
 
   /**
@@ -156,28 +157,16 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
   function _syncCreditScore(address _user, uint256 _newScore, uint256 _lastScore) private {
     uint256 debt = debtOf(_user);
 
-    if (_newScore > _lastScore) {
-      // 1. score increase
-      if (debt > 0 && _newScore >= userAmounts[_user]) {
-        // fully cover bad debt
-        _mint(_user, _newScore - userAmounts[_user]);
-        userAmounts[_user] = _newScore;
-      } else if (debt > 0) {
-        // partially cover bad debt
-        uint256 actualBurned = _safeBurn(_user, debt);
-        userAmounts[_user] -= actualBurned;
-      } else {
-        // no bad debt, just mint the difference
-        _mint(_user, _newScore - _lastScore);
-        userAmounts[_user] += (_newScore - _lastScore);
-      }
-    } else if (_newScore < _lastScore) {
-      // 2. score decrease
-      uint256 decreaseAmount = _lastScore - _newScore;
-      uint256 actualBurned = _safeBurn(_user, decreaseAmount);
+    if (_newScore > userAmounts[_user]) {
+      uint256 mintAmount = _newScore - userAmounts[_user];
+      _mint(_user, mintAmount);
+      userAmounts[_user] += mintAmount;
+    } else if (_newScore < userAmounts[_user]) {
+      uint256 burnAmount = userAmounts[_user] - _newScore;
+      uint256 actualBurned = _safeBurn(_user, burnAmount);
       userAmounts[_user] -= actualBurned;
     } else {
-      // 3. no score change; check balance against bad debt
+      // equal, check if can burn
       if (debt > 0 && balanceOf(_user) > 0) {
         uint256 actualBurned = _safeBurn(_user, debt);
         userAmounts[_user] -= actualBurned;

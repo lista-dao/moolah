@@ -21,4 +21,5 @@ interface ICreditBrokerInterestRelayer {
   event RemovedBroker(address indexed broker);
   event InterestAccumulated(address indexed broker, uint256 amount);
   event SuppliedToMoolahVault(uint256 amount);
+  event LoanTransferred(address indexed broker, uint256 amount);
 }
