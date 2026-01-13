@@ -3,13 +3,20 @@ pragma solidity 0.8.28;
 
 import { Id, MarketParams, IMoolah } from "moolah/interfaces/IMoolah.sol";
 
+enum FixedTermType {
+  ACCRUE_INTEREST, //  // 0: interest is accrued over time, user pays interest based on time elapsed
+  UPFRONT_INTEREST // 1: interest is paid upfront, user pays full interest at the beginning
+}
+
 struct FixedTermAndRate {
   uint256 termId;
   uint256 duration;
   uint256 apr;
+  FixedTermType termType;
 }
 
 struct FixedLoanPosition {
+  FixedTermType termType;
   uint256 posId;
   uint256 principal;
   uint256 apr;
@@ -80,6 +87,13 @@ interface ICreditBroker is ICreditBrokerBase {
   event AddedLiquidationWhitelist(address indexed account);
   event GraceConfigUpdated(uint256 newPeriod, uint256 newPenaltyRate);
   event PaidOffPenalizedPosition(address indexed user, uint256 posId, uint256 paidOffTime);
+  event RepayInterestWithLista(
+    address indexed user,
+    uint256 posId,
+    uint256 interestAmount,
+    uint256 listaAmount,
+    uint256 listaPrice
+  );
 
   /// ------------------------------
   ///        View functions
@@ -130,7 +144,9 @@ interface ICreditBroker is ICreditBrokerBase {
   /// @dev borrow with a fixed rate and term
   /// @param amount The amount to borrow
   /// @param termId The ID of the fixed term to use
-  function borrow(uint256 amount, uint256 termId) external;
+  /// @param score The credit score of the user
+  /// @param proof The merkle proof of the credit score
+  function borrow(uint256 amount, uint256 termId, uint256 score, bytes32[] calldata proof) external;
 
   /// @dev repay a loan with a fixed rate and term
   /// @param amount The amount to repay

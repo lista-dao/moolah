@@ -7,7 +7,7 @@ import { UtilsLib } from "../../moolah/libraries/UtilsLib.sol";
 import { MathLib, WAD } from "../../moolah/libraries/MathLib.sol";
 import { SharesMathLib } from "../../moolah/libraries/SharesMathLib.sol";
 import { Id, IMoolah, MarketParams, Market, Position } from "../../moolah/interfaces/IMoolah.sol";
-import { ICreditBroker, FixedLoanPosition, GraceConfig } from "../interfaces/ICreditBroker.sol";
+import { ICreditBroker, FixedLoanPosition, GraceConfig, FixedTermType } from "../interfaces/ICreditBroker.sol";
 import { IOracle } from "../../moolah/interfaces/IOracle.sol";
 import { PriceLib } from "../../moolah/libraries/PriceLib.sol";
 
@@ -136,6 +136,8 @@ library CreditBrokerMath {
    * @param position The fixed loan position to get the interest for
    */
   function getAccruedInterestForFixedPosition(FixedLoanPosition memory position) public view returns (uint256) {
+    require(position.termType == FixedTermType.ACCRUE_INTEREST, "broker/not-accrue-interest");
+
     uint256 cap = block.timestamp > position.end ? position.end : block.timestamp;
     uint256 start = position.lastRepaidTime > position.end ? position.end : position.lastRepaidTime;
     // time elapsed since last repayment
@@ -149,6 +151,41 @@ library CreditBrokerMath {
         RATE_SCALE,
         Math.Rounding.Ceil
       );
+  }
+
+  /**
+   * @dev Get the total interest for a fixed loan position, for upfront interest repayment
+   * @param position The fixed loan position to get the total interest for
+   */
+  function getTotalInterestForFixedPosition(FixedLoanPosition memory position) public view returns (uint256) {
+    require(position.termType == FixedTermType.UPFRONT_INTEREST, "broker/not-upfront-interest");
+
+    // total interest = principal * (APR - 1) * term
+    uint256 term = position.end - position.start;
+    uint256 totalInterest = Math.mulDiv(
+      position.principal,
+      (position.apr - RATE_SCALE) * term,
+      RATE_SCALE,
+      Math.Rounding.Ceil
+    );
+    return totalInterest;
+  }
+
+  /**
+   * @dev Get the interest for a fixed loan position; interest can be accrued or upfront, according to term type
+   * @param position The fixed loan position to get the interest for
+   */
+  function getInterestForFixedPosition(FixedLoanPosition memory position) public view returns (uint256) {
+    FixedTermType termType = position.termType;
+
+    // if accrued interest, return accrued interest
+    if (termType == FixedTermType.ACCRUE_INTEREST) {
+      return getAccruedInterestForFixedPosition(position);
+    } else if (termType == FixedTermType.UPFRONT_INTEREST) {
+      return getTotalInterestForFixedPosition(position);
+    } else {
+      revert("broker/invalid-fixed-term-type");
+    }
   }
 
   /**
@@ -186,7 +223,7 @@ library CreditBrokerMath {
   function getPenaltyForCreditPosition(
     uint256 repayAmt,
     uint256 remainingPrincipal,
-    uint256 accruedInterest,
+    uint256 accruedInterest, // FE method, know penalty on a position before repay
     uint256 endTime,
     GraceConfig memory graceConfig
   ) public view returns (uint256) {
@@ -219,7 +256,7 @@ library CreditBrokerMath {
     uint256 discountRate
   ) public view returns (uint256) {
     // get outstanding accrued interest
-    uint256 accruedInterest = _getAccruedInterestForFixedPosition(position) - position.interestRepaid;
+    uint256 accruedInterest = getInterestForFixedPosition(position) - position.interestRepaid;
 
     uint256 interestAfterDiscount = Math.mulDiv(
       accruedInterest,
