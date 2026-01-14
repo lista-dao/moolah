@@ -254,6 +254,9 @@ library CreditBrokerMath {
 
   /**
    * @dev Calculate the max LISTA amount accpetable for repaying interest
+   * @param position The fixed loan position
+   * @param listaPrice The current LISTA price in loan token (8 decimal places)
+   * @param discountRate The discount rate for LISTA repayment (scaled by RATE_SCALE)
    */
   function getMaxListaForInterestRepay(
     FixedLoanPosition memory position,
@@ -271,11 +274,14 @@ library CreditBrokerMath {
     );
 
     // convert interest amount to LISTA amount
-    return Math.mulDiv(interestAfterDiscount, RATE_SCALE, listaPrice, Math.Rounding.Ceil);
+    return Math.mulDiv(interestAfterDiscount, 1e8, listaPrice, Math.Rounding.Ceil);
   }
 
   /**
    * @dev Calculate loan token amount equivalent to given LISTA amount
+   * @param listaAmount The LISTA amount
+   * @param listaPrice The current LISTA price in loan token (8 decimal places)
+   * @param discountRate The discount rate for LISTA repayment (scaled by RATE_SCALE)
    */
   function getInterestAmountFromLista(
     uint256 listaAmount,
@@ -283,8 +289,8 @@ library CreditBrokerMath {
     uint256 discountRate
   ) public view returns (uint256) {
     // convert LISTA amount to loan token amount with discount
-    uint256 loanTokenAmount = Math.mulDiv(listaAmount, listaPrice, RATE_SCALE, Math.Rounding.Ceil);
-    return Math.mulDiv(loanTokenAmount, RATE_SCALE, RATE_SCALE - discountRate, Math.Rounding.Ceil);
+    uint256 loanTokenAmount = Math.mulDiv(listaAmount, listaPrice, 1e8, Math.Rounding.Floor);
+    return Math.mulDiv(loanTokenAmount, RATE_SCALE, RATE_SCALE - discountRate, Math.Rounding.Floor);
   }
 
   /**

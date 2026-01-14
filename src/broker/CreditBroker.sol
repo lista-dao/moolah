@@ -245,6 +245,15 @@ contract CreditBroker is
     _withdrawCollateral(marketParams, amount, score, proof);
   }
 
+  /**
+   * @dev repay a fixed loan position and withdraw collateral(credit token) from Moolah
+   * @param marketParams The market parameters
+   * @param collateralAmount The amount of credit token to withdraw
+   * @param repayAmount The amount to repay
+   * @param posId The ID of the fixed position to repay
+   * @param score The credit score of the user
+   * @param proof The merkle proof for credit score sync
+   */
   function repayAndWithdraw(
     MarketParams memory marketParams,
     uint256 collateralAmount,
@@ -442,10 +451,6 @@ contract CreditBroker is
 
     // sync msg.sender's credit score with creditToken balance before supplying collateral
     ICreditToken(COLLATERAL_TOKEN).syncCreditScore(msg.sender, score, proof);
-
-    // ensure sufficient credit balance
-    uint256 userCreditBalance = IERC20(COLLATERAL_TOKEN).balanceOf(msg.sender);
-    require(userCreditBalance >= amount, "broker/insufficient-credit-balance");
 
     // transfer collateral from msg.sender to broker
     IERC20(COLLATERAL_TOKEN).safeTransferFrom(msg.sender, address(this), amount);

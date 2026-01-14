@@ -134,7 +134,7 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
     CreditScore storage userScore = creditScores[_user];
 
     if (userScore.id != versionId || userScore.score != _score) {
-      // verify merkle proof only if the version id is different
+      // verify merkle proof if score or version id changes
       bytes32 leaf = keccak256(abi.encode(block.chainid, address(this), _user, _score, versionId));
       require(MerkleProof.verify(_proof, merkleRoot, leaf), "Invalid proof");
 
