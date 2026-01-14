@@ -420,7 +420,11 @@ contract CreditBroker is
     require(amount > 0, "broker/zero-amount");
     require(user != address(0), "broker/zero-address");
     FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
-    (interestRepaid, penalty, principalRepaid) = CreditBrokerMath.previewRepayFixedLoanPosition(position, amount);
+    (interestRepaid, penalty, principalRepaid) = CreditBrokerMath.previewRepayFixedLoanPosition(
+      position,
+      amount,
+      graceConfig
+    );
   }
 
   ///////////////////////////////////////
@@ -725,18 +729,6 @@ contract CreditBroker is
       }
     }
     revert("broker/position-not-found");
-  }
-
-  /**
-   * @dev Get the penalty for a fixed loan position
-   * @param position The fixed loan position to get the penalty for
-   * @param repayAmt The actual repay amount (repay amount excluded accrued interest)
-   */
-  function _getPenaltyForFixedPosition(
-    FixedLoanPosition memory position,
-    uint256 repayAmt
-  ) internal view returns (uint256 penalty) {
-    return CreditBrokerMath.getPenaltyForFixedPosition(position, repayAmt);
   }
 
   /**

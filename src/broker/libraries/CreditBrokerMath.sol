@@ -301,30 +301,36 @@ library CreditBrokerMath {
    * @dev Preview the repayment of a fixed loan position
    * @param position The fixed loan position to preview the repayment for
    * @param amount The amount to repay
+   * @param graceConfig The grace period configuration
    * @return interestRepaid The amount of interest that will be repaid
-   * @return penalty The amount of penalty that will be incurred
+   * @return penalty The amount of penalty that will be incurred due to grace period end
    * @return principalRepaid The amount of principal that will be repaid
    */
   function previewRepayFixedLoanPosition(
     FixedLoanPosition memory position,
-    uint256 amount
+    uint256 amount,
+    GraceConfig memory graceConfig
   ) public view returns (uint256 interestRepaid, uint256 penalty, uint256 principalRepaid) {
     // remaining principal before repayment
     uint256 remainingPrincipal = position.principal - position.principalRepaid;
     // get outstanding accrued interest
-    uint256 accruedInterest = getInterestForFixedPosition(position) - position.interestRepaid;
+    uint256 remainingInterest = getInterestForFixedPosition(position) - position.interestRepaid;
 
     // initialize repay amounts
-    interestRepaid = amount < accruedInterest ? amount : accruedInterest;
+    interestRepaid = amount < remainingInterest ? amount : remainingInterest;
     uint256 repayPrincipalAmt = amount - interestRepaid;
 
     // then repay principal if there is any amount left
     if (repayPrincipalAmt > 0) {
       // ----- penalty
-      penalty = getPenaltyForFixedPosition(
-        position,
-        repayPrincipalAmt > remainingPrincipal ? remainingPrincipal : repayPrincipalAmt
+      penalty = getPenaltyForCreditPosition(
+        repayPrincipalAmt,
+        remainingPrincipal,
+        remainingInterest,
+        position.end,
+        graceConfig
       );
+
       repayPrincipalAmt -= penalty;
 
       // ----- principal

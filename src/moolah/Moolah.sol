@@ -506,8 +506,6 @@ contract Moolah is
       require(_isSenderAuthorized(onBehalf), ErrorsLib.UNAUTHORIZED);
     }
 
-    // USDT - credit token
-
     _accrueInterest(marketParams, id);
 
     position[id][onBehalf].collateral -= assets.toUint128();
