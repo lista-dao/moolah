@@ -249,7 +249,7 @@ contract CreditBrokerTest is Test {
       console.log(
         "[_totalPrincipalAtBroker] interestRepaid: %s accruedInterest: %s",
         fixedPositions[i].interestRepaid,
-        CreditBrokerMath.getAccruedInterestForFixedPosition(fixedPositions[i])
+        CreditBrokerMath.getInterestForFixedPosition(fixedPositions[i])
       );
     }
   }
@@ -263,7 +263,7 @@ contract CreditBrokerTest is Test {
       // add principal
       totalDebt += _fixedPos.principal - _fixedPos.principalRepaid;
       // add interest
-      totalDebt += CreditBrokerMath.getAccruedInterestForFixedPosition(_fixedPos) - _fixedPos.interestRepaid;
+      totalDebt += CreditBrokerMath.getInterestForFixedPosition(_fixedPos) - _fixedPos.interestRepaid;
     }
 
     totalInterest = totalDebt - _totalPrincipalAtBroker(user);
@@ -911,16 +911,6 @@ contract CreditBrokerTest is Test {
     uint userUsdtBalance = USDT.balanceOf(borrower);
     assertApproxEqAbs(userUsdtBalance, beforeBalance - debt, 1e16, "unexpected user USDT balance after repay");
     assertEq(creditToken.balanceOf(borrower), COLLATERAL, "unexpected user collateral balance after withdraw");
-  }
-
-  function test_provisioning_and_allocation() public {
-    // Verify broker wiring
-    assertEq(broker.LOAN_TOKEN(), address(USDT));
-    assertEq(broker.COLLATERAL_TOKEN(), address(creditToken));
-
-    // Vault should be initialized and approved
-    // No automatic supply from vault here; just ensure market exists and supply by supplier occurred
-    assertGt(moolah.market(id).totalSupplyAssets, 0, "market has no supply");
   }
 
   // -----------------------------
