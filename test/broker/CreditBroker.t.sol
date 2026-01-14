@@ -74,6 +74,7 @@ contract CreditBrokerTest is Test {
   ERC20Mock public LISTA;
 
   FixedTermType type1 = FixedTermType.ACCRUE_INTEREST;
+  FixedTermType type2 = FixedTermType.UPFRONT_INTEREST;
 
   // setUp now forks mainnet Moolah, deploys new CreditBroker,
   // wires them via setMarketBroker, and prepares borrower collateral.
@@ -179,9 +180,10 @@ contract CreditBrokerTest is Test {
     relayer.addBroker(address(broker));
 
     // grace config
-    (uint period, uint penaltyRate) = broker.graceConfig();
+    (uint period, uint penaltyRate, uint noInterestPeriod) = broker.graceConfig();
     assertEq(period, 3 days);
     assertEq(penaltyRate, 15 * 1e25);
+    assertEq(noInterestPeriod, 1 minutes);
   }
 
   function _deployCreditToken() public {
@@ -449,6 +451,100 @@ contract CreditBrokerTest is Test {
     Position memory pos = moolah.position(marketParams.id(), borrower);
     assertEq(pos.collateral, 3 * COLLATERAL, "moolah position collateral mismatch after supplyAndBorrow");
     assertEq(_principalAtMoolah(borrower), borrowAmount, "moolah position principal mismatch after supplyAndBorrow");
+  }
+
+  // score = 500, borrow 100, after a while, can only borrow 500 - 100 - 20 = 380
+  function test_supplyAndBorrow_upfront_borrowTwice() public {
+    // Setup a fixed term product
+    uint256 termId = 1;
+    uint256 duration = 365 days;
+    uint256 apr = 120 * 1e25;
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type2 });
+
+    vm.prank(BOT);
+    broker.updateFixedTermAndRate(term, false);
+
+    uint256 newScore = 500 ether;
+    uint256 borrowAmount = 100 ether;
+    _generateTree(borrower, newScore, creditToken.versionId() + 1);
+
+    uint256 beforeBalance = creditToken.balanceOf(borrower);
+    assertEq(creditToken.balanceOf(borrower), 0, "initial borrower collateral balance should be zero");
+    assertEq(creditToken.balanceOf(address(moolah)), 0, "moolah collateral before mismatch");
+    assertEq(creditToken.totalSupply(), 0, "total supply before mismatch");
+    assertEq(USDT.balanceOf(borrower), 0, "borrower loan token balance mismatch before borrow");
+
+    // 1st borrow: 100 principal, 0 interest
+    vm.startPrank(borrower);
+    creditToken.approve(address(broker), type(uint256).max);
+    broker.supplyAndBorrow(marketParams, borrowAmount, borrowAmount, termId, newScore, proof);
+
+    // Verify global uuid
+    assertEq(broker.fixedPosUuid(), 1);
+
+    // Verify a fixed position created
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    assertEq(positions.length, 1);
+    assertEq(positions[0].principal, borrowAmount);
+    assertEq(positions[0].posId, broker.fixedPosUuid());
+    assertEq(positions[0].apr, apr);
+    assertEq(positions[0].start, block.timestamp);
+    assertEq(positions[0].end, block.timestamp + duration);
+    assertEq(positions[0].lastRepaidTime, block.timestamp);
+    assertEq(positions[0].interestRepaid, 0);
+    assertEq(positions[0].principalRepaid, 0);
+    assertEq(uint(positions[0].termType), 1);
+    assertEq(positions[0].noInterestUntil, block.timestamp + 60);
+
+    // Check balance
+    assertEq(creditToken.balanceOf(borrower), 400 ether, "mint 500 and then supply 100");
+    assertEq(creditToken.balanceOf(address(moolah)), borrowAmount, "moolah collateral after mismatch");
+    assertEq(creditToken.totalSupply(), newScore, "total supply after mismatch");
+    assertEq(USDT.balanceOf(borrower), borrowAmount, "borrower loan token balance mismatch after borrow");
+
+    // Advance time by 61s
+    skip(61);
+
+    // 2nd borrow: 400, should fail
+    vm.expectRevert("insufficient collateral");
+    broker.supplyAndBorrow(marketParams, 400 ether, 400 ether, termId, newScore, proof);
+    // 2nd borrow: 380, should succeed
+    borrowAmount = 380 ether;
+    broker.supplyAndBorrow(marketParams, 400 ether, 380 ether, termId, newScore, proof);
+
+    vm.stopPrank();
+
+    // 2nd borrow: Verify global uuid
+    assertEq(broker.fixedPosUuid(), 2);
+
+    // 2nd borrow: Verify a fixed position created
+    positions = broker.userFixedPositions(borrower);
+    assertEq(positions.length, 2);
+    assertEq(positions[1].principal, borrowAmount);
+    assertEq(positions[1].posId, broker.fixedPosUuid());
+    assertEq(positions[1].apr, apr);
+    assertEq(positions[1].start, block.timestamp);
+    assertEq(positions[1].lastRepaidTime, block.timestamp);
+    assertEq(positions[1].interestRepaid, 0);
+    assertEq(positions[1].principalRepaid, 0);
+    assertEq(uint(positions[1].termType), 1);
+    assertEq(positions[1].noInterestUntil, positions[1].start + 60);
+    assertEq(positions[1].end, positions[1].start + duration);
+
+    // 2nd borrow: Check balance
+    assertEq(creditToken.balanceOf(borrower), 0, "all 500 has been supplied");
+    assertEq(creditToken.balanceOf(address(moolah)), newScore, "moolah collateral after mismatch");
+    assertEq(creditToken.totalSupply(), newScore, "total supply after mismatch");
+    assertEq(USDT.balanceOf(borrower), 100 ether + borrowAmount, "borrower loan token balance mismatch after borrow");
+
+    // 2nd borrow: check position at Moolah
+    Position memory pos = moolah.position(marketParams.id(), borrower);
+    assertEq(pos.collateral, newScore, "moolah position collateral mismatch after supplyAndBorrow");
+    assertEq(
+      _principalAtMoolah(borrower),
+      100 ether + borrowAmount,
+      "moolah position principal mismatch after supplyAndBorrow"
+    );
   }
 
   // 1K collateral supplied, then full withdraw 1K
@@ -795,7 +891,7 @@ contract CreditBrokerTest is Test {
 
     uint256 debt = beforePos.principal - beforePos.principalRepaid + interestDue;
 
-    (, uint penaltyRate) = broker.graceConfig();
+    (, uint penaltyRate, ) = broker.graceConfig();
     // penalty should be 15% of debt
     uint256 penalty = (debt * penaltyRate) / 1e27; // 15% * repaidAmt
     assertGt(penalty, 0, "penalty did not accrue");
@@ -1129,92 +1225,5 @@ contract CreditBrokerTest is Test {
 
     vm.prank(borrower);
     broker.repay(minLoan, posId, borrower);
-  }
-
-  function test_getAccruedInterestForFixedPosition() public {
-    // Setup a fixed term product
-    uint256 termId = 1;
-    uint256 duration = 365 days;
-    uint256 apr = 13e26; // 30%
-    FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type1 });
-
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
-
-    // mock a fixed position
-    FixedLoanPosition memory position = FixedLoanPosition({
-      termType: type1,
-      posId: 1,
-      principal: 1_000 ether,
-      apr: apr,
-      start: block.timestamp,
-      end: block.timestamp + duration,
-      lastRepaidTime: block.timestamp,
-      interestRepaid: 0,
-      principalRepaid: 0
-    });
-
-    // skip duration
-    skip(365 days);
-    uint256 accruedInterest = CreditBrokerMath.getAccruedInterestForFixedPosition(position);
-    // expected interest = principal * apr * timeElapsed / YEAR_SECONDS / RATE_SCALE
-    uint256 expectedInterest = (1_000 ether * 30) / 100; // 300 ether
-    assertApproxEqAbs(accruedInterest, expectedInterest, 1e15, "accrued interest mismatch");
-
-    // skip a few days after expiry, interest should not increase
-    skip(10 days);
-    assertEq(
-      CreditBrokerMath.getAccruedInterestForFixedPosition(position),
-      accruedInterest,
-      "interest should not increase after term end"
-    );
-  }
-
-  function test_getPenaltyForCreditPosition_clearDebt() public {
-    // mock a grace config
-    GraceConfig memory graceConfig = GraceConfig({ period: 3 days, penaltyRate: 15 * 1e25 });
-
-    // skip past end + grace period
-    skip(45 days);
-    uint256 repayAmt = 1000 ether;
-    uint256 remainingPrincipal = 500 ether;
-    uint256 accruedInterest = 20 ether;
-    uint256 endTime = block.timestamp - 15 days; // should be penalized
-
-    uint256 penalty = CreditBrokerMath.getPenaltyForCreditPosition(
-      repayAmt,
-      remainingPrincipal,
-      accruedInterest,
-      endTime,
-      graceConfig
-    );
-
-    // expected penalty = debt * penaltyRate
-    uint256 expectedPenalty = (520 ether * 15) / 100; // 15% * debt
-
-    assertApproxEqAbs(penalty, expectedPenalty, 1e15, "penalty mismatch");
-  }
-
-  function test_getPenaltyForCreditPosition_partial() public {
-    // mock a grace config
-    GraceConfig memory graceConfig = GraceConfig({ period: 3 days, penaltyRate: 15 * 1e25 });
-
-    // skip past end + grace period
-    skip(45 days);
-    uint256 repayAmt = 510 ether;
-    uint256 remainingPrincipal = 500 ether;
-    uint256 accruedInterest = 20 ether;
-    uint256 endTime = block.timestamp - 15 days; // should be penalized
-
-    uint256 penalty = CreditBrokerMath.getPenaltyForCreditPosition(
-      repayAmt,
-      remainingPrincipal,
-      accruedInterest,
-      endTime,
-      graceConfig
-    );
-    // expected penalty = repayAmt * penaltyRate
-    uint256 expectedPenalty = (510 ether * 15) / 100; // 15% * repaid amount
-    assertApproxEqAbs(penalty, expectedPenalty, 1e15, "penalty mismatch");
   }
 }

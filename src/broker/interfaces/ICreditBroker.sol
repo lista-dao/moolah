@@ -4,7 +4,7 @@ pragma solidity 0.8.28;
 import { Id, MarketParams, IMoolah } from "moolah/interfaces/IMoolah.sol";
 
 enum FixedTermType {
-  ACCRUE_INTEREST, //  // 0: interest is accrued over time, user pays interest based on time elapsed
+  ACCRUE_INTEREST, // 0: interest is accrued over time, user pays interest based on time elapsed
   UPFRONT_INTEREST // 1: interest is paid upfront, user pays full interest at the beginning
 }
 
@@ -25,6 +25,7 @@ struct FixedLoanPosition {
   uint256 lastRepaidTime; // the last time interest was repaid, initialized to `start`, set to now when partial of principal is repaid
   uint256 interestRepaid; // the interest repaid since `lastRepaidTime`, reset to zero when partial of principal is repaid
   uint256 principalRepaid; // the principal repaid
+  uint256 noInterestUntil; // only for upfront interest term type, the time until which no interest is charged
 }
 
 struct GraceConfig {
@@ -34,6 +35,10 @@ struct GraceConfig {
   /// @dev penalty rate for delayed repayment after grace period; e.g., 15% = 0.15 * RATE_SCALE
   /// @dev e.g., if penaltyRate is 15%, user should pay additional 15% * userDebt as penalty after grace period
   uint256 penaltyRate;
+  /// @dev no interest period in seconds, small value; 1 minute by default
+  /// @dev if users repay within this period after borrowing, no interest will be charged
+  /// @dev used for upfront interest term type only
+  uint256 noInterestPeriod;
 }
 
 /// @dev Credit Broker Base interface
@@ -85,7 +90,7 @@ interface ICreditBroker is ICreditBrokerBase {
   event MarketIdSet(Id marketId);
   event BorrowPaused(bool paused);
   event AddedLiquidationWhitelist(address indexed account);
-  event GraceConfigUpdated(uint256 newPeriod, uint256 newPenaltyRate);
+  event GraceConfigUpdated(uint256 newPeriod, uint256 newPenaltyRate, uint256 newNoInterestPeriod);
   event PaidOffPenalizedPosition(address indexed user, uint256 posId, uint256 paidOffTime);
   event RepayInterestWithLista(
     address indexed user,
