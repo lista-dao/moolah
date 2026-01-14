@@ -133,7 +133,7 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
 
     CreditScore storage userScore = creditScores[_user];
 
-    if (userScore.id != versionId) {
+    if (userScore.id != versionId || userScore.score != _score) {
       // verify merkle proof only if the version id is different
       bytes32 leaf = keccak256(abi.encode(block.chainid, address(this), _user, _score, versionId));
       require(MerkleProof.verify(_proof, merkleRoot, leaf), "Invalid proof");
@@ -143,7 +143,7 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
       userScore.id = versionId;
     }
 
-    _syncCreditScore(_user, _score, userScore.score);
+    _syncCreditScore(_user, _score);
 
     emit ScoreSynced(_user, _score, userScore.score, versionId, userScore.id);
   }
@@ -152,9 +152,8 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
    * @dev Internal function to sync credit score and mint/burn tokens accordingly.
    * @param _user The address of the user.
    * @param _newScore The new credit score of the user.
-   * @param _lastScore The last credit score of the user.
    */
-  function _syncCreditScore(address _user, uint256 _newScore, uint256 _lastScore) private {
+  function _syncCreditScore(address _user, uint256 _newScore) private {
     uint256 debt = debtOf(_user);
 
     if (_newScore > userAmounts[_user]) {
