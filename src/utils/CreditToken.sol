@@ -44,7 +44,6 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
   bytes32 public constant TRANSFERER = keccak256("TRANSFERER");
 
   // ------- Events ------- //
-  event SetBroker(address indexed _broker, bool _status);
   event ScoreSynced(
     address indexed _user,
     uint256 _newScore,
@@ -54,6 +53,7 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
   );
   event SetPendingMerkleRoot(bytes32 indexed _pendingMerkleRoot, uint256 _setTime);
   event AcceptMerkleRoot(bytes32 indexed _merkleRoot, uint256 _acceptTime, uint256 _versionId);
+  event WaitingPeriodUpdated(uint256 _newWaitingPeriod);
 
   constructor() {
     _disableInitializers();
@@ -79,7 +79,7 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
     _grantRole(BOT, _bot);
 
     lastSetTime = type(uint256).max;
-    waitingPeriod = 1 days;
+    waitingPeriod = 6 hours;
 
     for (uint256 i = 0; i < _transferers.length; i++) {
       _grantRole(TRANSFERER, _transferers[i]);
@@ -235,6 +235,15 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
     lastSetTime = type(uint256).max;
 
     emit SetPendingMerkleRoot(bytes32(0), lastSetTime);
+  }
+
+  /// @dev Change waiting period.
+  /// @param _waitingPeriod Waiting period to be set
+  function changeWaitingPeriod(uint256 _waitingPeriod) external onlyRole(MANAGER) whenNotPaused {
+    require(_waitingPeriod >= 6 hours && _waitingPeriod != waitingPeriod, "Invalid waiting period");
+    waitingPeriod = _waitingPeriod;
+
+    emit WaitingPeriodUpdated(_waitingPeriod);
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}

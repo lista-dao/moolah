@@ -31,7 +31,7 @@ library CreditBrokerMath {
     Id marketId = broker.MARKET_ID();
     // loan token's price never changes
     if (token == loanToken) {
-      return ONE_USD; // lisUSD or USDT or U price
+      return ONE_USD; // U price
     } else if (token == collateralToken) {
       /*
         Broker accrues interest, so collateral price is adjusted downward,
@@ -115,7 +115,7 @@ library CreditBrokerMath {
       // add principal
       totalDebt += _fixedPos.principal - _fixedPos.principalRepaid;
       // add interest
-      totalDebt += getAccruedInterestForFixedPosition(_fixedPos) - _fixedPos.interestRepaid;
+      totalDebt += getInterestForFixedPosition(_fixedPos) - _fixedPos.interestRepaid;
     }
   }
 
@@ -157,14 +157,19 @@ library CreditBrokerMath {
    * @dev Get the total interest for a fixed loan position, for upfront interest repayment
    * @param position The fixed loan position to get the total interest for
    */
-  function getTotalInterestForFixedPosition(FixedLoanPosition memory position) public view returns (uint256) {
+  function getUpfrontInterestForFixedPosition(FixedLoanPosition memory position) public view returns (uint256) {
     require(position.termType == FixedTermType.UPFRONT_INTEREST, "broker/not-upfront-interest");
 
-    // total interest = principal * (APR - 1) * term
+    // return zero if within no interest period
+    if (block.timestamp <= position.noInterestUntil) {
+      return 0;
+    }
+
+    // total interest = principal * (APR - 1) * term / 365 days
     uint256 term = position.end - position.start;
     uint256 totalInterest = Math.mulDiv(
       position.principal,
-      (position.apr - RATE_SCALE) * term,
+      Math.mulDiv(position.apr - RATE_SCALE, term, 365 days, Math.Rounding.Ceil),
       RATE_SCALE,
       Math.Rounding.Ceil
     );
@@ -182,7 +187,7 @@ library CreditBrokerMath {
     if (termType == FixedTermType.ACCRUE_INTEREST) {
       return getAccruedInterestForFixedPosition(position);
     } else if (termType == FixedTermType.UPFRONT_INTEREST) {
-      return getTotalInterestForFixedPosition(position);
+      return getUpfrontInterestForFixedPosition(position);
     } else {
       revert("broker/invalid-fixed-term-type");
     }
@@ -307,7 +312,7 @@ library CreditBrokerMath {
     // remaining principal before repayment
     uint256 remainingPrincipal = position.principal - position.principalRepaid;
     // get outstanding accrued interest
-    uint256 accruedInterest = getAccruedInterestForFixedPosition(position) - position.interestRepaid;
+    uint256 accruedInterest = getInterestForFixedPosition(position) - position.interestRepaid;
 
     // initialize repay amounts
     interestRepaid = amount < accruedInterest ? amount : accruedInterest;

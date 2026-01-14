@@ -62,7 +62,7 @@ contract CreditTokenTest is Test {
     assertEq(creditToken.pendingMerkleRoot(), bytes32(0));
     assertEq(creditToken.lastSetTime(), type(uint256).max);
     assertEq(creditToken.merkleRoot(), bytes32(0));
-    assertEq(creditToken.waitingPeriod(), 1 days);
+    assertEq(creditToken.waitingPeriod(), 6 hours);
     assertEq(creditToken.versionId(), 0);
 
     _generateTree(user1, 300 ether, 1);

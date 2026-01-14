@@ -10,7 +10,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
-import { ICreditBroker, FixedLoanPosition, FixedTermAndRate, GraceConfig } from "./interfaces/ICreditBroker.sol";
+import { ICreditBroker, FixedLoanPosition, FixedTermAndRate, GraceConfig, FixedTermType } from "./interfaces/ICreditBroker.sol";
 import { CreditBrokerMath, RATE_SCALE } from "./libraries/CreditBrokerMath.sol";
 import { ICreditBrokerInterestRelayer } from "./interfaces/ICreditBrokerInterestRelayer.sol";
 
@@ -162,10 +162,11 @@ contract CreditBroker is
 
     graceConfig.period = 3 days;
     graceConfig.penaltyRate = 15 * 1e25; // 15% = 0.15 * RATE_SCALE
+    graceConfig.noInterestPeriod = 60; // 1 minute no interest period for upfront interest term type
 
     listaDiscountRate = 20 * 1e25; // 20% discount if repaying interest with LISTA
 
-    emit GraceConfigUpdated(graceConfig.period, graceConfig.penaltyRate);
+    emit GraceConfigUpdated(graceConfig.period, graceConfig.penaltyRate, graceConfig.noInterestPeriod);
   }
 
   ///////////////////////////////////////
@@ -387,7 +388,7 @@ contract CreditBroker is
   }
 
   /**
-   * @dev Get the total debt of a user (dynamic + fixed)
+   * @dev Get the total debt of a user
    * @param user The address of the user
    */
   function getUserTotalDebt(address user) public view override returns (uint256 totalDebt) {
@@ -480,6 +481,14 @@ contract CreditBroker is
     uint256 end = block.timestamp + term.duration;
     // pos uuid increment
     fixedPosUuid++;
+
+    // no interest until
+    uint256 _noInterestPeriod = 0;
+    if (term.termType == FixedTermType.UPFRONT_INTEREST) {
+      require(graceConfig.noInterestPeriod > 0, "broker/no-interest-period-not-set");
+      _noInterestPeriod = start + graceConfig.noInterestPeriod;
+    }
+
     // update state for user's fixed positions
     fixedLoanPositions[user].push(
       FixedLoanPosition({
@@ -491,7 +500,8 @@ contract CreditBroker is
         end: end,
         lastRepaidTime: start,
         interestRepaid: 0,
-        principalRepaid: 0
+        principalRepaid: 0,
+        noInterestUntil: _noInterestPeriod
       })
     );
 
@@ -840,14 +850,16 @@ contract CreditBroker is
     emit BorrowPaused(paused);
   }
 
-  function setGraceConfig(uint256 period, uint256 penaltyRate) external onlyRole(MANAGER) {
+  function setGraceConfig(uint256 period, uint256 penaltyRate, uint256 noInterestPeriod) external onlyRole(MANAGER) {
     require(graceConfig.period != period || graceConfig.penaltyRate != penaltyRate, "broker/same-value-provided");
     require(penaltyRate <= RATE_SCALE, "broker/invalid-penalty-rate");
+    require(noInterestPeriod > 0 && noInterestPeriod <= 3600, "broker/invalid-no-interest-period");
 
     graceConfig.period = period;
     graceConfig.penaltyRate = penaltyRate;
+    graceConfig.noInterestPeriod = noInterestPeriod;
 
-    emit GraceConfigUpdated(period, penaltyRate);
+    emit GraceConfigUpdated(period, penaltyRate, noInterestPeriod);
   }
 
   /**
