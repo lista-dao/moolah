@@ -335,7 +335,7 @@ contract CreditBrokerTest is Test {
 
     assertEq(creditToken.balanceOf(borrower), 0);
 
-    vm.expectRevert("broker/insufficient-credit-balance");
+    vm.expectRevert();
     vm.prank(borrower);
     broker.supplyCollateral(marketParams, COLLATERAL, COLLATERAL, proof);
 

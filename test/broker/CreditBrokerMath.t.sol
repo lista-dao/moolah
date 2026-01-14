@@ -192,4 +192,31 @@ contract CreditBrokerMathTest is Test {
     assertEq(principalRepaid, 8.5 ether);
     assertEq(penalty, 1.5 ether); // 10 ether can cover part of penalty
   }
+
+  function test_getMaxListaForInterestRepay() public {
+    skip(61); // skip no interest period
+    uint256 listaPrice = 5e7; // $0.5 per LISTA
+    uint listaDiscountRate = 20 * 1e25; // 20% discount
+
+    uint256 maxLista = CreditBrokerMath.getMaxListaForInterestRepay(position, listaPrice, listaDiscountRate);
+    uint totalInterest = (1_000 ether * 30) / 100; // 300 ether
+
+    uint256 expectedMaxLista = ((1e8 * totalInterest * 80) / 100) / listaPrice; // considering 20% discount
+
+    assertApproxEqAbs(maxLista, expectedMaxLista, 1e15, "max lista mismatch");
+  }
+
+  function test_getInterestAmountFromLista() public {
+    skip(61); // skip no interest period
+    uint256 listaPrice = 5e7; // $0.5 per LISTA
+    uint listaDiscountRate = 20 * 1e25; // 20% discount
+
+    uint256 listaAmount = 10_000 ether;
+
+    uint256 interestAmount = CreditBrokerMath.getInterestAmountFromLista(listaAmount, listaPrice, listaDiscountRate);
+
+    // expected interest amount = listaAmount * listaPrice / (1 - discountRate)
+    uint256 expectedInterestAmount = (100 * listaAmount * listaPrice) / (80 * 1e8); // considering 20% discount
+    assertApproxEqAbs(interestAmount, expectedInterestAmount, 1e15, "interest amount mismatch");
+  }
 }
