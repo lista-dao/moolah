@@ -309,6 +309,21 @@ contract CreditTokenTest is Test {
     assertEq(creditToken.debtOf(user1), 15 ether); // bad debt of 15 (95 - 80)
   }
 
+  function test_syncCreditScore_fakeProof() public {
+    test_acceptMerkleRoot();
+
+    // sync user credit score
+    creditToken.syncCreditScore(user1, 300 ether, proof);
+
+    uint256 score = 3000000 ether; // Example credit score = 300
+    bytes32[] memory fakeProof = new bytes32[](2);
+    fakeProof[0] = bytes32("0xdeadbeef");
+    fakeProof[1] = bytes32("0xabcdef01");
+
+    vm.expectRevert("Invalid proof");
+    creditToken.syncCreditScore(user1, score, fakeProof);
+  }
+
   function _generateTree(address _account, uint256 _score, uint256 _versionId) public {
     bytes32[] memory data = new bytes32[](4);
     data[0] = keccak256(abi.encode(block.chainid, address(creditToken), _account, _score, _versionId));
