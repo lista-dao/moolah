@@ -14,4 +14,6 @@ interface ICreditToken is IERC20 {
   function setPendingMerkleRoot(bytes32 _pendingMerkleRoot) external;
 
   function acceptMerkleRoot() external;
+
+  function debtOf(address account) external view returns (uint256);
 }

@@ -50,6 +50,8 @@ contract CreditBroker is
   IMoolah public immutable MOOLAH;
   address public immutable RELAYER;
   IOracle public immutable ORACLE;
+  /// @dev LISTA token address; can be used to repay interest with discount
+  address public immutable LISTA;
   uint256 public constant MAX_FIXED_TERM_APR = 9e27; // 8 * RATE_SCALE = 800% MAX APR
   uint256 public constant MIN_FIXED_TERM_APR = 105 * 1e25; // 0.05 * RATE_SCALE = 5% MIN APR
   uint256 public constant MAX_REPAY_EXTENSION_COUNT = 3; // max 3 extensions
@@ -60,9 +62,6 @@ contract CreditBroker is
 
   /// @dev credit token address; used in `Moolah.setProvider`
   address public TOKEN;
-
-  /// @dev LISTA token address; can be used to repay interest with discount
-  address public LISTA;
 
   Id public MARKET_ID;
   string public BROKER_NAME;
@@ -88,7 +87,7 @@ contract CreditBroker is
 
   /// @dev discount rate for repaying interest with LISTA token
   /// @dev 20% discount = 20 * 1e25; means user only need to pay 80% of interest in LISTA token
-  uint256 listaDiscountRate;
+  uint256 public listaDiscountRate;
 
   // ------- Modifiers -------
   modifier onlyMoolah() {
@@ -115,7 +114,10 @@ contract CreditBroker is
    */
   constructor(address moolah, address relayer, address oracle, address lista) {
     // zero address assert
-    require(moolah != address(0) && relayer != address(0) && oracle != address(0), "broker/zero-address-provided");
+    require(
+      moolah != address(0) && relayer != address(0) && oracle != address(0) && lista != address(0),
+      "broker/zero-address-provided"
+    );
     // set addresses
     MOOLAH = IMoolah(moolah);
     RELAYER = relayer;
@@ -207,6 +209,9 @@ contract CreditBroker is
     bytes32[] calldata proof
   ) external override marketIdSet whenNotPaused whenBorrowNotPaused nonReentrant {
     _supplyCollateral(marketParams, collateralAmount, score, proof);
+    // don't allow borrow if user has debt
+    require(ICreditToken(COLLATERAL_TOKEN).debtOf(msg.sender) == 0, "broker/user-has-debt");
+
     _borrow(borrowAmount, termId);
   }
 
@@ -227,6 +232,9 @@ contract CreditBroker is
   ) external override marketIdSet whenNotPaused whenBorrowNotPaused nonReentrant {
     // sync credit score before borrowing
     ICreditToken(COLLATERAL_TOKEN).syncCreditScore(msg.sender, score, proof);
+    // don't allow borrow if user has debt
+    require(ICreditToken(COLLATERAL_TOKEN).debtOf(msg.sender) == 0, "broker/user-has-debt");
+
     _borrow(amount, termId);
   }
 
@@ -294,6 +302,7 @@ contract CreditBroker is
     uint256 posId,
     address onBehalf
   ) external override marketIdSet whenNotPaused nonReentrant {
+    require(listaAmount > 0, "broker/zero-lista-amount");
     uint256 listaPrice = IOracle(ORACLE).peek(LISTA);
     uint256 maxListaAmount = CreditBrokerMath.getMaxListaForInterestRepay(
       _getFixedPositionByPosId(onBehalf, posId),
@@ -409,6 +418,11 @@ contract CreditBroker is
       // add interest
       totalDebt += CreditBrokerMath.getInterestForFixedPosition(_fixedPos) - _fixedPos.interestRepaid;
     }
+  }
+
+  function getMaxListaForInterestRepay(FixedLoanPosition memory position) external view returns (uint256) {
+    uint256 listaPrice = IOracle(ORACLE).peek(LISTA);
+    return CreditBrokerMath.getMaxListaForInterestRepay(position, listaPrice, listaDiscountRate);
   }
 
   /**
@@ -575,8 +589,10 @@ contract CreditBroker is
       if (repayablePrincipal > 0) {
         uint256 principalRepaid = _repayToMoolah(user, onBehalf, repayablePrincipal);
         position.principalRepaid += principalRepaid;
-        // reset repaid interest to zero (all accrued interest has been cleared)
-        position.interestRepaid = 0;
+        if (position.termType == FixedTermType.ACCRUE_INTEREST) {
+          // reset repaid interest to zero (all accrued interest has been cleared)
+          position.interestRepaid = 0;
+        }
         // reset last repay time to now
         position.lastRepaidTime = block.timestamp;
       }

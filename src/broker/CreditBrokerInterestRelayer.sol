@@ -39,6 +39,8 @@ contract CreditBrokerInterestRelayer is
   EnumerableSet.AddressSet private brokers;
   /// @dev vault token
   address public token;
+  /// @dev the amount of loan should be supplied to Moolah vault
+  uint256 public supplyAmount;
 
   // ------- Modifiers -------
   modifier onlyBroker() {
@@ -97,24 +99,24 @@ contract CreditBrokerInterestRelayer is
   function supplyToVault(uint256 amount) external override nonReentrant onlyBroker {
     // transfer interest from broker
     IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+    supplyAmount += amount;
 
     // get minLoan
     uint256 minLoan = MOOLAH.minLoan(MOOLAH.idToMarketParams(ICreditBrokerBase(msg.sender).MARKET_ID()));
 
-    // supply to moolah vault if the balance exceeds minLoan
-    // ignore the supply info of the vault after supplying,
-    // otherwise, keep the balance in this contract
-    uint256 balance = IERC20(token).balanceOf(address(this));
     // records interest accumulated event
-    emit InterestAccumulated(msg.sender, balance);
+    emit InterestAccumulated(msg.sender, supplyAmount);
 
-    if (balance >= minLoan) {
+    // supply to moolah vault if accumulated amount exceeds minLoan
+    if (supplyAmount >= minLoan) {
+      uint256 _supplyToVault = supplyAmount;
+      supplyAmount = 0;
       // approve to moolah
-      IERC20(token).safeIncreaseAllowance(address(MOOLAH), balance);
+      IERC20(token).safeIncreaseAllowance(address(MOOLAH), _supplyToVault);
       // supply to moolah vault
-      MOOLAH.supply(MOOLAH.idToMarketParams(ICreditBrokerBase(msg.sender).MARKET_ID()), balance, 0, vault, "");
+      MOOLAH.supply(MOOLAH.idToMarketParams(ICreditBrokerBase(msg.sender).MARKET_ID()), _supplyToVault, 0, vault, "");
       // records supplied to vault event
-      emit SuppliedToMoolahVault(balance);
+      emit SuppliedToMoolahVault(_supplyToVault);
     }
   }
 
@@ -123,9 +125,13 @@ contract CreditBrokerInterestRelayer is
    * @param amount The amount of loan to transfer
    */
   function transferLoan(uint256 amount) external override nonReentrant onlyBroker {
+    uint256 balance = IERC20(token).balanceOf(address(this));
+    uint256 remainingLoan = balance - supplyAmount;
+    require(amount <= remainingLoan, "relayer/insufficient-loan-balance");
+
     IERC20(token).safeTransfer(msg.sender, amount);
 
-    emit LoanTransferred(msg.sender, amount);
+    emit TransferredLoan(msg.sender, amount, remainingLoan, msg.sender);
   }
 
   /**
@@ -164,6 +170,19 @@ contract CreditBrokerInterestRelayer is
     require(brokers.contains(broker), "broker/same-value-provided");
     brokers.remove(broker);
     emit RemovedBroker(broker);
+  }
+
+  function withdrawLoan(uint256 amount, address receiver) external nonReentrant onlyRole(MANAGER) {
+    require(receiver != address(0), "relayer/zero-address-provided");
+    require(amount > 0, "relayer/zero-amount-provided");
+
+    uint256 balance = IERC20(token).balanceOf(address(this));
+    uint256 remainingLoan = balance - supplyAmount;
+    require(amount <= remainingLoan, "relayer/insufficient-loan-balance");
+
+    IERC20(token).safeTransfer(receiver, amount);
+
+    emit TransferredLoan(msg.sender, amount, remainingLoan, receiver);
   }
 
   /// @dev only callable by the DEFAULT_ADMIN_ROLE (must be a TimeLock contract)

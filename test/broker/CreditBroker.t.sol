@@ -63,15 +63,13 @@ contract CreditBrokerTest is Test {
 
   // Local mocks
   ERC20Mock public USDT;
+  ERC20Mock public LISTA;
   uint8 constant USDT_DECIMALS = 18;
 
   CreditToken public creditToken;
   bytes32 merkleRoot;
   bytes32[] proof;
   Merkle m = new Merkle();
-
-  // Mock LISTA
-  ERC20Mock public LISTA;
 
   FixedTermType type1 = FixedTermType.ACCRUE_INTEREST;
   FixedTermType type2 = FixedTermType.UPFRONT_INTEREST;
@@ -93,9 +91,9 @@ contract CreditBrokerTest is Test {
     USDT.setSymbol("USDT");
     USDT.setDecimals(USDT_DECIMALS);
     LISTA = new ERC20Mock();
-    USDT.setName("LISTA");
-    USDT.setSymbol("LISTA");
-    USDT.setDecimals(USDT_DECIMALS);
+    LISTA.setName("LISTA");
+    LISTA.setSymbol("LISTA");
+    LISTA.setDecimals(USDT_DECIMALS);
 
     // Deploy CreditToken as collateral token
     _deployCreditToken();
@@ -103,6 +101,7 @@ contract CreditBrokerTest is Test {
     // Oracle with initial prices
     oracle = new OracleMock();
     oracle.setPrice(address(USDT), 1e8);
+    oracle.setPrice(address(LISTA), 5e7); // $0.5
 
     // IRM enable + LLTV
     irm = new IrmMockZero();
@@ -137,6 +136,11 @@ contract CreditBrokerTest is Test {
     );
     broker = CreditBroker(payable(address(bProxy)));
 
+    assertEq(broker.LISTA(), address(LISTA));
+    assertEq(address(broker.MOOLAH()), address(moolah));
+    assertEq(broker.RELAYER(), address(relayer));
+    assertEq(address(broker.ORACLE()), address(oracle));
+
     // Create market using CreditBroker as the oracle address
     marketParams = MarketParams({
       loanToken: address(USDT),
@@ -151,6 +155,9 @@ contract CreditBrokerTest is Test {
     // Bind broker to market id
     vm.prank(MANAGER);
     broker.setMarketId(id);
+    assertEq(broker.TOKEN(), address(creditToken));
+    assertEq(broker.COLLATERAL_TOKEN(), address(creditToken));
+    assertEq(broker.LOAN_TOKEN(), address(USDT));
 
     // Register broker and set as market broker (for user-aware pricing)
     vm.startPrank(MANAGER);
@@ -399,8 +406,8 @@ contract CreditBrokerTest is Test {
     assertEq(_principalAtMoolah(borrower), borrowAmount, "moolah position principal mismatch after supplyAndBorrow");
   }
 
-  // score 1K -> score 3K and borrow 3K (max borrowable)
-  function test_supplyAndBorrow_MaxBorrow() public {
+  // score 1K -> score 3K and borrow 3K (max borrowable); for accrue interest type
+  function test_supplyAndBorrow_MaxBorrow_Accure() public {
     test_supplyCollateral();
 
     // Setup a fixed term product
@@ -424,6 +431,58 @@ contract CreditBrokerTest is Test {
     vm.startPrank(borrower);
     creditToken.approve(address(broker), type(uint256).max);
     broker.supplyAndBorrow(marketParams, 2 * COLLATERAL, borrowAmount, termId, newScore, proof);
+    vm.stopPrank();
+
+    // Verify global uuid
+    assertEq(broker.fixedPosUuid(), 1);
+
+    // Verify a fixed position created
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    assertEq(positions.length, 1);
+    assertEq(positions[0].principal, borrowAmount);
+    assertEq(positions[0].posId, broker.fixedPosUuid());
+    assertEq(positions[0].apr, apr);
+    assertEq(positions[0].start, block.timestamp);
+    assertEq(positions[0].end, block.timestamp + duration);
+    assertEq(positions[0].lastRepaidTime, block.timestamp);
+    assertEq(positions[0].interestRepaid, 0);
+    assertEq(positions[0].principalRepaid, 0);
+
+    // Check balance
+    assertEq(creditToken.balanceOf(borrower), beforeBalance, "should not change borrower collateral balance");
+    assertEq(creditToken.balanceOf(address(moolah)), 3 * COLLATERAL, "moolah collateral after mismatch");
+    assertEq(creditToken.totalSupply(), 3 * COLLATERAL, "total supply after mismatch");
+    assertEq(USDT.balanceOf(borrower), borrowAmount, "borrower loan token balance mismatch after borrow");
+
+    // check position at Moolah
+    Position memory pos = moolah.position(marketParams.id(), borrower);
+    assertEq(pos.collateral, 3 * COLLATERAL, "moolah position collateral mismatch after supplyAndBorrow");
+    assertEq(_principalAtMoolah(borrower), borrowAmount, "moolah position principal mismatch after supplyAndBorrow");
+  }
+
+  // score 3K and borrow 3K (max borrowable); for upfront interest type
+  function test_supplyAndBorrow_MaxBorrow_Upfront() public {
+    // Setup a fixed term product
+    uint256 termId = 1;
+    uint256 duration = 14 days;
+    uint256 apr = 1e27 + (0.15 * 1e27 * (365 days)) / duration; // 15% APR for 14 days
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type2 });
+
+    vm.prank(BOT);
+    broker.updateFixedTermAndRate(term, false);
+
+    uint256 newScore = COLLATERAL * 3;
+    uint256 borrowAmount = newScore; // max borrow at 100% LTV
+    _generateTree(borrower, newScore, creditToken.versionId() + 1);
+
+    uint256 beforeBalance = creditToken.balanceOf(borrower);
+    assertEq(creditToken.balanceOf(address(moolah)), 0, "moolah collateral before mismatch");
+    assertEq(creditToken.totalSupply(), 0, "total supply before mismatch");
+    assertEq(USDT.balanceOf(borrower), 0, "borrower loan token balance mismatch before borrow");
+
+    vm.startPrank(borrower);
+    creditToken.approve(address(broker), type(uint256).max);
+    broker.supplyAndBorrow(marketParams, borrowAmount, borrowAmount, termId, newScore, proof);
     vm.stopPrank();
 
     // Verify global uuid
@@ -545,6 +604,49 @@ contract CreditBrokerTest is Test {
       100 ether + borrowAmount,
       "moolah position principal mismatch after supplyAndBorrow"
     );
+  }
+
+  // score 3K and borrow 3K (max borrowable); for upfront interest type, then skip 7 days
+  // repay 1K interest only in LISTA
+  function test_repayInterestWithLista() public {
+    test_supplyAndBorrow_MaxBorrow_Upfront();
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    FixedLoanPosition memory position = positions[0];
+
+    skip(7 days);
+    uint totalDebt = broker.getUserTotalDebt(borrower);
+    uint usdtBefore = USDT.balanceOf(address(moolah));
+    uint listaAmount = broker.getMaxListaForInterestRepay(position);
+    uint256 interestAmount = CreditBrokerMath.getInterestAmountFromLista(
+      listaAmount,
+      oracle.peek(address(LISTA)),
+      broker.listaDiscountRate()
+    );
+    LISTA.setBalance(borrower, listaAmount);
+    USDT.setBalance(address(relayer), interestAmount); // relayer needs to have USDT to pay moolah
+    vm.startPrank(borrower);
+    LISTA.approve(address(broker), type(uint256).max);
+    broker.repayInterestWithLista(0, listaAmount, 1, borrower); // only repay interest with LISTA
+    vm.stopPrank();
+
+    // check LISTA and USDT balance
+    assertEq(LISTA.balanceOf(borrower), 0, "borrower LISTA balance mismatch after interest repay");
+    assertEq(USDT.balanceOf(address(relayer)), 0, "relayer USDT balance mismatch after interest repay");
+    assertEq(LISTA.balanceOf(address(relayer)), listaAmount, "borrower LISTA balance mismatch after interest repay");
+    assertEq(
+      USDT.balanceOf(address(moolah)) - usdtBefore,
+      interestAmount,
+      "moolah USDT balance mismatch after interest repay"
+    );
+
+    // check user total debt
+    assertEq(broker.getUserTotalDebt(borrower) + interestAmount, totalDebt, "total debt mismatch after interest repay");
+    // check fixed position interest repaid
+    positions = broker.userFixedPositions(borrower);
+    position = positions[0];
+
+    assertEq(position.interestRepaid, interestAmount, "fixed position interestRepaid mismatch after interest repay");
+    assertEq(position.principalRepaid, 0, "fixed position interestRepaid mismatch after interest repay");
   }
 
   // 1K collateral supplied, then full withdraw 1K
