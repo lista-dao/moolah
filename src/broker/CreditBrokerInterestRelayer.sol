@@ -15,9 +15,9 @@ import { ICreditBrokerInterestRelayer } from "./interfaces/ICreditBrokerInterest
 
 /// @title Credit Broker Interest Relayer
 /// @author Lista DAO
-/// @notice This contract act as a relayer between LendingBrokers and Moolah vaults
-///         Brokers can transfer interest to this contract,
-///         and this contract will supply to the Moolah vault when the balance exceeds Moolah's minLoan requirement
+/// @notice This contract act as a relayer between CreditBrokers and Moolah vaults
+///         Brokers can transfer interest to this contract, or provide LISTA and then transfer loan to itself;
+///         this contract will supply to the Moolah vault when the accumulated amount exceeds minLoan
 contract CreditBrokerInterestRelayer is
   UUPSUpgradeable,
   AccessControlEnumerableUpgradeable,
@@ -172,6 +172,11 @@ contract CreditBrokerInterestRelayer is
     emit RemovedBroker(broker);
   }
 
+  /**
+   * @dev Withdraw deposited loan from the relayer to a specified receiver; only callable by MANAGER
+   * @param amount The amount of loan to withdraw
+   * @param receiver The address of the receiver
+   */
   function withdrawLoan(uint256 amount, address receiver) external nonReentrant onlyRole(MANAGER) {
     require(receiver != address(0), "relayer/zero-address-provided");
     require(amount > 0, "relayer/zero-amount-provided");
