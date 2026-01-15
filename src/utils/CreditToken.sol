@@ -8,7 +8,12 @@ import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 import { MerkleProof } from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
-/// Collateral token
+/**
+ * @title Credit Token
+ * @author Lista DAO
+ * @notice ERC20 token representing credit scores of users, with minting and burning based on verified credit scores via Merkle proofs.
+ *         Tokens are 1:1 minted/burned according to the user's credit score.
+ */
 contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerableUpgradeable, PausableUpgradeable {
   ///@dev Merkle tree root for credit score verification
   bytes32 public merkleRoot;
@@ -63,7 +68,7 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
     address _admin,
     address _manager,
     address _bot,
-    address[] calldata _transferers, // brokers and moolah
+    address[] calldata _transferers, // only credit brokers and moolah can transfer
     string calldata _name,
     string calldata _symbol
   ) external initializer {
@@ -189,6 +194,12 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
     return burnAmount;
   }
 
+  /**
+   * @dev Get the debt of a user; if user's accounted amount exceeds their credit score, the excess is considered debt.
+   *      Debt should be repaid before the user can borrow again.
+   * @param _user The address of the user.
+   * @return uint256 The debt amount of the user.
+   */
   function debtOf(address _user) public view returns (uint256) {
     uint256 score = creditScores[_user].score;
     return userAmounts[_user] > score ? userAmounts[_user] - score : 0;

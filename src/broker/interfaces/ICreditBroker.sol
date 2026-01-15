@@ -5,7 +5,7 @@ import { Id, MarketParams, IMoolah } from "moolah/interfaces/IMoolah.sol";
 
 enum FixedTermType {
   ACCRUE_INTEREST, // 0: interest is accrued over time, user pays interest based on time elapsed
-  UPFRONT_INTEREST // 1: interest is paid upfront, user pays full interest at the beginning
+  UPFRONT_INTEREST // 1: interest is paid upfront, user pays full interest after interest-free period ends
 }
 
 struct FixedTermAndRate {
@@ -91,6 +91,7 @@ interface ICreditBroker is ICreditBrokerBase {
   event BorrowPaused(bool paused);
   event AddedLiquidationWhitelist(address indexed account);
   event GraceConfigUpdated(uint256 newPeriod, uint256 newPenaltyRate, uint256 newNoInterestPeriod);
+  event ListaDiscountRateUpdated(uint256 newRate);
   event PaidOffPenalizedPosition(address indexed user, uint256 posId, uint256 paidOffTime);
   event RepayInterestWithLista(
     address indexed user,

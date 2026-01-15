@@ -678,8 +678,8 @@ contract CreditBrokerTest is Test {
   // Fixed borrow and repay (partial and full)
   // -----------------------------
 
-  // Supply 1K collateral, borrow 500 fixed, partial repay 100+, then full repay
-  function test_fixedBorrowAndPartialRepay_thenFullRepay_noExtension() public {
+  // Supply 1K collateral, borrow 500 fixed accure, partial repay 100+, then full repay
+  function test_fixedBorrowAndPartialRepay_thenFullRepay_noExtension_accure() public {
     test_supplyCollateral();
 
     // Setup a fixed term product
@@ -744,6 +744,74 @@ contract CreditBrokerTest is Test {
     // Position fully removed
     positions = broker.userFixedPositions(borrower);
     assertEq(positions.length, 0);
+  }
+
+  // Supply 1K collateral, borrow 500 fixed upfront, partial repay 100+, then full repay
+  function test_fixedBorrowAndPartialRepay_thenFullRepay_noExtension_upfront() public {
+    test_supplyCollateral();
+
+    // Setup a fixed term product
+    uint256 termId = 1;
+    uint256 duration = 14 days;
+    uint256 apr = 1e27 + (0.15 * 1e27 * (365 days)) / duration; // 15% APR for 14 days
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type2 });
+    vm.prank(BOT);
+    broker.updateFixedTermAndRate(term, false);
+
+    // Borrow fixed
+    uint256 fixedAmt = 500 ether;
+    vm.prank(borrower);
+    broker.borrow(fixedAmt, termId, COLLATERAL, proof);
+
+    // Verify a fixed position created
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    assertEq(positions.length, 1);
+    uint256 posId = positions[0].posId;
+    assertEq(positions[0].principal, fixedAmt);
+
+    skip(1);
+    moolah.accrueInterest(marketParams);
+
+    // interst should be zero for upfront interest loan
+    uint debt = broker.getUserTotalDebt(borrower);
+    assertEq(debt, positions[0].principal, "should zero interst");
+    // repay partially
+    uint256 partialPrincipal = 100 ether;
+    vm.prank(borrower);
+    broker.repay(partialPrincipal, posId, borrower);
+
+    positions = broker.userFixedPositions(borrower);
+    assertEq(positions[0].principal, fixedAmt);
+    assertEq(positions[0].principalRepaid, partialPrincipal);
+    assertEq(positions[0].interestRepaid, 0);
+
+    skip(1 days);
+    moolah.accrueInterest(marketParams);
+
+    debt = broker.getUserTotalDebt(borrower);
+    uint expectDebt = fixedAmt - partialPrincipal + (fixedAmt * 15) / 100; // 400 principal + 15% upfront interest
+    assertEq(debt, expectDebt, "debt mismatch after partial repay");
+
+    // Full repay remaining
+    USDT.setBalance(borrower, debt);
+    vm.startPrank(borrower);
+    USDT.approve(address(broker), type(uint256).max);
+    broker.repayAndWithdraw(marketParams, COLLATERAL, debt, posId, COLLATERAL, proof);
+    vm.stopPrank();
+
+    // check balance
+    assertEq(creditToken.balanceOf(borrower), COLLATERAL, "borrower collateral balance mismatch after full repay");
+    assertEq(USDT.balanceOf(borrower), 0, "borrower USDT balance mismatch after full repay");
+
+    // Position fully removed
+    positions = broker.userFixedPositions(borrower);
+    assertEq(positions.length, 0);
+
+    // check score
+    (, uint256 score) = creditToken.creditScores(borrower);
+    assertEq(score, COLLATERAL, "borrower credit score mismatch after full repay");
+    assertEq(creditToken.userAmounts(borrower), COLLATERAL, "borrower credit amount mismatch after full repay");
+    assertEq(creditToken.debtOf(borrower), 0, "borrower credit debt mismatch after full repay");
   }
 
   // Supply 1K collateral, borrow 300 fixed, partial repay 40 by 3rd party

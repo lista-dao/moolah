@@ -26,8 +26,9 @@ import { ICreditToken } from "../utils/interfaces/ICreditToken.sol";
 /// @author Lista DAO
 /// @notice This contract allows users to borrow fixed-rate, fixed-term loans using credits as collateral.
 /// @dev
-/// - all borrow and repay has to be done through the broker, broker manages the positions
-/// - collateral token is a credit token, which syncs user's credit score on every supply/withdraw
+/// - Loan token is a stablecoin supported by Moolah.
+/// - Collateral token is a credit token issued by Lista, which is 1:1 minted with user's credit score; collateral token price is fixed at $1.
+/// - Users can supply/withdraw collateral and borrow/repay loans through this broker, fixed loan positions are managed by broker.
 contract CreditBroker is
   UUPSUpgradeable,
   AccessControlEnumerableUpgradeable,
@@ -54,7 +55,6 @@ contract CreditBroker is
   address public immutable LISTA;
   uint256 public constant MAX_FIXED_TERM_APR = 9e27; // 8 * RATE_SCALE = 800% MAX APR
   uint256 public constant MIN_FIXED_TERM_APR = 105 * 1e25; // 0.05 * RATE_SCALE = 5% MIN APR
-  uint256 public constant MAX_REPAY_EXTENSION_COUNT = 3; // max 3 extensions
 
   address public LOAN_TOKEN;
   /// @dev credit token address
@@ -164,11 +164,13 @@ contract CreditBroker is
 
     graceConfig.period = 3 days;
     graceConfig.penaltyRate = 15 * 1e25; // 15% = 0.15 * RATE_SCALE
-    graceConfig.noInterestPeriod = 60; // 1 minute no interest period for upfront interest term type
+    graceConfig.noInterestPeriod = 60; // 1 minute interest free period for upfront interest term type
 
     listaDiscountRate = 20 * 1e25; // 20% discount if repaying interest with LISTA
 
+    emit MaxFixedLoanPositionsUpdated(0, maxFixedLoanPositions);
     emit GraceConfigUpdated(graceConfig.period, graceConfig.penaltyRate, graceConfig.noInterestPeriod);
+    emit ListaDiscountRateUpdated(listaDiscountRate);
   }
 
   ///////////////////////////////////////
@@ -863,6 +865,12 @@ contract CreditBroker is
     emit BorrowPaused(paused);
   }
 
+  /**
+   * @dev Set the grace config
+   * @param period The grace period duration in seconds
+   * @param penaltyRate The penalty rate applied after the grace period
+   * @param noInterestPeriod The no-interest period for upfront interest term type
+   */
   function setGraceConfig(uint256 period, uint256 penaltyRate, uint256 noInterestPeriod) external onlyRole(MANAGER) {
     require(graceConfig.period != period || graceConfig.penaltyRate != penaltyRate, "broker/same-value-provided");
     require(penaltyRate <= RATE_SCALE, "broker/invalid-penalty-rate");
@@ -873,6 +881,19 @@ contract CreditBroker is
     graceConfig.noInterestPeriod = noInterestPeriod;
 
     emit GraceConfigUpdated(period, penaltyRate, noInterestPeriod);
+  }
+
+  /**
+   * @dev Set the LISTA discount rate for interest repayment
+   * @param discountRate The new discount rate
+   */
+  function setListaDiscountRate(uint256 discountRate) external onlyRole(MANAGER) {
+    require(listaDiscountRate != discountRate, "broker/same-value-provided");
+    require(discountRate < RATE_SCALE, "broker/invalid-discount-rate");
+
+    listaDiscountRate = discountRate;
+
+    emit ListaDiscountRateUpdated(discountRate);
   }
 
   /**
