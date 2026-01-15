@@ -457,8 +457,8 @@ contract CreditBrokerTest is Test {
   function test_supplyAndBorrow_upfront_borrowTwice() public {
     // Setup a fixed term product
     uint256 termId = 1;
-    uint256 duration = 365 days;
-    uint256 apr = 120 * 1e25;
+    uint256 duration = 14 days;
+    uint256 apr = 1e27 + (0.15 * 1e27 * (365 days)) / duration; // 15% APR for 14 days
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type2 });
 
     vm.prank(BOT);
