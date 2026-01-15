@@ -50,7 +50,7 @@ contract CreditBroker is
   IMoolah public immutable MOOLAH;
   address public immutable RELAYER;
   IOracle public immutable ORACLE;
-  uint256 public constant MAX_FIXED_TERM_APR = 13e26; // 1.3 * RATE_SCALE = 30% MAX APR
+  uint256 public constant MAX_FIXED_TERM_APR = 9e27; // 8 * RATE_SCALE = 800% MAX APR
   uint256 public constant MIN_FIXED_TERM_APR = 105 * 1e25; // 0.05 * RATE_SCALE = 5% MIN APR
   uint256 public constant MAX_REPAY_EXTENSION_COUNT = 3; // max 3 extensions
 
