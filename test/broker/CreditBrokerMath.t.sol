@@ -72,7 +72,7 @@ contract CreditBrokerMathTest is Test {
     uint256 endTime = block.timestamp - 15 days; // should be penalized
 
     uint256 penalty = CreditBrokerMath.getPenaltyForCreditPosition(
-      repayAmt,
+      //      repayAmt,
       remainingPrincipal,
       accruedInterest,
       endTime,
@@ -82,29 +82,6 @@ contract CreditBrokerMathTest is Test {
     // expected penalty = debt * penaltyRate
     uint256 expectedPenalty = (520 ether * 15) / 100; // 15% * debt
 
-    assertApproxEqAbs(penalty, expectedPenalty, 1e15, "penalty mismatch");
-  }
-
-  function test_getPenaltyForCreditPosition_partial() public {
-    // mock a grace config
-    GraceConfig memory graceConfig = GraceConfig({ period: 3 days, penaltyRate: 15 * 1e25, noInterestPeriod: 60 });
-
-    // skip past end + grace period
-    skip(45 days);
-    uint256 repayAmt = 510 ether;
-    uint256 remainingPrincipal = 500 ether;
-    uint256 accruedInterest = 20 ether;
-    uint256 endTime = block.timestamp - 15 days; // should be penalized
-
-    uint256 penalty = CreditBrokerMath.getPenaltyForCreditPosition(
-      repayAmt,
-      remainingPrincipal,
-      accruedInterest,
-      endTime,
-      graceConfig
-    );
-    // expected penalty = repayAmt * penaltyRate
-    uint256 expectedPenalty = (510 ether * 15) / 100; // 15% * repaid amount
     assertApproxEqAbs(penalty, expectedPenalty, 1e15, "penalty mismatch");
   }
 
@@ -163,32 +140,23 @@ contract CreditBrokerMathTest is Test {
       100 ether,
       graceConfig
     );
+    assertEq(interestRepaid, 0);
+    assertEq(penalty, 0);
+    assertEq(principalRepaid, 0);
+
+    uint debtAndPenalty = 1_150 ether + ((1_150 ether * 15) / 100); // principal + interest + penalty
+    (interestRepaid, penalty, principalRepaid) = CreditBrokerMath.previewRepayFixedLoanPosition(
+      position,
+      debtAndPenalty,
+      graceConfig
+    );
 
     // expected upfront interest = principal * apr * duration / YEAR_SECONDS / RATE_SCALE
     uint256 expectedInterest = (1_000 ether * 15) / 100; // 150 ether
-    assertApproxEqAbs(interestRepaid, 100 ether, 1e15, "interest repaid mismatch");
-    assertApproxEqAbs(penalty, 0, 1e15, "penalty mismatch"); // cannot afford penalty
+    assertApproxEqAbs(interestRepaid, 150 ether, 1e15, "interest repaid mismatch");
+    assertApproxEqAbs(penalty, (1_150 ether * 15) / 100, 1e15, "penalty mismatch"); // cannot afford penalty
     // principal repaid should be 0
-    assertEq(principalRepaid, 0);
-
-    (interestRepaid, penalty, principalRepaid) = CreditBrokerMath.previewRepayFixedLoanPosition(
-      position,
-      150 ether,
-      graceConfig
-    );
-    // now should cover full interest and 0 principal
-    assertApproxEqAbs(interestRepaid, 150 ether, 1e15, "interest repaid mismatch");
-    assertEq(principalRepaid, 0);
-    assertEq(penalty, 0);
-
-    (interestRepaid, penalty, principalRepaid) = CreditBrokerMath.previewRepayFixedLoanPosition(
-      position,
-      160 ether,
-      graceConfig
-    );
-    assertApproxEqAbs(interestRepaid, 150 ether, 1e15, "interest repaid mismatch");
-    assertEq(principalRepaid, 8.5 ether);
-    assertEq(penalty, 1.5 ether); // 10 ether can cover part of penalty
+    assertEq(principalRepaid, 1_000 ether);
   }
 
   function test_getMaxListaForInterestRepay() public {
@@ -216,5 +184,24 @@ contract CreditBrokerMathTest is Test {
     // expected interest amount = listaAmount * listaPrice / (1 - discountRate)
     uint256 expectedInterestAmount = (100 * listaAmount * listaPrice) / (80 * 1e8); // considering 20% discount
     assertApproxEqAbs(interestAmount, expectedInterestAmount, 1e15, "interest amount mismatch");
+  }
+
+  function test_getTotalRepayNeeded() public {
+    uint256 totalRepayNeeded = CreditBrokerMath.getTotalRepayNeeded(position, graceConfig);
+    assertEq(totalRepayNeeded, 1_000 ether, "total repay should be principal only within term");
+
+    // skip interest free period
+    skip(61);
+    totalRepayNeeded = CreditBrokerMath.getTotalRepayNeeded(position, graceConfig);
+    uint256 expectedTotalRepay = 1_000 ether + (1_000 ether * 15) / 100; // principal + interest
+    assertApproxEqAbs(totalRepayNeeded, expectedTotalRepay, 1e15, "total repay mismatch");
+
+    // skip term end + grace period
+    skip(duration + 10 days);
+
+    totalRepayNeeded = CreditBrokerMath.getTotalRepayNeeded(position, graceConfig);
+    uint256 expectedPenalty = ((1_000 ether + (1_000 ether * 15) / 100) * 15) / 100; // 15% penalty on debt
+    expectedTotalRepay = 1_000 ether + (1_000 ether * 15) / 100 + expectedPenalty; // principal + interest + penalty
+    assertApproxEqAbs(totalRepayNeeded, expectedTotalRepay, 1e15, "total repay with penalty mismatch");
   }
 }
