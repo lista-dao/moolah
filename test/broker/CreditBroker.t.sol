@@ -1083,6 +1083,27 @@ contract CreditBrokerTest is Test {
     assertEq(creditToken.balanceOf(borrower), COLLATERAL, "unexpected user collateral balance after withdraw");
   }
 
+  // Penalized user cannot borrow again until cleared
+  function test_penalizedUserCannotBorrowAgain() public {
+    test_supplyAndBorrow_MaxBorrow_Upfront();
+    uint256 termId = 1;
+
+    skip(20 days); // after term end + grace period
+    assertEq(broker.isUserPenalized(borrower), true, "user should be penalized");
+
+    uint256 newScore = COLLATERAL * 4;
+    uint256 borrowAmount = COLLATERAL; // 1K
+    _generateTree(borrower, newScore, creditToken.versionId() + 1);
+
+    vm.startPrank(borrower);
+    creditToken.approve(address(broker), type(uint256).max);
+    vm.expectRevert("broker/user-penalized");
+    broker.supplyAndBorrow(marketParams, borrowAmount, borrowAmount, termId, newScore, proof);
+    vm.expectRevert("broker/user-penalized");
+    broker.borrow(borrowAmount, termId, newScore, proof);
+    vm.stopPrank();
+  }
+
   // -----------------------------
   // Edge cases
   // -----------------------------
