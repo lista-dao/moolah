@@ -276,12 +276,18 @@ contract CreditBroker is
     uint256 score,
     bytes32[] calldata proof
   ) external override marketIdSet whenNotPaused nonReentrant {
+    (bool isPenalized, FixedLoanPosition memory position) = isPositionPenalized(msg.sender, posId);
+    if (isPenalized) {
+      uint256 totalRepayNeeded = CreditBrokerMath.getTotalRepayNeeded(position, graceConfig);
+      require(repayAmount >= totalRepayNeeded, "broker/penalized-position-must-be-paid-in-full");
+    }
+
     _repay(repayAmount, posId, msg.sender);
     _withdrawCollateral(marketParams, collateralAmount, score, proof);
   }
 
   /**
-   * @dev Repay a Fixed loan position
+   * @dev Repay a Fixed loan position; a penalized position must be paid off in full
    * @notice repay interest first then principal, repay amount must larger than interest
    * @param amount The amount to repay
    * @param posId The ID of the fixed position to repay
@@ -292,6 +298,12 @@ contract CreditBroker is
     uint256 posId,
     address onBehalf
   ) external override marketIdSet whenNotPaused nonReentrant {
+    (bool isPenalized, FixedLoanPosition memory position) = isPositionPenalized(onBehalf, posId);
+    if (isPenalized) {
+      uint256 totalRepayNeeded = CreditBrokerMath.getTotalRepayNeeded(position, graceConfig);
+      require(amount >= totalRepayNeeded, "broker/penalized-position-must-be-paid-in-full");
+    }
+
     _repay(amount, posId, onBehalf);
   }
 
@@ -384,11 +396,11 @@ contract CreditBroker is
    * @param posId The ID of the fixed position
    * @return True if the position is penalized, false otherwise
    */
-  function isPositionPenalized(address user, uint256 posId) public view returns (bool) {
+  function isPositionPenalized(address user, uint256 posId) public view returns (bool, FixedLoanPosition memory) {
     FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
 
     uint256 dueTime = position.end + graceConfig.period;
-    return block.timestamp > dueTime;
+    return (block.timestamp > dueTime, position);
   }
 
   /**
@@ -403,7 +415,8 @@ contract CreditBroker is
 
     for (uint256 i = 0; i < positions.length; i++) {
       uint256 posId = positions[i].posId;
-      if (isPositionPenalized(user, posId)) {
+      (bool isPenalized, ) = isPositionPenalized(user, posId);
+      if (isPenalized) {
         penalized = true;
         break;
       }
@@ -576,7 +589,6 @@ contract CreditBroker is
       // check delay penalty if user is repaying after grace period ends
       // penalty = 15% * debt
       penalty = CreditBrokerMath.getPenaltyForCreditPosition(
-        repayPrincipalAmt,
         remainingPrincipal,
         remainingInterest,
         position.end,

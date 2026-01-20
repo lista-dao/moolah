@@ -999,7 +999,8 @@ contract CreditBrokerTest is Test {
     assertEq(beforePos.principalRepaid, 0, "unexpected principal repaid");
     assertEq(beforePos.interestRepaid, 0, "unexpected interest repaid");
     uint256 posId = beforePos.posId;
-    assertFalse(broker.isPositionPenalized(borrower, posId), "position should not be penalized");
+    (bool isPenalized, ) = broker.isPositionPenalized(borrower, posId);
+    assertFalse(isPenalized, "position should not be penalized");
 
     uint256 interestDue = CreditBrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.interestRepaid;
     assertGt(interestDue, 0, "interest did not accrue");
@@ -1054,7 +1055,8 @@ contract CreditBrokerTest is Test {
     assertEq(beforePos.principalRepaid, 0, "unexpected principal repaid");
     assertEq(beforePos.interestRepaid, 0, "unexpected interest repaid");
     uint256 posId = beforePos.posId;
-    assertTrue(broker.isPositionPenalized(borrower, posId), "position should be penalized");
+    (bool isPenalized, ) = broker.isPositionPenalized(borrower, posId);
+    assertTrue(isPenalized, "position should be penalized");
 
     uint256 interestDue = CreditBrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.interestRepaid;
     assertApproxEqAbs(interestDue, 1.9178 ether, 1e14, "unexpected interest due");
@@ -1072,6 +1074,9 @@ contract CreditBrokerTest is Test {
     USDT.setBalance(borrower, beforeBalance);
     vm.startPrank(borrower);
     USDT.approve(address(broker), beforeBalance);
+    vm.expectRevert("broker/penalized-position-must-be-paid-in-full");
+    broker.repayAndWithdraw(marketParams, COLLATERAL, 1 ether, posId, COLLATERAL, proof);
+
     broker.repayAndWithdraw(marketParams, COLLATERAL, beforeBalance, posId, COLLATERAL, proof);
     vm.stopPrank();
 

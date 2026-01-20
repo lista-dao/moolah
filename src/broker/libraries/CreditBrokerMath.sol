@@ -223,10 +223,11 @@ library CreditBrokerMath {
    * start                 end                    dueTime
    *
    * @param remainingPrincipal The remaining principal amount
-   * @param repayAmt The actual repay amount (repay amount excluded accrued interest)
+   * @param accruedInterest The accrued interest amount
+   * @param endTime The end time of the fixed loan position
+   * @param graceConfig The grace period configuration
    */
   function getPenaltyForCreditPosition(
-    uint256 repayAmt,
     uint256 remainingPrincipal,
     uint256 accruedInterest, // FE method, know penalty on a position before repay
     uint256 endTime,
@@ -240,16 +241,8 @@ library CreditBrokerMath {
 
     // maximum repayable amount = remaining principal + penalty on the debt
     uint256 debt = remainingPrincipal + accruedInterest;
-    uint256 maxPenalty = Math.mulDiv(debt, graceConfig.penaltyRate, RATE_SCALE, Math.Rounding.Ceil);
-    uint256 maxRepayable = remainingPrincipal + maxPenalty;
-
-    // if repay amount clears all debt, charge maximum penalty
-    if (repayAmt >= maxRepayable) {
-      return maxPenalty;
-    }
-
-    // penalty = repayAmt * penaltyRate
-    return Math.mulDiv(repayAmt, graceConfig.penaltyRate, RATE_SCALE, Math.Rounding.Ceil);
+    uint256 penalty = Math.mulDiv(debt, graceConfig.penaltyRate, RATE_SCALE, Math.Rounding.Ceil);
+    return penalty;
   }
 
   /**
@@ -326,17 +319,15 @@ library CreditBrokerMath {
     interestRepaid = amount < remainingInterest ? amount : remainingInterest;
     uint256 repayPrincipalAmt = amount - interestRepaid;
 
+    // if this is penalized position, ensure full repayment
+    penalty = getPenaltyForCreditPosition(remainingPrincipal, remainingInterest, position.end, graceConfig);
+    if (penalty > 0) {
+      uint256 totalRepayNeeded = remainingInterest + remainingPrincipal + penalty;
+      if (amount < totalRepayNeeded) return (0, 0, 0);
+    }
+
     // then repay principal if there is any amount left
     if (repayPrincipalAmt > 0) {
-      // ----- penalty
-      penalty = getPenaltyForCreditPosition(
-        repayPrincipalAmt,
-        remainingPrincipal,
-        remainingInterest,
-        position.end,
-        graceConfig
-      );
-
       repayPrincipalAmt -= penalty;
 
       // ----- principal
@@ -346,6 +337,26 @@ library CreditBrokerMath {
         principalRepaid = repayPrincipalAmt > remainingPrincipal ? remainingPrincipal : repayPrincipalAmt;
       }
     }
+  }
+
+  /**
+   * @dev Get the total repayable amount needed for a fixed loan position
+   * @param position The fixed loan position to get the total repayable amount for
+   * @param graceConfig The grace period configuration
+   */
+  function getTotalRepayNeeded(
+    FixedLoanPosition memory position,
+    GraceConfig memory graceConfig
+  ) public view returns (uint256 totalRepayNeeded) {
+    // remaining principal before repayment
+    uint256 remainingPrincipal = position.principal - position.principalRepaid;
+    // get outstanding accrued interest
+    uint256 remainingInterest = getInterestForFixedPosition(position) - position.interestRepaid;
+
+    // calculate penalty if any
+    uint256 penalty = getPenaltyForCreditPosition(remainingPrincipal, remainingInterest, position.end, graceConfig);
+
+    totalRepayNeeded = remainingPrincipal + remainingInterest + penalty;
   }
 
   /**
