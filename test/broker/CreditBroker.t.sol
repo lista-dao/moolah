@@ -632,6 +632,7 @@ contract CreditBrokerTest is Test {
     );
     LISTA.setBalance(borrower, listaAmount);
     USDT.setBalance(address(relayer), interestAmount); // relayer needs to have USDT to pay moolah
+    uint before = USDT.balanceOf(borrower);
     vm.startPrank(borrower);
     LISTA.approve(address(broker), type(uint256).max);
     broker.repayInterestWithLista(0, listaAmount, 1, borrower); // only repay interest with LISTA
@@ -639,6 +640,7 @@ contract CreditBrokerTest is Test {
 
     // check LISTA and USDT balance
     assertEq(LISTA.balanceOf(borrower), 0, "borrower LISTA balance mismatch after interest repay");
+    assertEq(USDT.balanceOf(borrower), before, "borrower LISTA balance mismatch after interest repay");
     assertEq(USDT.balanceOf(address(relayer)), 0, "relayer USDT balance mismatch after interest repay");
     assertEq(LISTA.balanceOf(address(relayer)), listaAmount, "borrower LISTA balance mismatch after interest repay");
     assertEq(
