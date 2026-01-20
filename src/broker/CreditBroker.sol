@@ -213,6 +213,8 @@ contract CreditBroker is
     _supplyCollateral(marketParams, collateralAmount, score, proof);
     // don't allow borrow if user has debt
     require(ICreditToken(COLLATERAL_TOKEN).debtOf(msg.sender) == 0, "broker/user-has-debt");
+    // don't allow user to borrow if they are penalized
+    require(!isUserPenalized(msg.sender), "broker/user-penalized");
 
     _borrow(borrowAmount, termId);
   }
@@ -236,6 +238,8 @@ contract CreditBroker is
     ICreditToken(COLLATERAL_TOKEN).syncCreditScore(msg.sender, score, proof);
     // don't allow borrow if user has debt
     require(ICreditToken(COLLATERAL_TOKEN).debtOf(msg.sender) == 0, "broker/user-has-debt");
+    // don't allow user to borrow if they are penalized
+    require(!isUserPenalized(msg.sender), "broker/user-penalized");
 
     _borrow(amount, termId);
   }
@@ -392,7 +396,7 @@ contract CreditBroker is
    * @param user The address of the user
    * @return True if the user has any penalized positions, false otherwise
    */
-  function isUserPenalized(address user) external view returns (bool) {
+  function isUserPenalized(address user) public view returns (bool) {
     FixedLoanPosition[] memory positions = fixedLoanPositions[user];
 
     bool penalized = false;
