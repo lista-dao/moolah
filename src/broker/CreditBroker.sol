@@ -288,7 +288,7 @@ contract CreditBroker is
       require(repayAmount >= totalRepayNeeded, "broker/penalized-position-must-be-paid-in-full");
     }
 
-    _repay(repayAmount, posId, msg.sender);
+    _repay(repayAmount, posId, msg.sender, 0);
     _withdrawCollateral(marketParams, collateralAmount, score, proof);
   }
 
@@ -310,7 +310,7 @@ contract CreditBroker is
       require(amount >= totalRepayNeeded, "broker/penalized-position-must-be-paid-in-full");
     }
 
-    _repay(amount, posId, onBehalf);
+    _repay(amount, posId, onBehalf, 0);
   }
 
   /**
@@ -346,9 +346,17 @@ contract CreditBroker is
     // transfer interest amount from Relayer to address(this)
     ICreditBrokerInterestRelayer(RELAYER).transferLoan(interestAmount);
 
+    // add interest amount to total repay amount
     loanTokenAmount += interestAmount;
 
-    _repay(loanTokenAmount, posId, onBehalf);
+    // check if position is penalized; if so, must pay in full
+    (bool isPenalized, FixedLoanPosition memory position) = isPositionPenalized(onBehalf, posId);
+    if (isPenalized) {
+      uint256 totalRepayNeeded = CreditBrokerMath.getTotalRepayNeeded(position, graceConfig);
+      require(loanTokenAmount >= totalRepayNeeded, "broker/penalized-position-must-be-paid-in-full");
+    }
+
+    _repay(loanTokenAmount, posId, onBehalf, interestAmount);
 
     emit RepayInterestWithLista(onBehalf, posId, interestAmount, listaAmount, listaPrice);
   }
@@ -563,7 +571,7 @@ contract CreditBroker is
     emit FixedLoanPositionCreated(user, fixedPosUuid, amount, start, end, term.apr, termId);
   }
 
-  function _repay(uint256 amount, uint256 posId, address onBehalf) internal {
+  function _repay(uint256 amount, uint256 posId, address onBehalf, uint256 receivedInterest) internal {
     require(amount > 0, "broker/zero-amount");
     require(onBehalf != address(0), "broker/zero-address");
     address user = msg.sender;
@@ -581,7 +589,10 @@ contract CreditBroker is
 
     // repay interest first, it might be zero if user just repaid before
     if (repayInterestAmt > 0) {
-      IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), repayInterestAmt);
+      if (repayInterestAmt > receivedInterest) {
+        IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), repayInterestAmt - receivedInterest);
+      }
+
       // update repaid interest amount
       position.interestRepaid += repayInterestAmt;
       // supply interest into vault as revenue
