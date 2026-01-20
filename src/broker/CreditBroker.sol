@@ -53,16 +53,15 @@ contract CreditBroker is
   IOracle public immutable ORACLE;
   /// @dev LISTA token address; can be used to repay interest with discount
   address public immutable LISTA;
+  /// @dev credit token address
+  address public immutable COLLATERAL_TOKEN;
+  /// @dev credit token address; used in `Moolah.setProvider`
+  address public immutable TOKEN;
+
   uint256 public constant MAX_FIXED_TERM_APR = 9e27; // 8 * RATE_SCALE = 800% MAX APR
   uint256 public constant MIN_FIXED_TERM_APR = 105 * 1e25; // 0.05 * RATE_SCALE = 5% MIN APR
 
   address public LOAN_TOKEN;
-  /// @dev credit token address
-  address public COLLATERAL_TOKEN;
-
-  /// @dev credit token address; used in `Moolah.setProvider`
-  address public TOKEN;
-
   Id public MARKET_ID;
   string public BROKER_NAME;
 
@@ -111,11 +110,16 @@ contract CreditBroker is
    * @param relayer The address of the BrokerInterestRelayer contract
    * @param oracle The address of the oracle
    * @param lista The address of the LISTA token
+   * @param creditToken The address of the credit token
    */
-  constructor(address moolah, address relayer, address oracle, address lista) {
+  constructor(address moolah, address relayer, address oracle, address lista, address creditToken) {
     // zero address assert
     require(
-      moolah != address(0) && relayer != address(0) && oracle != address(0) && lista != address(0),
+      moolah != address(0) &&
+        relayer != address(0) &&
+        oracle != address(0) &&
+        lista != address(0) &&
+        creditToken != address(0),
       "broker/zero-address-provided"
     );
     // set addresses
@@ -123,6 +127,8 @@ contract CreditBroker is
     RELAYER = relayer;
     ORACLE = IOracle(oracle);
     LISTA = lista;
+    COLLATERAL_TOKEN = creditToken;
+    TOKEN = creditToken;
 
     _disableInitializers();
   }
@@ -815,9 +821,8 @@ contract CreditBroker is
     require(Id.unwrap(MARKET_ID) == bytes32(0), "broker/invalid-market");
     MARKET_ID = marketId;
     MarketParams memory _marketParams = MOOLAH.idToMarketParams(marketId);
+    require(_marketParams.collateralToken == COLLATERAL_TOKEN, "broker/invalid-collateral-token");
     LOAN_TOKEN = _marketParams.loanToken;
-    COLLATERAL_TOKEN = _marketParams.collateralToken;
-    TOKEN = _marketParams.collateralToken;
 
     // set broker name
     string memory collateralTokenName = IERC20Metadata(COLLATERAL_TOKEN).symbol();

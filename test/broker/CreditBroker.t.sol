@@ -129,7 +129,13 @@ contract CreditBrokerTest is Test {
     relayer = CreditBrokerInterestRelayer(address(relayerProxy));
 
     // Deploy CreditBroker proxy first (used as oracle by the market)
-    CreditBroker bImpl = new CreditBroker(address(moolah), address(relayer), address(oracle), address(LISTA));
+    CreditBroker bImpl = new CreditBroker(
+      address(moolah),
+      address(relayer),
+      address(oracle),
+      address(LISTA),
+      address(creditToken)
+    );
     ERC1967Proxy bProxy = new ERC1967Proxy(
       address(bImpl),
       abi.encodeWithSelector(CreditBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, 10)
@@ -140,6 +146,8 @@ contract CreditBrokerTest is Test {
     assertEq(address(broker.MOOLAH()), address(moolah));
     assertEq(broker.RELAYER(), address(relayer));
     assertEq(address(broker.ORACLE()), address(oracle));
+    assertEq(address(broker.COLLATERAL_TOKEN()), address(creditToken));
+    assertEq(broker.TOKEN(), address(creditToken));
 
     // Create market using CreditBroker as the oracle address
     marketParams = MarketParams({
@@ -1252,7 +1260,13 @@ contract CreditBrokerTest is Test {
 
   function test_marketIdSet_guard_reverts() public {
     // Deploy a second broker without setting market id
-    CreditBroker bImpl2 = new CreditBroker(address(moolah), address(vault), address(oracle), address(LISTA));
+    CreditBroker bImpl2 = new CreditBroker(
+      address(moolah),
+      address(vault),
+      address(oracle),
+      address(LISTA),
+      address(creditToken)
+    );
     ERC1967Proxy bProxy2 = new ERC1967Proxy(
       address(bImpl2),
       abi.encodeWithSelector(CreditBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, 10)
