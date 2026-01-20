@@ -89,7 +89,6 @@ interface ICreditBroker is ICreditBrokerBase {
   event FixedTermAndRateUpdated(uint256 termId, uint256 duration, uint256 apr);
   event MarketIdSet(Id marketId);
   event BorrowPaused(bool paused);
-  event AddedLiquidationWhitelist(address indexed account);
   event GraceConfigUpdated(uint256 newPeriod, uint256 newPenaltyRate, uint256 newNoInterestPeriod);
   event ListaDiscountRateUpdated(uint256 newRate);
   event PaidOffPenalizedPosition(address indexed user, uint256 posId, uint256 paidOffTime);
