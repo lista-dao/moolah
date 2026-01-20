@@ -1009,7 +1009,7 @@ contract CreditBrokerTest is Test {
     assertEq(beforePos.principalRepaid, 0, "unexpected principal repaid");
     assertEq(beforePos.interestRepaid, 0, "unexpected interest repaid");
     uint256 posId = beforePos.posId;
-    (bool isPenalized, ) = broker.isPositionPenalized(borrower, posId);
+    bool isPenalized = broker.isPositionPenalized(borrower, posId);
     assertFalse(isPenalized, "position should not be penalized");
 
     uint256 interestDue = CreditBrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.interestRepaid;
@@ -1065,7 +1065,7 @@ contract CreditBrokerTest is Test {
     assertEq(beforePos.principalRepaid, 0, "unexpected principal repaid");
     assertEq(beforePos.interestRepaid, 0, "unexpected interest repaid");
     uint256 posId = beforePos.posId;
-    (bool isPenalized, ) = broker.isPositionPenalized(borrower, posId);
+    bool isPenalized = broker.isPositionPenalized(borrower, posId);
     assertTrue(isPenalized, "position should be penalized");
 
     uint256 interestDue = CreditBrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.interestRepaid;

@@ -282,12 +282,6 @@ contract CreditBroker is
     uint256 score,
     bytes32[] calldata proof
   ) external override marketIdSet whenNotPaused nonReentrant {
-    (bool isPenalized, FixedLoanPosition memory position) = isPositionPenalized(msg.sender, posId);
-    if (isPenalized) {
-      uint256 totalRepayNeeded = CreditBrokerMath.getTotalRepayNeeded(position, graceConfig);
-      require(repayAmount >= totalRepayNeeded, "broker/penalized-position-must-be-paid-in-full");
-    }
-
     _repay(repayAmount, posId, msg.sender, 0);
     _withdrawCollateral(marketParams, collateralAmount, score, proof);
   }
@@ -304,12 +298,6 @@ contract CreditBroker is
     uint256 posId,
     address onBehalf
   ) external override marketIdSet whenNotPaused nonReentrant {
-    (bool isPenalized, FixedLoanPosition memory position) = isPositionPenalized(onBehalf, posId);
-    if (isPenalized) {
-      uint256 totalRepayNeeded = CreditBrokerMath.getTotalRepayNeeded(position, graceConfig);
-      require(amount >= totalRepayNeeded, "broker/penalized-position-must-be-paid-in-full");
-    }
-
     _repay(amount, posId, onBehalf, 0);
   }
 
@@ -348,13 +336,6 @@ contract CreditBroker is
 
     // add interest amount to total repay amount
     loanTokenAmount += interestAmount;
-
-    // check if position is penalized; if so, must pay in full
-    (bool isPenalized, FixedLoanPosition memory position) = isPositionPenalized(onBehalf, posId);
-    if (isPenalized) {
-      uint256 totalRepayNeeded = CreditBrokerMath.getTotalRepayNeeded(position, graceConfig);
-      require(loanTokenAmount >= totalRepayNeeded, "broker/penalized-position-must-be-paid-in-full");
-    }
 
     _repay(loanTokenAmount, posId, onBehalf, interestAmount);
 
@@ -410,11 +391,15 @@ contract CreditBroker is
    * @param posId The ID of the fixed position
    * @return True if the position is penalized, false otherwise
    */
-  function isPositionPenalized(address user, uint256 posId) public view returns (bool, FixedLoanPosition memory) {
+  function isPositionPenalized(address user, uint256 posId) public view returns (bool) {
     FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
 
+    return _isPositionPenalized(position);
+  }
+
+  function _isPositionPenalized(FixedLoanPosition memory position) internal view returns (bool) {
     uint256 dueTime = position.end + graceConfig.period;
-    return (block.timestamp > dueTime, position);
+    return block.timestamp > dueTime;
   }
 
   /**
@@ -428,9 +413,7 @@ contract CreditBroker is
     bool penalized = false;
 
     for (uint256 i = 0; i < positions.length; i++) {
-      uint256 posId = positions[i].posId;
-      (bool isPenalized, ) = isPositionPenalized(user, posId);
-      if (isPenalized) {
+      if (_isPositionPenalized(positions[i])) {
         penalized = true;
         break;
       }
@@ -578,6 +561,12 @@ contract CreditBroker is
 
     // fetch position (will revert if not found)
     FixedLoanPosition memory position = _getFixedPositionByPosId(onBehalf, posId);
+
+    // check if position is penalized; if so, must pay in full
+    if (_isPositionPenalized(position)) {
+      uint256 totalRepayNeeded = CreditBrokerMath.getTotalRepayNeeded(position, graceConfig);
+      require(amount >= totalRepayNeeded, "broker/penalized-position-must-be-paid-in-full");
+    }
 
     // remaining principal before repayment
     uint256 remainingPrincipal = position.principal - position.principalRepaid;
