@@ -255,7 +255,7 @@ library CreditBrokerMath {
     FixedLoanPosition memory position,
     uint256 listaPrice,
     uint256 discountRate
-  ) public view returns (uint256) {
+  ) external view returns (uint256) {
     // get outstanding accrued interest
     uint256 accruedInterest = getInterestForFixedPosition(position) - position.interestRepaid;
 
@@ -309,7 +309,7 @@ library CreditBrokerMath {
     FixedLoanPosition memory position,
     uint256 amount,
     GraceConfig memory graceConfig
-  ) public view returns (uint256 interestRepaid, uint256 penalty, uint256 principalRepaid) {
+  ) external view returns (uint256 interestRepaid, uint256 penalty, uint256 principalRepaid) {
     // remaining principal before repayment
     uint256 remainingPrincipal = position.principal - position.principalRepaid;
     // get outstanding accrued interest
@@ -347,7 +347,7 @@ library CreditBrokerMath {
   function getTotalRepayNeeded(
     FixedLoanPosition memory position,
     GraceConfig memory graceConfig
-  ) public view returns (uint256 totalRepayNeeded) {
+  ) external view returns (uint256 totalRepayNeeded) {
     // remaining principal before repayment
     uint256 remainingPrincipal = position.principal - position.principalRepaid;
     // get outstanding accrued interest

@@ -120,7 +120,7 @@ contract CreditBroker is
         oracle != address(0) &&
         lista != address(0) &&
         creditToken != address(0),
-      "broker/zero-address-provided"
+      "broker/zero-address"
     );
     // set addresses
     MOOLAH = IMoolah(moolah);
@@ -154,7 +154,7 @@ contract CreditBroker is
         _bot != address(0) &&
         _pauser != address(0) &&
         _maxFixedLoanPositions > 0,
-      "broker/zero-address-provided"
+      "broker/zero-address"
     );
 
     __AccessControlEnumerable_init();
@@ -391,7 +391,7 @@ contract CreditBroker is
    * @param posId The ID of the fixed position
    * @return True if the position is penalized, false otherwise
    */
-  function isPositionPenalized(address user, uint256 posId) public view returns (bool) {
+  function isPositionPenalized(address user, uint256 posId) external view returns (bool) {
     FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
 
     return _isPositionPenalized(position);
@@ -425,7 +425,7 @@ contract CreditBroker is
    * @dev Get the total debt of a user
    * @param user The address of the user
    */
-  function getUserTotalDebt(address user) public view override returns (uint256 totalDebt) {
+  function getUserTotalDebt(address user) external view override returns (uint256 totalDebt) {
     FixedLoanPosition[] memory fixedPositions = fixedLoanPositions[user];
     for (uint256 i = 0; i < fixedPositions.length; i++) {
       FixedLoanPosition memory _fixedPos = fixedPositions[i];
@@ -436,6 +436,11 @@ contract CreditBroker is
     }
   }
 
+  /**
+   * @dev Get the maximum LISTA amount that can be used to repay interest for a fixed position
+   * @param position The fixed loan position
+   * @return The maximum LISTA amount
+   */
   function getMaxListaForInterestRepay(FixedLoanPosition memory position) external view returns (uint256) {
     uint256 listaPrice = IOracle(ORACLE).peek(LISTA);
     return CreditBrokerMath.getMaxListaForInterestRepay(position, listaPrice, listaDiscountRate);
@@ -805,7 +810,7 @@ contract CreditBroker is
     uint256,
     bytes calldata
   ) external marketIdSet whenNotPaused nonReentrant {
-    revert("creditBroker/not-support-liquidation");
+    revert("not-support-liquidation");
   }
 
   ///////////////////////////////////////
