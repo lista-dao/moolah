@@ -11,6 +11,7 @@ contract DeployCreditBroker is Script {
   address oracle = 0x79e9675cDe605Ef9965AbCE185C5FD08d0DE16B1;
   uint256 maxFixedLoanPositions = 10;
   address lista_testnet = 0x90b94D605E069569Adf33C0e73E26a83637c94B1;
+  address creditToken_testnet = 0xd0D36982474f8BD8A6f4B311b843f644187df50B;
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY_TESTNET");
@@ -19,7 +20,7 @@ contract DeployCreditBroker is Script {
     vm.startBroadcast(deployerPrivateKey);
 
     // Deploy CreditBroker implementation
-    CreditBroker impl = new CreditBroker(moolah_testnet, interestRelayer, oracle, lista_testnet);
+    CreditBroker impl = new CreditBroker(moolah_testnet, interestRelayer, oracle, lista_testnet, creditToken_testnet);
     console.log("CreditBroker implementation: ", address(impl));
 
     // Deploy CreditBroker proxy
