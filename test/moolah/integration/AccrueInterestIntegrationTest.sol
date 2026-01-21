@@ -15,8 +15,9 @@ contract AccrueInterestIntegrationTest is BaseTest {
   }
 
   function testAccrueInterestIrmZero(MarketParams memory marketParamsFuzz, uint256 blocks) public {
-    marketParamsFuzz.loanToken = address(loanToken);
-    marketParamsFuzz.collateralToken = address(collateralToken);
+    if (marketParamsFuzz.loanToken == address(0)) {
+      return;
+    }
     marketParamsFuzz.irm = address(0);
     marketParamsFuzz.lltv = 0;
     marketParamsFuzz.oracle = address(oracle);

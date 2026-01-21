@@ -7,6 +7,7 @@ interface ILiquidator {
     address loanToken;
     uint256 seized;
     address collateralPair;
+    address collateralRouterSpender;
     bytes swapCollateralData;
     bool swapCollateral;
     bool swapSmartCollateral; // Below fields are only used for smart collateral liquidation callback
