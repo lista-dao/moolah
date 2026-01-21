@@ -119,6 +119,19 @@ library CreditBrokerMath {
     }
   }
 
+  /**
+   * @dev Get the remaining debt for a fixed loan position
+   * @param fixedPosition The fixed loan position
+   */
+  function getPositionDebt(
+    FixedLoanPosition memory fixedPosition
+  ) external view returns (uint256 remainingPrincipal, uint256 remainingInterest) {
+    // remaining principal before repayment
+    remainingPrincipal = fixedPosition.principal - fixedPosition.principalRepaid;
+    // get outstanding accrued interest
+    remainingInterest = getInterestForFixedPosition(fixedPosition) - fixedPosition.interestRepaid;
+  }
+
   function mulDivCeiling(uint256 a, uint256 b, uint256 c) public pure returns (uint256) {
     return Math.mulDiv(a, b, c, Math.Rounding.Ceil);
   }
