@@ -370,7 +370,7 @@ contract CreditBroker is
    * @param token The address of the token to get the price for
    * @param user The address of the user
    */
-  function peek(address token, address user) public view override marketIdSet returns (uint256 price) {
+  function peek(address token, address user) external view override marketIdSet returns (uint256 price) {
     require(user != address(0), "broker/zero-address");
     require(token == COLLATERAL_TOKEN || token == LOAN_TOKEN, "broker/unsupported-token");
     price = CreditBrokerMath.peek(token, user, address(MOOLAH), address(ORACLE));
@@ -437,38 +437,19 @@ contract CreditBroker is
   }
 
   /**
-   * @dev Get the maximum LISTA amount that can be used to repay interest for a fixed position
-   * @param position The fixed loan position
-   * @return The maximum LISTA amount
+   * @dev Get a fixed loan position by PosId
+   * @param user The address of the user
+   * @param posId The ID of the position to get
    */
-  function getMaxListaForInterestRepay(FixedLoanPosition memory position) external view returns (uint256) {
-    uint256 listaPrice = IOracle(ORACLE).peek(LISTA);
-    return CreditBrokerMath.getMaxListaForInterestRepay(position, listaPrice, listaDiscountRate);
+  function getPosition(address user, uint256 posId) external view override returns (FixedLoanPosition memory) {
+    return _getFixedPositionByPosId(user, posId);
   }
 
   /**
-   * @dev Preview the interest, penalty and principal repaid
-   * @notice for frontend usage, when user is repaying a fixed loan position with certain amount
-   * @param user The address of the user
-   * @param amount The amount to repay
-   * @param posId The ID of the fixed position to repay
-   * @return interestRepaid The interest portion of the repayment
-   * @return penalty The penalty portion of the repayment
-   * @return principalRepaid The principal portion of the repayment
+   * @dev get the grace config
    */
-  function previewRepayFixedLoanPosition(
-    address user,
-    uint256 amount,
-    uint256 posId
-  ) external view returns (uint256 interestRepaid, uint256 penalty, uint256 principalRepaid) {
-    require(amount > 0, "broker/zero-amount");
-    require(user != address(0), "broker/zero-address");
-    FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
-    (interestRepaid, penalty, principalRepaid) = CreditBrokerMath.previewRepayFixedLoanPosition(
-      position,
-      amount,
-      graceConfig
-    );
+  function getGraceConfig() external view override returns (GraceConfig memory) {
+    return graceConfig;
   }
 
   ///////////////////////////////////////

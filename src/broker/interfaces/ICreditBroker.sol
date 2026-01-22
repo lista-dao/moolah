@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import { Id, MarketParams, IMoolah } from "moolah/interfaces/IMoolah.sol";
+import { IOracle } from "../../moolah/interfaces/IOracle.sol";
 
 enum FixedTermType {
   ACCRUE_INTEREST, // 0: interest is accrued over time, user pays interest based on time elapsed
@@ -52,12 +53,19 @@ interface ICreditBrokerBase {
   function MARKET_ID() external view returns (Id);
   /// @dev the Moolah contract
   function MOOLAH() external view returns (IMoolah);
+  /// @dev resilient oracle
+  function ORACLE() external view returns (IOracle);
+  /// @dev lista address
+  function LISTA() external view returns (address);
 
   /// @dev peek the price of the token per user
   ///      decreasing according to the accruing interest for collateral token
   /// @param token The address of the token to peek
   /// @param user The address of the user to peek
   function peek(address token, address user) external view returns (uint256 price);
+
+  /// @dev get the lista discount rate for interest repayment
+  function listaDiscountRate() external view returns (uint256);
 }
 
 /// @dev Broker interface
@@ -113,6 +121,12 @@ interface ICreditBroker is ICreditBrokerBase {
   /// @dev get the total debt of a user including principal and interest
   /// @param user The address of the user
   function getUserTotalDebt(address user) external view returns (uint256 totalDebt);
+
+  /// @dev get the fixed loan position info
+  function getPosition(address user, uint256 posId) external view returns (FixedLoanPosition memory);
+
+  /// @dev get the grace config for credit broker
+  function getGraceConfig() external view returns (GraceConfig memory);
 
   /// ------------------------------
   ///      External functions

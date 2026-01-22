@@ -26,6 +26,7 @@ import { UtilsLib } from "moolah/libraries/UtilsLib.sol";
 import { ORACLE_PRICE_SCALE, LIQUIDATION_CURSOR, MAX_LIQUIDATION_INCENTIVE_FACTOR } from "moolah/libraries/ConstantsLib.sol";
 
 import { CreditToken } from "../../src/utils/CreditToken.sol";
+import { CreditBrokerInfo } from "../../src/broker/CreditBrokerInfo.sol";
 import { Merkle } from "murky/src/Merkle.sol";
 
 contract CreditBrokerTest is Test {
@@ -40,6 +41,7 @@ contract CreditBrokerTest is Test {
   CreditBroker public broker;
   MoolahVault public vault;
   CreditBrokerInterestRelayer public relayer;
+  CreditBrokerInfo public info;
 
   // Market commons
   MarketParams public marketParams;
@@ -94,6 +96,14 @@ contract CreditBrokerTest is Test {
     LISTA.setName("LISTA");
     LISTA.setSymbol("LISTA");
     LISTA.setDecimals(USDT_DECIMALS);
+
+    // Deploy CreditBrokerInfo
+    CreditBrokerInfo infoImpl = new CreditBrokerInfo();
+    ERC1967Proxy infoProxy = new ERC1967Proxy(
+      address(infoImpl),
+      abi.encodeWithSelector(CreditBrokerInfo.initialize.selector, ADMIN)
+    );
+    info = CreditBrokerInfo(address(infoProxy));
 
     // Deploy CreditToken as collateral token
     _deployCreditToken();
@@ -624,7 +634,7 @@ contract CreditBrokerTest is Test {
     skip(7 days);
     uint totalDebt = broker.getUserTotalDebt(borrower);
     uint usdtBefore = USDT.balanceOf(address(moolah));
-    uint listaAmount = broker.getMaxListaForInterestRepay(position);
+    uint listaAmount = info.getMaxListaToRepay(address(broker), borrower, position.posId);
     uint256 interestAmount = CreditBrokerMath.getInterestAmountFromLista(
       listaAmount,
       oracle.peek(address(LISTA)),
