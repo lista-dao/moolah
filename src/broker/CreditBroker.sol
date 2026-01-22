@@ -104,6 +104,18 @@ contract CreditBroker is
     _;
   }
 
+  /// @dev ensure user has no debt before borrowing new fixed position
+  modifier noDebt() {
+    require(ICreditToken(COLLATERAL_TOKEN).debtOf(msg.sender) == 0, "Broker/user-has-debt");
+    _;
+  }
+
+  /// @dev ensure user has no penalized positions before borrowing new fixed position
+  modifier userNotPenalized() {
+    require(!isUserPenalized(msg.sender), "broker/user-penalized");
+    _;
+  }
+
   /**
    * @dev Constructor for the LendingBroker contract
    * @param moolah The address of the Moolah contract
@@ -216,13 +228,12 @@ contract CreditBroker is
     uint256 score,
     bytes32[] calldata proof
   ) external override marketIdSet whenNotPaused whenBorrowNotPaused nonReentrant {
-    _supplyCollateral(marketParams, collateralAmount, score, proof);
-    // don't allow borrow if user has debt
-    require(ICreditToken(COLLATERAL_TOKEN).debtOf(msg.sender) == 0, "broker/user-has-debt");
-    // don't allow user to borrow if they are penalized
-    require(!isUserPenalized(msg.sender), "broker/user-penalized");
+    if (collateralAmount > 0) _supplyCollateral(marketParams, collateralAmount, score, proof);
 
-    _borrow(borrowAmount, termId);
+    // if any debt, try withdraw and burn them before borrowing
+    _tryWithdrawAndBurnDebt(msg.sender, score, proof);
+
+    if (borrowAmount > 0) _borrow(borrowAmount, termId);
   }
 
   /**
@@ -240,12 +251,8 @@ contract CreditBroker is
     uint256 score,
     bytes32[] calldata proof
   ) external override marketIdSet whenNotPaused whenBorrowNotPaused nonReentrant {
-    // sync credit score before borrowing
-    ICreditToken(COLLATERAL_TOKEN).syncCreditScore(msg.sender, score, proof);
-    // don't allow borrow if user has debt
-    require(ICreditToken(COLLATERAL_TOKEN).debtOf(msg.sender) == 0, "broker/user-has-debt");
-    // don't allow user to borrow if they are penalized
-    require(!isUserPenalized(msg.sender), "broker/user-penalized");
+    // if any debt, try withdraw and burn them before borrowing
+    _tryWithdrawAndBurnDebt(msg.sender, score, proof);
 
     _borrow(amount, termId);
   }
@@ -282,8 +289,9 @@ contract CreditBroker is
     uint256 score,
     bytes32[] calldata proof
   ) external override marketIdSet whenNotPaused nonReentrant {
-    _repay(repayAmount, posId, msg.sender, 0);
-    _withdrawCollateral(marketParams, collateralAmount, score, proof);
+    require(collateralAmount > 0 || repayAmount > 0, "broker/zero-amounts");
+    if (repayAmount > 0) _repay(repayAmount, posId, msg.sender, 0);
+    if (collateralAmount > 0) _withdrawCollateral(marketParams, collateralAmount, score, proof);
   }
 
   /**
@@ -495,7 +503,7 @@ contract CreditBroker is
     ICreditToken(COLLATERAL_TOKEN).syncCreditScore(msg.sender, score, proof);
   }
 
-  function _borrow(uint256 amount, uint256 termId) internal {
+  function _borrow(uint256 amount, uint256 termId) internal userNotPenalized noDebt {
     require(amount > 0, "broker/zero-amount");
     address user = msg.sender;
     require(fixedLoanPositions[user].length < maxFixedLoanPositions, "broker/exceed-max-fixed-positions");
@@ -635,6 +643,14 @@ contract CreditBroker is
       position.principalRepaid,
       position.principalRepaid >= position.principal
     );
+  }
+
+  function _tryWithdrawAndBurnDebt(address user, uint256 score, bytes32[] calldata proof) internal {
+    MarketParams memory marketParams = _getMarketParams(MARKET_ID);
+    uint256 debt = ICreditToken(COLLATERAL_TOKEN).debtOf(user);
+    if (debt == 0) return;
+
+    _withdrawCollateral(marketParams, debt, score, proof);
   }
 
   /**

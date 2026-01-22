@@ -355,6 +355,63 @@ contract CreditBrokerTest is Test {
     assertEq(pos.collateral, COLLATERAL, "moolah position collateral mismatch");
   }
 
+  // score = 500 and supply 100, then score = 300 and supply 200, should succeed
+  function test_supplyAndBorrow_noBorrow_decreaseScore() public {
+    uint score = 500 ether;
+    uint supplyAmount = 100 ether;
+    _generateTree(borrower, score, creditToken.versionId() + 1);
+
+    vm.startPrank(borrower);
+    creditToken.approve(address(broker), type(uint256).max);
+    broker.supplyAndBorrow(marketParams, supplyAmount, 0, 1, score, proof);
+    vm.stopPrank();
+
+    skip(2 days);
+
+    // decrease score
+    score = 300 ether;
+    _generateTree(borrower, score, creditToken.versionId() + 1);
+    supplyAmount = 200 ether;
+    vm.startPrank(borrower);
+    broker.supplyAndBorrow(marketParams, supplyAmount, 0, 1, score, proof);
+    vm.stopPrank();
+  }
+
+  // score = 500 and supply 500, no borrow, no withdraw, then score = 300 and should be able to borrow 300
+  function test_supplyCollateralMax_decreaseScore() public {
+    // Setup a fixed term product
+    uint256 termId = 1;
+    uint256 duration = 14 days;
+    uint256 apr = 105 * 1e25;
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type1 });
+
+    vm.prank(BOT);
+    broker.updateFixedTermAndRate(term, false);
+
+    uint score = 500 ether;
+    uint supplyAmount = 500 ether;
+    _generateTree(borrower, score, creditToken.versionId() + 1);
+
+    vm.startPrank(borrower);
+    creditToken.approve(address(broker), type(uint256).max);
+    broker.supplyAndBorrow(marketParams, supplyAmount, 0, termId, score, proof);
+    vm.stopPrank();
+
+    skip(2 days);
+
+    // decrease score
+    score = 300 ether;
+    _generateTree(borrower, score, creditToken.versionId() + 1);
+
+    uint borrowAmount = 300 ether;
+    vm.startPrank(borrower);
+    broker.supplyAndBorrow(marketParams, 0, borrowAmount, termId, score, proof);
+    vm.stopPrank();
+
+    // check balance
+    assertEq(USDT.balanceOf(borrower), 300 ether, "borrower loan token balance mismatch after borrow");
+  }
+
   function test_doubleSupplyShouldRevert() public {
     test_supplyCollateral();
 
