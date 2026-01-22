@@ -130,7 +130,7 @@ contract Moolah is
   /// @inheritdoc IMoolahBase
   function enableLltv(uint256 lltv) external onlyRole(MANAGER) {
     require(!isLltvEnabled[lltv], ErrorsLib.ALREADY_SET);
-    require(lltv < WAD, ErrorsLib.MAX_LLTV_EXCEEDED);
+    require(lltv <= WAD, ErrorsLib.MAX_LLTV_EXCEEDED);
 
     isLltvEnabled[lltv] = true;
 
