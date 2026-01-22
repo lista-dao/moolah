@@ -197,23 +197,20 @@ contract CreditBroker is
 
   /**
    * @dev supply collateral(credit token) to Moolah
-   * @param marketParams The market parameters
    * @param amount The amount of credit token to supply
    * @param score The credit score of the user
    * @param proof The merkle proof for credit score sync
    */
   function supplyCollateral(
-    MarketParams memory marketParams,
     uint256 amount,
     uint256 score,
     bytes32[] calldata proof
   ) external override marketIdSet whenNotPaused nonReentrant {
-    _supplyCollateral(marketParams, amount, score, proof);
+    _supplyCollateral(amount, score, proof);
   }
 
   /**
    * @dev supply collateral(credit token) and borrow an fixed amount with fixed term and rate
-   * @param marketParams The market parameters
    * @param collateralAmount The amount of credit token to supply
    * @param borrowAmount amount to borrow
    * @param termId The ID of the term
@@ -221,14 +218,13 @@ contract CreditBroker is
    * @param proof The merkle proof for credit score
    */
   function supplyAndBorrow(
-    MarketParams memory marketParams,
     uint256 collateralAmount,
     uint256 borrowAmount,
     uint256 termId,
     uint256 score,
     bytes32[] calldata proof
   ) external override marketIdSet whenNotPaused whenBorrowNotPaused nonReentrant {
-    if (collateralAmount > 0) _supplyCollateral(marketParams, collateralAmount, score, proof);
+    if (collateralAmount > 0) _supplyCollateral(collateralAmount, score, proof);
 
     // if any debt, try withdraw and burn them before borrowing
     _tryWithdrawAndBurnDebt(msg.sender, score, proof);
@@ -259,22 +255,19 @@ contract CreditBroker is
 
   /**
    * @dev withdraw collateral(credit token) from Moolah
-   * @param marketParams The market parameters
    * @param amount The amount of credit token to withdraw
    * @param proof The merkle proof for credit score sync
    */
   function withdrawCollateral(
-    MarketParams memory marketParams,
     uint256 amount,
     uint256 score,
     bytes32[] calldata proof
   ) external override marketIdSet whenNotPaused nonReentrant {
-    _withdrawCollateral(marketParams, amount, score, proof);
+    _withdrawCollateral(amount, score, proof);
   }
 
   /**
    * @dev repay a fixed loan position and withdraw collateral(credit token) from Moolah
-   * @param marketParams The market parameters
    * @param collateralAmount The amount of credit token to withdraw
    * @param repayAmount The amount to repay
    * @param posId The ID of the fixed position to repay
@@ -282,7 +275,6 @@ contract CreditBroker is
    * @param proof The merkle proof for credit score sync
    */
   function repayAndWithdraw(
-    MarketParams memory marketParams,
     uint256 collateralAmount,
     uint256 repayAmount,
     uint256 posId,
@@ -291,7 +283,7 @@ contract CreditBroker is
   ) external override marketIdSet whenNotPaused nonReentrant {
     require(collateralAmount > 0 || repayAmount > 0, "broker/zero-amounts");
     if (repayAmount > 0) _repay(repayAmount, posId, msg.sender, 0);
-    if (collateralAmount > 0) _withdrawCollateral(marketParams, collateralAmount, score, proof);
+    if (collateralAmount > 0) _withdrawCollateral(collateralAmount, score, proof);
   }
 
   /**
@@ -464,13 +456,7 @@ contract CreditBroker is
   /////      Internal functions     /////
   ///////////////////////////////////////
 
-  function _supplyCollateral(
-    MarketParams memory marketParams,
-    uint256 amount,
-    uint256 score,
-    bytes32[] calldata proof
-  ) internal {
-    require(marketParams.collateralToken == COLLATERAL_TOKEN, "broker/invalid-collateral-token");
+  function _supplyCollateral(uint256 amount, uint256 score, bytes32[] calldata proof) internal {
     require(amount > 0, "broker/zero-amount");
 
     // sync msg.sender's credit score with creditToken balance before supplying collateral
@@ -481,20 +467,14 @@ contract CreditBroker is
     // approve to moolah
     IERC20(COLLATERAL_TOKEN).safeIncreaseAllowance(address(MOOLAH), amount);
     // supply to moolah
-    MOOLAH.supplyCollateral(marketParams, amount, msg.sender, "");
+    MOOLAH.supplyCollateral(_getMarketParams(MARKET_ID), amount, msg.sender, "");
   }
 
-  function _withdrawCollateral(
-    MarketParams memory marketParams,
-    uint256 amount,
-    uint256 score,
-    bytes32[] calldata proof
-  ) internal {
-    require(marketParams.collateralToken == COLLATERAL_TOKEN, "broker/invalid-collateral-token");
+  function _withdrawCollateral(uint256 amount, uint256 score, bytes32[] calldata proof) internal {
     require(amount > 0, "broker/zero-amount");
 
     // withdraw from moolah
-    MOOLAH.withdrawCollateral(marketParams, amount, msg.sender, address(this));
+    MOOLAH.withdrawCollateral(_getMarketParams(MARKET_ID), amount, msg.sender, address(this));
 
     // transfer to msg.sender
     IERC20(COLLATERAL_TOKEN).safeTransfer(msg.sender, amount);
@@ -646,11 +626,10 @@ contract CreditBroker is
   }
 
   function _tryWithdrawAndBurnDebt(address user, uint256 score, bytes32[] calldata proof) internal {
-    MarketParams memory marketParams = _getMarketParams(MARKET_ID);
     uint256 debt = ICreditToken(COLLATERAL_TOKEN).debtOf(user);
     if (debt == 0) return;
 
-    _withdrawCollateral(marketParams, debt, score, proof);
+    _withdrawCollateral(debt, score, proof);
   }
 
   /**

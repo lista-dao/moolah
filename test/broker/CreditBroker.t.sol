@@ -333,7 +333,7 @@ contract CreditBrokerTest is Test {
     _generateTree(borrower, COLLATERAL, creditToken.versionId() + 1);
     vm.startPrank(borrower);
     creditToken.approve(address(broker), type(uint256).max);
-    broker.supplyCollateral(marketParams, COLLATERAL, COLLATERAL, proof);
+    broker.supplyCollateral(COLLATERAL, COLLATERAL, proof);
     vm.stopPrank();
 
     // Check balance
@@ -363,7 +363,7 @@ contract CreditBrokerTest is Test {
 
     vm.startPrank(borrower);
     creditToken.approve(address(broker), type(uint256).max);
-    broker.supplyAndBorrow(marketParams, supplyAmount, 0, 1, score, proof);
+    broker.supplyAndBorrow(supplyAmount, 0, 1, score, proof);
     vm.stopPrank();
 
     skip(2 days);
@@ -373,7 +373,7 @@ contract CreditBrokerTest is Test {
     _generateTree(borrower, score, creditToken.versionId() + 1);
     supplyAmount = 200 ether;
     vm.startPrank(borrower);
-    broker.supplyAndBorrow(marketParams, supplyAmount, 0, 1, score, proof);
+    broker.supplyAndBorrow(supplyAmount, 0, 1, score, proof);
     vm.stopPrank();
   }
 
@@ -394,7 +394,7 @@ contract CreditBrokerTest is Test {
 
     vm.startPrank(borrower);
     creditToken.approve(address(broker), type(uint256).max);
-    broker.supplyAndBorrow(marketParams, supplyAmount, 0, termId, score, proof);
+    broker.supplyAndBorrow(supplyAmount, 0, termId, score, proof);
     vm.stopPrank();
 
     skip(2 days);
@@ -405,7 +405,7 @@ contract CreditBrokerTest is Test {
 
     uint borrowAmount = 300 ether;
     vm.startPrank(borrower);
-    broker.supplyAndBorrow(marketParams, 0, borrowAmount, termId, score, proof);
+    broker.supplyAndBorrow(0, borrowAmount, termId, score, proof);
     vm.stopPrank();
 
     // check balance
@@ -419,7 +419,7 @@ contract CreditBrokerTest is Test {
 
     vm.expectRevert();
     vm.prank(borrower);
-    broker.supplyCollateral(marketParams, COLLATERAL, COLLATERAL, proof);
+    broker.supplyCollateral(COLLATERAL, COLLATERAL, proof);
 
     // Check broker state
     assertEq(broker.fixedPosUuid(), 0);
@@ -451,7 +451,7 @@ contract CreditBrokerTest is Test {
 
     vm.startPrank(borrower);
     creditToken.approve(address(broker), type(uint256).max);
-    broker.supplyAndBorrow(marketParams, 2 * COLLATERAL, borrowAmount, termId, newScore, proof);
+    broker.supplyAndBorrow(2 * COLLATERAL, borrowAmount, termId, newScore, proof);
     vm.stopPrank();
 
     // Verify global uuid
@@ -505,7 +505,7 @@ contract CreditBrokerTest is Test {
 
     vm.startPrank(borrower);
     creditToken.approve(address(broker), type(uint256).max);
-    broker.supplyAndBorrow(marketParams, 2 * COLLATERAL, borrowAmount, termId, newScore, proof);
+    broker.supplyAndBorrow(2 * COLLATERAL, borrowAmount, termId, newScore, proof);
     vm.stopPrank();
 
     // Verify global uuid
@@ -557,7 +557,7 @@ contract CreditBrokerTest is Test {
 
     vm.startPrank(borrower);
     creditToken.approve(address(broker), type(uint256).max);
-    broker.supplyAndBorrow(marketParams, borrowAmount, borrowAmount, termId, newScore, proof);
+    broker.supplyAndBorrow(borrowAmount, borrowAmount, termId, newScore, proof);
     vm.stopPrank();
 
     // Verify global uuid
@@ -611,7 +611,7 @@ contract CreditBrokerTest is Test {
     // 1st borrow: 100 principal, 0 interest
     vm.startPrank(borrower);
     creditToken.approve(address(broker), type(uint256).max);
-    broker.supplyAndBorrow(marketParams, borrowAmount, borrowAmount, termId, newScore, proof);
+    broker.supplyAndBorrow(borrowAmount, borrowAmount, termId, newScore, proof);
 
     // Verify global uuid
     assertEq(broker.fixedPosUuid(), 1);
@@ -641,10 +641,10 @@ contract CreditBrokerTest is Test {
 
     // 2nd borrow: 400, should fail
     vm.expectRevert("insufficient collateral");
-    broker.supplyAndBorrow(marketParams, 400 ether, 400 ether, termId, newScore, proof);
+    broker.supplyAndBorrow(400 ether, 400 ether, termId, newScore, proof);
     // 2nd borrow: 380, should succeed
     borrowAmount = 380 ether;
-    broker.supplyAndBorrow(marketParams, 400 ether, 380 ether, termId, newScore, proof);
+    broker.supplyAndBorrow(400 ether, 380 ether, termId, newScore, proof);
 
     vm.stopPrank();
 
@@ -735,7 +735,7 @@ contract CreditBrokerTest is Test {
     uint256 beforeBalanceMoolah = creditToken.balanceOf(address(moolah));
 
     vm.prank(borrower);
-    broker.withdrawCollateral(marketParams, withdrawAmt, COLLATERAL, proof);
+    broker.withdrawCollateral(withdrawAmt, COLLATERAL, proof);
 
     // Check balance
     assertEq(creditToken.balanceOf(borrower) - beforeBalance, withdrawAmt, "withdrawal amount mismatch");
@@ -873,7 +873,7 @@ contract CreditBrokerTest is Test {
     USDT.setBalance(borrower, debt);
     vm.startPrank(borrower);
     USDT.approve(address(broker), type(uint256).max);
-    broker.repayAndWithdraw(marketParams, COLLATERAL, debt, posId, COLLATERAL, proof);
+    broker.repayAndWithdraw(COLLATERAL, debt, posId, COLLATERAL, proof);
     vm.stopPrank();
 
     // check balance
@@ -1063,7 +1063,7 @@ contract CreditBrokerTest is Test {
 
     vm.startPrank(borrower);
     creditToken.approve(address(broker), COLLATERAL);
-    broker.supplyAndBorrow(marketParams, COLLATERAL, COLLATERAL, termId, COLLATERAL, proof);
+    broker.supplyAndBorrow(COLLATERAL, COLLATERAL, termId, COLLATERAL, proof);
     vm.stopPrank();
 
     // Advance time to after term end but within grace period, no delay penalty should apply
@@ -1089,7 +1089,7 @@ contract CreditBrokerTest is Test {
     USDT.setBalance(borrower, debtAmount);
     vm.startPrank(borrower);
     USDT.approve(address(broker), debtAmount);
-    broker.repayAndWithdraw(marketParams, COLLATERAL, debtAmount, posId, COLLATERAL, proof);
+    broker.repayAndWithdraw(COLLATERAL, debtAmount, posId, COLLATERAL, proof);
 
     FixedLoanPosition[] memory afterPositions = broker.userFixedPositions(borrower);
     assertEq(afterPositions.length, 0, "fixed position not removed");
@@ -1119,7 +1119,7 @@ contract CreditBrokerTest is Test {
 
     vm.startPrank(borrower);
     creditToken.approve(address(broker), COLLATERAL);
-    broker.supplyAndBorrow(marketParams, COLLATERAL, COLLATERAL, termId, COLLATERAL, proof);
+    broker.supplyAndBorrow(COLLATERAL, COLLATERAL, termId, COLLATERAL, proof);
     vm.stopPrank();
 
     // Advance time to after grace period
@@ -1152,9 +1152,9 @@ contract CreditBrokerTest is Test {
     vm.startPrank(borrower);
     USDT.approve(address(broker), beforeBalance);
     vm.expectRevert("broker/penalized-position-must-be-paid-in-full");
-    broker.repayAndWithdraw(marketParams, COLLATERAL, 1 ether, posId, COLLATERAL, proof);
+    broker.repayAndWithdraw(COLLATERAL, 1 ether, posId, COLLATERAL, proof);
 
-    broker.repayAndWithdraw(marketParams, COLLATERAL, beforeBalance, posId, COLLATERAL, proof);
+    broker.repayAndWithdraw(COLLATERAL, beforeBalance, posId, COLLATERAL, proof);
     vm.stopPrank();
 
     FixedLoanPosition[] memory afterPositions = broker.userFixedPositions(borrower);
@@ -1180,7 +1180,7 @@ contract CreditBrokerTest is Test {
     vm.startPrank(borrower);
     creditToken.approve(address(broker), type(uint256).max);
     vm.expectRevert("broker/user-penalized");
-    broker.supplyAndBorrow(marketParams, borrowAmount, borrowAmount, termId, newScore, proof);
+    broker.supplyAndBorrow(borrowAmount, borrowAmount, termId, newScore, proof);
     vm.expectRevert("broker/user-penalized");
     broker.borrow(borrowAmount, termId, newScore, proof);
     vm.stopPrank();

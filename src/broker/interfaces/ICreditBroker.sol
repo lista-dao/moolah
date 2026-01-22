@@ -133,26 +133,18 @@ interface ICreditBroker is ICreditBrokerBase {
   /// ------------------------------
 
   /// @dev supply collateral(credit token) to the broker
-  /// @param marketParams The market parameters
   /// @param amount The amount of collateral to supply
   /// @param score The credit score of the user
   /// @param proof The merkle proof of the credit score
-  function supplyCollateral(
-    MarketParams memory marketParams,
-    uint256 amount,
-    uint256 score,
-    bytes32[] calldata proof
-  ) external;
+  function supplyCollateral(uint256 amount, uint256 score, bytes32[] calldata proof) external;
 
   /// @dev supply collateral and borrow with a fixed rate and term in a single transaction
-  /// @param marketParams The market parameters
   /// @param collateralAmount The amount of collateral to supply
   /// @param borrowAmount The amount to borrow
   /// @param termId The ID of the fixed term to use
   /// @param score The credit score of the user
   /// @param proof The merkle proof of the credit score
   function supplyAndBorrow(
-    MarketParams memory marketParams,
     uint256 collateralAmount,
     uint256 borrowAmount,
     uint256 termId,
@@ -174,26 +166,18 @@ interface ICreditBroker is ICreditBrokerBase {
   function repay(uint256 amount, uint256 posIdx, address onBehalf) external;
 
   /// @dev withdraw collateral(credit token) from the broker
-  /// @param marketParams The market parameters
   /// @param amount The amount of collateral to withdraw
   /// @param score The credit score of the user
   /// @param proof The merkle proof of the credit score
-  function withdrawCollateral(
-    MarketParams memory marketParams,
-    uint256 amount,
-    uint256 score,
-    bytes32[] calldata proof
-  ) external;
+  function withdrawCollateral(uint256 amount, uint256 score, bytes32[] calldata proof) external;
 
   /// @dev repay loan and withdraw collateral in a single transaction
-  /// @param marketParams The market parameters
   /// @param collateralAmount The amount of collateral to withdraw
   /// @param repayAmount The amount to repay
   /// @param posId The position ID to repay
   /// @param score The credit score of the user
   /// @param proof The merkle proof of the credit score
   function repayAndWithdraw(
-    MarketParams memory marketParams,
     uint256 collateralAmount,
     uint256 repayAmount,
     uint256 posId,
