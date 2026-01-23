@@ -507,6 +507,7 @@ library CreditBrokerMath {
     uint256 principalToDeduct,
     FixedLoanPosition memory p
   ) public view returns (uint256, uint256, FixedLoanPosition memory) {
+    require(p.termType == FixedTermType.ACCRUE_INTEREST, "broker/only-accrue-interest");
     // remaining principal before repayment
     uint256 remainingPrincipal = p.principal - p.principalRepaid;
     // get accrued interest from LAST REPAID TIME to NOW
