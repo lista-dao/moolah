@@ -388,6 +388,12 @@ contract CreditBrokerTest is Test {
     vm.prank(BOT);
     broker.updateFixedTermAndRate(term, false);
 
+    // setup broker to be provider
+    vm.prank(MANAGER);
+    moolah.setProvider(id, address(broker), true);
+
+    skip(1 days);
+
     uint score = 500 ether;
     uint supplyAmount = 500 ether;
     _generateTree(borrower, score, creditToken.versionId() + 1);
@@ -889,6 +895,38 @@ contract CreditBrokerTest is Test {
     assertEq(score, COLLATERAL, "borrower credit score mismatch after full repay");
     assertEq(creditToken.userAmounts(borrower), COLLATERAL, "borrower credit amount mismatch after full repay");
     assertEq(creditToken.debtOf(borrower), 0, "borrower credit debt mismatch after full repay");
+  }
+
+  // User score = 1K -> supplied all -> User score = 800 -> Can only borrow up to 800
+  function test_fixedBorrow_decreaseScore_afterSupplyAll() public {
+    test_supplyCollateral();
+
+    // Setup a fixed term product
+    uint256 termId = 1;
+    uint256 duration = 14 days;
+    uint256 apr = 105 * 1e25;
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type1 });
+
+    vm.prank(BOT);
+    broker.updateFixedTermAndRate(term, false);
+
+    // decrease score to 800
+    uint256 newScore = 800 ether;
+    _generateTree(borrower, newScore, creditToken.versionId() + 1);
+
+    uint256 borrowAmount = 800 ether + 1;
+    vm.prank(borrower);
+    vm.expectRevert("insufficient collateral");
+    broker.borrow(borrowAmount, termId, newScore, proof);
+
+    borrowAmount = newScore;
+    vm.prank(borrower);
+    broker.borrow(borrowAmount, termId, newScore, proof);
+
+    // Verify a fixed position created
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    assertEq(positions.length, 1);
+    assertEq(positions[0].principal, borrowAmount);
   }
 
   // Supply 1K collateral, borrow 300 fixed, partial repay 40 by 3rd party

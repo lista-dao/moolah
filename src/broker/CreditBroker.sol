@@ -116,6 +116,12 @@ contract CreditBroker is
     _;
   }
 
+  /// @dev sync credit score before function execution
+  modifier syncCreditScore(address user, uint256 score, bytes32[] calldata proof) {
+    ICreditToken(COLLATERAL_TOKEN).syncCreditScore(user, score, proof);
+    _;
+  }
+
   /**
    * @dev Constructor for the LendingBroker contract
    * @param moolah The address of the Moolah contract
@@ -205,7 +211,7 @@ contract CreditBroker is
     uint256 amount,
     uint256 score,
     bytes32[] calldata proof
-  ) external override marketIdSet whenNotPaused nonReentrant {
+  ) external override marketIdSet whenNotPaused nonReentrant syncCreditScore(msg.sender, score, proof) {
     _supplyCollateral(amount, score, proof);
   }
 
@@ -223,7 +229,15 @@ contract CreditBroker is
     uint256 termId,
     uint256 score,
     bytes32[] calldata proof
-  ) external override marketIdSet whenNotPaused whenBorrowNotPaused nonReentrant {
+  )
+    external
+    override
+    marketIdSet
+    whenNotPaused
+    whenBorrowNotPaused
+    nonReentrant
+    syncCreditScore(msg.sender, score, proof)
+  {
     if (collateralAmount > 0) _supplyCollateral(collateralAmount, score, proof);
 
     // if any debt, try withdraw and burn them before borrowing
@@ -246,7 +260,15 @@ contract CreditBroker is
     uint256 termId,
     uint256 score,
     bytes32[] calldata proof
-  ) external override marketIdSet whenNotPaused whenBorrowNotPaused nonReentrant {
+  )
+    external
+    override
+    marketIdSet
+    whenNotPaused
+    whenBorrowNotPaused
+    nonReentrant
+    syncCreditScore(msg.sender, score, proof)
+  {
     // if any debt, try withdraw and burn them before borrowing
     _tryWithdrawAndBurnDebt(msg.sender, score, proof);
 
@@ -262,7 +284,7 @@ contract CreditBroker is
     uint256 amount,
     uint256 score,
     bytes32[] calldata proof
-  ) external override marketIdSet whenNotPaused nonReentrant {
+  ) external override marketIdSet whenNotPaused nonReentrant syncCreditScore(msg.sender, score, proof) {
     _withdrawCollateral(amount, score, proof);
   }
 
@@ -280,7 +302,7 @@ contract CreditBroker is
     uint256 posId,
     uint256 score,
     bytes32[] calldata proof
-  ) external override marketIdSet whenNotPaused nonReentrant {
+  ) external override marketIdSet whenNotPaused nonReentrant syncCreditScore(msg.sender, score, proof) {
     require(collateralAmount > 0 || repayAmount > 0, "broker/zero-amounts");
     if (repayAmount > 0) _repay(repayAmount, posId, msg.sender, 0);
     if (collateralAmount > 0) _withdrawCollateral(collateralAmount, score, proof);
