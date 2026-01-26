@@ -449,10 +449,12 @@ contract CreditBrokerTest is Test {
     assertEq(creditToken.totalSupply(), COLLATERAL, "total supply before mismatch");
     assertEq(USDT.balanceOf(borrower), 0, "borrower loan token balance mismatch before borrow");
 
+    Position memory beforePos = moolah.position(broker.MARKET_ID(), borrower);
     vm.startPrank(borrower);
     creditToken.approve(address(broker), type(uint256).max);
     broker.supplyAndBorrow(2 * COLLATERAL, borrowAmount, termId, newScore, proof);
     vm.stopPrank();
+    Position memory afterPos = moolah.position(broker.MARKET_ID(), borrower);
 
     // Verify global uuid
     assertEq(broker.fixedPosUuid(), 1);
@@ -469,6 +471,11 @@ contract CreditBrokerTest is Test {
     assertEq(positions[0].interestRepaid, 0);
     assertEq(positions[0].principalRepaid, 0);
 
+    assertEq(
+      afterPos.borrowShares - beforePos.borrowShares,
+      positions[0].borrowedShares,
+      "borrowShares increase mismatch"
+    );
     // Check balance
     assertEq(creditToken.balanceOf(borrower), beforeBalance, "should not change borrower collateral balance");
     assertEq(creditToken.balanceOf(address(moolah)), 3 * COLLATERAL, "moolah collateral after mismatch");
@@ -788,8 +795,16 @@ contract CreditBrokerTest is Test {
     uint256 partialPrincipal = 100 ether;
     uint256 partialBuffer = 0.1 ether; // cover accrued interest while penalty is handled separately
     uint256 partialRepay = partialPrincipal + partialBuffer;
+    Position memory positionBefore = moolah.position(marketParams.id(), borrower);
     vm.prank(borrower);
     broker.repay(partialRepay, posId, borrower);
+    Position memory positionAfter = moolah.position(marketParams.id(), borrower);
+    FixedLoanPosition[] memory newPositions = broker.userFixedPositions(borrower);
+    assertEq(
+      positionBefore.borrowShares - positionAfter.borrowShares,
+      positions[0].borrowedShares - newPositions[0].borrowedShares,
+      "share burn mismatch after partial repay"
+    );
 
     positions = broker.userFixedPositions(borrower);
     assertEq(positions.length, 1);
@@ -1494,5 +1509,42 @@ contract CreditBrokerTest is Test {
 
     vm.prank(borrower);
     broker.repay(minLoan, posId, borrower);
+  }
+
+  function test_liquidate() public {
+    test_supplyAndBorrow();
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    (uint256 period, , ) = broker.graceConfig();
+    vm.warp(positions[0].end + period + 1);
+
+    vm.startPrank(BOT);
+    broker.liquidate(borrower, positions[0].posId);
+    vm.stopPrank();
+
+    FixedLoanPosition[] memory newPositions = broker.userFixedPositions(borrower);
+
+    assertEq(newPositions[0].borrowedShares, 0, "borrowed shares should be zero after liquidation");
+    assertEq(newPositions[0].isBadDebt, true, "position should be marked as bad debt after liquidation");
+  }
+
+  function test_repayAfterLiquidate() public {
+    test_supplyAndBorrow();
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    (uint256 period, , ) = broker.graceConfig();
+    vm.warp(positions[0].end + period + 1);
+
+    vm.startPrank(BOT);
+    broker.liquidate(borrower, positions[0].posId);
+    vm.stopPrank();
+
+    positions = broker.userFixedPositions(borrower);
+
+    uint256 repayAmount = (positions[0].principal - positions[0].principalRepaid) * 2;
+
+    vm.startPrank(borrower);
+    deal(address(USDT), borrower, repayAmount);
+    USDT.approve(address(broker), repayAmount);
+    broker.repay(repayAmount, positions[0].posId, borrower);
+    vm.stopPrank();
   }
 }
