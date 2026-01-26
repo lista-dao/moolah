@@ -256,6 +256,22 @@ interface IMoolahBase {
     bytes memory data
   ) external returns (uint256, uint256);
 
+  /// @notice Liquidates the broker position of `borrower` by burning `badDebtShares` from the fee recipient's supply
+  /// position.
+  /// @dev This function can only be called by the market's broker.
+  /// @dev This function does not check whether the position is unhealthy. It is the broker's responsibility to only
+  /// call this function when the position is unhealthy.
+  /// @param marketParams The market of the position.
+  /// @param borrower The owner of the position.
+  /// @param badDebtShares The amount of borrow shares to liquidate.
+  /// @return The amount of assets seized.
+  /// @return The amount of assets repaid.
+  function liquidateBrokerPosition(
+    MarketParams memory marketParams,
+    address borrower,
+    uint256 badDebtShares
+  ) external returns (uint256, uint256);
+
   /// @notice Executes a flash loan.
   /// @dev Flash loans have access to the whole balance of the contract (the liquidity and deposited collateral of all
   /// markets combined, plus donations).

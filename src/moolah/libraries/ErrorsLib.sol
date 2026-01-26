@@ -106,4 +106,6 @@ library ErrorsLib {
   string internal constant NOT_BROKER = "not broker";
 
   string internal constant EXCEED_MPC_CAP = "exceed mpc cap";
+
+  string internal constant EXCEED_BORROW_SHARES = "exceed borrow shares";
 }
