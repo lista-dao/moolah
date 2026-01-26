@@ -7,7 +7,7 @@ import { CreditBroker } from "../../src/broker/CreditBroker.sol";
 
 contract DeployCreditBroker is Script {
   address moolah_testnet = 0x4c26397D4ef9EEae55735a1631e69Da965eBC41A;
-  address interestRelayer = 0x6405f9c4bD7cb98817EEc9Fdf65407D1040A3fD1;
+  address interestRelayer = 0x915d31C45Fc02482cba1C5A2fe46213991c5020a;
   address oracle = 0x79e9675cDe605Ef9965AbCE185C5FD08d0DE16B1;
   uint256 maxFixedLoanPositions = 10;
   address lista_testnet = 0x90b94D605E069569Adf33C0e73E26a83637c94B1;
@@ -22,14 +22,14 @@ contract DeployCreditBroker is Script {
     // Deploy CreditBroker implementation
     CreditBroker impl = new CreditBroker(moolah_testnet, interestRelayer, oracle, lista_testnet, creditToken_testnet);
     console.log("CreditBroker implementation: ", address(impl));
-
+    /*
     // Deploy CreditBroker proxy
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
       abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, deployer, deployer, maxFixedLoanPositions)
     );
     console.log("CreditBroker proxy: ", address(proxy));
-
+*/
     vm.stopBroadcast();
   }
 }
