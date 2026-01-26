@@ -1532,4 +1532,41 @@ contract CreditBrokerTest is Test {
     vm.prank(borrower);
     broker.repay(minLoan, posId, borrower);
   }
+
+  function test_liquidate() public {
+    test_supplyAndBorrow();
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    (uint256 period, , ) = broker.graceConfig();
+    vm.warp(positions[0].end + period + 1);
+
+    vm.startPrank(BOT);
+    broker.liquidate(borrower, positions[0].posId);
+    vm.stopPrank();
+
+    FixedLoanPosition[] memory newPositions = broker.userFixedPositions(borrower);
+
+    assertEq(newPositions[0].borrowedShares, 0, "borrowed shares should be zero after liquidation");
+    assertEq(newPositions[0].isBadDebt, true, "position should be marked as bad debt after liquidation");
+  }
+
+  function test_repayAfterLiquidate() public {
+    test_supplyAndBorrow();
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    (uint256 period, , ) = broker.graceConfig();
+    vm.warp(positions[0].end + period + 1);
+
+    vm.startPrank(BOT);
+    broker.liquidate(borrower, positions[0].posId);
+    vm.stopPrank();
+
+    positions = broker.userFixedPositions(borrower);
+
+    uint256 repayAmount = (positions[0].principal - positions[0].principalRepaid) * 2;
+
+    vm.startPrank(borrower);
+    deal(address(USDT), borrower, repayAmount);
+    USDT.approve(address(broker), repayAmount);
+    broker.repay(repayAmount, positions[0].posId, borrower);
+    vm.stopPrank();
+  }
 }

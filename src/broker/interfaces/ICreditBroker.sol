@@ -120,6 +120,7 @@ interface ICreditBroker is ICreditBrokerBase {
     uint256 listaAmount,
     uint256 listaPrice
   );
+  event PositionLiquidate(address indexed user, uint256 posId);
 
   /// ------------------------------
   ///        View functions
