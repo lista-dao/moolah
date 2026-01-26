@@ -515,7 +515,8 @@ contract CreditBroker is
     }
 
     // update state for user's fixed positions
-    fixedLoanPositions[user].push(
+    FixedLoanPosition[] storage userPositions = fixedLoanPositions[user];
+    userPositions.push(
       FixedLoanPosition({
         termType: term.termType,
         posId: fixedPosUuid,
@@ -526,12 +527,15 @@ contract CreditBroker is
         lastRepaidTime: start,
         interestRepaid: 0,
         principalRepaid: 0,
-        noInterestUntil: _noInterestPeriod
+        noInterestUntil: _noInterestPeriod,
+        borrowedShares: 0,
+        isBadDebt: false
       })
     );
 
     // borrow from moolah
-    _borrowFromMoolah(user, amount);
+    uint256 borrowedShares = _borrowFromMoolah(user, amount);
+    userPositions[userPositions.length - 1].borrowedShares = borrowedShares;
     // transfer loan token to user
     IERC20(LOAN_TOKEN).safeTransfer(user, amount);
     // validate positions
@@ -598,8 +602,16 @@ contract CreditBroker is
       // the rest will be used to repay partially
       uint256 repayablePrincipal = UtilsLib.min(repayPrincipalAmt, remainingPrincipal);
       if (repayablePrincipal > 0) {
-        principalRepaid = _repayToMoolah(user, onBehalf, repayablePrincipal);
-        position.principalRepaid += principalRepaid;
+        if (position.isBadDebt) {
+          IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), repayablePrincipal);
+          _supplyToMoolahVault(repayablePrincipal);
+          position.principalRepaid += repayablePrincipal;
+        } else {
+          uint256 repaidShares;
+          (principalRepaid, repaidShares) = _repayToMoolah(user, onBehalf, repayablePrincipal);
+          position.principalRepaid += principalRepaid;
+          position.borrowedShares -= repaidShares;
+        }
         if (position.termType == FixedTermType.ACCRUE_INTEREST) {
           // reset repaid interest to zero (all accrued interest has been cleared)
           position.interestRepaid = 0;
@@ -677,12 +689,12 @@ contract CreditBroker is
    * @param onBehalf The address of the user to borrow on behalf of
    * @param amount The amount to borrow
    */
-  function _borrowFromMoolah(address onBehalf, uint256 amount) internal {
+  function _borrowFromMoolah(address onBehalf, uint256 amount) internal returns (uint256 borrowShares) {
     MarketParams memory marketParams = _getMarketParams(MARKET_ID);
     // pre-balance
     uint256 preBalance = IERC20(LOAN_TOKEN).balanceOf(address(this));
     // borrow from moolah with zero interest
-    MOOLAH.borrow(marketParams, amount, 0, onBehalf, address(this));
+    (, borrowShares) = MOOLAH.borrow(marketParams, amount, 0, onBehalf, address(this));
     // should increase the loan balance same as borrowed amount
     require(IERC20(LOAN_TOKEN).balanceOf(address(this)) - preBalance == amount, "invalid borrowed amount");
   }
@@ -693,7 +705,11 @@ contract CreditBroker is
    * @param onBehalf The address of the user to repay on behalf of
    * @param amount The amount to repay
    */
-  function _repayToMoolah(address payer, address onBehalf, uint256 amount) internal returns (uint256 assetsRepaid) {
+  function _repayToMoolah(
+    address payer,
+    address onBehalf,
+    uint256 amount
+  ) internal returns (uint256 assetsRepaid, uint256 sharesRepaid) {
     IERC20(LOAN_TOKEN).safeTransferFrom(payer, address(this), amount);
     IERC20(LOAN_TOKEN).safeIncreaseAllowance(address(MOOLAH), amount);
 
@@ -701,7 +717,7 @@ contract CreditBroker is
     // convert amount to shares
     uint256 amountShares = amount.toSharesDown(market.totalBorrowAssets, market.totalBorrowShares);
     // using `shares` to ensure full repayment
-    (assetsRepaid /* sharesRepaid */, ) = MOOLAH.repay(_getMarketParams(MARKET_ID), 0, amountShares, onBehalf, "");
+    (assetsRepaid, sharesRepaid) = MOOLAH.repay(_getMarketParams(MARKET_ID), 0, amountShares, onBehalf, "");
     // refund any excess amount to payer
     if (amount > assetsRepaid) {
       IERC20(LOAN_TOKEN).safeTransfer(payer, amount - assetsRepaid);
@@ -795,8 +811,35 @@ contract CreditBroker is
     require(isValid, "below min loan");
   }
 
-  function liquidate(Id, address) external {
-    revert("not-support-liquidation");
+  /**
+   * @dev Liquidate a penalized fixed loan position
+   * @param borrower The address of the borrower
+   * @param posId The ID of the position to liquidate
+   */
+  function liquidate(address borrower, uint256 posId) external onlyRole(BOT) marketIdSet whenNotPaused nonReentrant {
+    // find position
+    FixedLoanPosition[] storage positions = fixedLoanPositions[borrower];
+    uint256 posIndex = type(uint256).max;
+    for (uint256 i = 0; i < positions.length; i++) {
+      if (positions[i].posId == posId) {
+        posIndex = i;
+        break;
+      }
+    }
+    if (posIndex == type(uint256).max) {
+      revert("broker/position-not-found");
+    }
+    require(
+      _isPositionPenalized(positions[posIndex]) && !positions[posIndex].isBadDebt,
+      "broker/position-not-penalized"
+    );
+
+    // liquidate position in Moolah
+    MOOLAH.liquidateBrokerPosition(_getMarketParams(MARKET_ID), borrower, positions[posIndex].borrowedShares);
+    // mark position as bad debt and set borrowed shares to zero
+    positions[posIndex].borrowedShares = 0;
+    positions[posIndex].isBadDebt = true;
+    emit PositionLiquidate(borrower, posIndex);
   }
 
   ///////////////////////////////////////
