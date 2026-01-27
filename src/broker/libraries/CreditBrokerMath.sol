@@ -350,19 +350,6 @@ library CreditBrokerMath {
     totalRepayNeeded = remainingPrincipal + remainingInterest + penalty;
   }
 
-  /**
-   * @dev Revert if duplicate position IDs are found
-   * @param posIds The position IDs to check for duplicates
-   */
-  function _revertIfDuplicatePosIds(uint256[] calldata posIds) internal pure {
-    for (uint256 i = 0; i < posIds.length; i++) {
-      uint256 posId = posIds[i];
-      for (uint256 j = i + 1; j < posIds.length; j++) {
-        require(posIds[j] != posId, "Broker/duplicate-pos-id");
-      }
-    }
-  }
-
   // =========================== //
   //         Dynamic Loan        //
   // =========================== //
