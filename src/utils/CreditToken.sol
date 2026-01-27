@@ -4,7 +4,7 @@ pragma solidity 0.8.28;
 import { ERC20Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 import { MerkleProof } from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import { ICreditToken, IERC20 } from "./interfaces/ICreditToken.sol";
@@ -75,6 +75,7 @@ contract CreditToken is
     address _admin,
     address _manager,
     address _bot,
+    address _pauser,
     address[] calldata _transferers, // only credit brokers and moolah can transfer
     string calldata _name,
     string calldata _symbol
@@ -82,6 +83,7 @@ contract CreditToken is
     require(_admin != address(0), "Zero address");
     require(_manager != address(0), "Zero address");
     require(_bot != address(0), "Zero address");
+    require(_pauser != address(0), "Zero address");
 
     __ERC20_init_unchained(_name, _symbol);
     __AccessControl_init_unchained();
@@ -89,6 +91,7 @@ contract CreditToken is
     _grantRole(DEFAULT_ADMIN_ROLE, _admin);
     _grantRole(MANAGER, _manager);
     _grantRole(BOT, _bot);
+    _grantRole(PAUSER, _pauser);
 
     lastSetTime = type(uint256).max;
     waitingPeriod = 6 hours;
@@ -106,7 +109,7 @@ contract CreditToken is
   function transfer(
     address to,
     uint256 value
-  ) public override(IERC20, ERC20Upgradeable) onlyRole(TRANSFERER) returns (bool) {
+  ) public override(IERC20, ERC20Upgradeable) whenNotPaused onlyRole(TRANSFERER) returns (bool) {
     address owner = _msgSender();
     _transfer(owner, to, value);
     return true;
@@ -117,7 +120,7 @@ contract CreditToken is
     address from,
     address to,
     uint256 value
-  ) public override(IERC20, ERC20Upgradeable) onlyRole(TRANSFERER) returns (bool) {
+  ) public override(IERC20, ERC20Upgradeable) whenNotPaused onlyRole(TRANSFERER) returns (bool) {
     address spender = _msgSender();
     _spendAllowance(from, spender, value);
     _transfer(from, to, value);
@@ -143,7 +146,7 @@ contract CreditToken is
    * @param _score The latest credit score of the user.
    * @param _proof The Merkle proof for the user's latest credit score.
    */
-  function syncCreditScore(address _user, uint256 _score, bytes32[] memory _proof) public override {
+  function syncCreditScore(address _user, uint256 _score, bytes32[] memory _proof) public override whenNotPaused {
     require(merkleRoot != bytes32(0), "Invalid merkle root");
 
     CreditScore storage userScore = creditScores[_user];
@@ -258,6 +261,16 @@ contract CreditToken is
     waitingPeriod = _waitingPeriod;
 
     emit WaitingPeriodUpdated(_waitingPeriod);
+  }
+
+  /// @dev Pause the contract
+  function pause() external onlyRole(PAUSER) {
+    _pause();
+  }
+
+  /// @dev Unpause the contract
+  function unpause() external onlyRole(MANAGER) {
+    _unpause();
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
