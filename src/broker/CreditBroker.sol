@@ -123,7 +123,7 @@ contract CreditBroker is
   }
 
   /**
-   * @dev Constructor for the LendingBroker contract
+   * @dev Constructor for the CreditBroker contract
    * @param moolah The address of the Moolah contract
    * @param relayer The address of the BrokerInterestRelayer contract
    * @param oracle The address of the oracle
@@ -152,7 +152,7 @@ contract CreditBroker is
   }
 
   /**
-   * @dev Initialize the LendingBroker contract
+   * @dev Initialize the CreditBroker contract
    * @param _admin The address of the admin
    * @param _manager The address of the manager
    * @param _bot The address of the bot
@@ -830,7 +830,7 @@ contract CreditBroker is
     // set broker name
     string memory collateralTokenName = IERC20Metadata(COLLATERAL_TOKEN).symbol();
     string memory loanTokenName = IERC20Metadata(LOAN_TOKEN).symbol();
-    BROKER_NAME = string(abi.encodePacked("Lista-Lending ", collateralTokenName, "-", loanTokenName, " Broker"));
+    BROKER_NAME = string(abi.encodePacked("Lista-Lending ", collateralTokenName, "-", loanTokenName, " CreditBroker"));
     // emit event
     emit MarketIdSet(marketId);
   }
