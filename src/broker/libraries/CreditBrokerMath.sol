@@ -207,28 +207,6 @@ library CreditBrokerMath {
   }
 
   /**
-   * @dev Get the penalty for a fixed loan position
-   * @param position The fixed loan position to get the penalty for
-   * @param repayAmt The actual repay amount (repay amount excluded accrued interest)
-   */
-  function getPenaltyForFixedPosition(
-    FixedLoanPosition memory position,
-    uint256 repayAmt
-  ) public view returns (uint256 penalty) {
-    // only early repayment will incur penalty
-    if (block.timestamp > position.end) return 0;
-    // time left before expiration
-    uint256 timeLeft = position.end - block.timestamp;
-    // penalty = (repayAmt * APR) * timeleft/term * 1/2
-    penalty = Math.mulDiv(
-      Math.mulDiv(repayAmt, _aprPerSecond(position.apr), RATE_SCALE, Math.Rounding.Ceil), // repayAmt * APR(per second)
-      timeLeft,
-      2,
-      Math.Rounding.Ceil
-    );
-  }
-
-  /**
    * @dev Get the penalty for a credit position if repaid after grace period
    *
    * | ---- Fixed term --- | ---- Grace period ---- | After due time
