@@ -624,7 +624,7 @@ contract CreditBroker is
       _removeFixedPositionByPosId(onBehalf, posId);
       // log paid off penalized position
       if (penalty > 0) {
-        emit PaidOffPenalizedPosition(user, posId, block.timestamp);
+        emit PaidOffPenalizedPosition(onBehalf, posId, block.timestamp);
       }
     } else {
       // update position
