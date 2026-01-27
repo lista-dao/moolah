@@ -61,7 +61,8 @@ contract CreditToken is
     uint256 _newScore,
     uint256 _oldScore,
     uint256 _versionId,
-    uint256 _lastVersionId
+    uint256 _lastVersionId,
+    uint256 _userAmount
   );
   event SetPendingMerkleRoot(bytes32 indexed _pendingMerkleRoot, uint256 _setTime);
   event AcceptMerkleRoot(bytes32 indexed _merkleRoot, uint256 _acceptTime, uint256 _versionId);
@@ -150,6 +151,8 @@ contract CreditToken is
     require(merkleRoot != bytes32(0), "Invalid merkle root");
 
     CreditScore storage userScore = creditScores[_user];
+    uint256 oldScore = userScore.score;
+    uint256 oldVersionId = userScore.id;
 
     if (userScore.id != versionId || userScore.score != _score) {
       // verify merkle proof if score or version id changes
@@ -163,7 +166,7 @@ contract CreditToken is
 
     _syncCreditScore(_user, _score);
 
-    emit ScoreSynced(_user, _score, userScore.score, versionId, userScore.id);
+    emit ScoreSynced(_user, userScore.score, oldScore, userScore.id, oldVersionId, userAmounts[_user]);
   }
 
   /**
