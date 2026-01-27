@@ -261,6 +261,7 @@ contract CreditToken is
   /// @param _waitingPeriod Waiting period to be set
   function changeWaitingPeriod(uint256 _waitingPeriod) external onlyRole(MANAGER) whenNotPaused {
     require(_waitingPeriod >= 6 hours && _waitingPeriod != waitingPeriod, "Invalid waiting period");
+    require(pendingMerkleRoot == bytes32(0), "Pending merkle root exists");
     waitingPeriod = _waitingPeriod;
 
     emit WaitingPeriodUpdated(_waitingPeriod);
