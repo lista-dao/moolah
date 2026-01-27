@@ -188,7 +188,7 @@ contract CreditBroker is
 
     graceConfig.period = 3 days;
     graceConfig.penaltyRate = 15 * 1e25; // 15% = 0.15 * RATE_SCALE
-    graceConfig.noInterestPeriod = 60; // 1 minute interest free period for upfront interest term type
+    graceConfig.noInterestPeriod = 1; // 1 second no interest period for upfront interest term
 
     listaDiscountRate = 20 * 1e25; // 20% discount if repaying interest with LISTA
 
