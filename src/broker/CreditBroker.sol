@@ -4,7 +4,7 @@ pragma solidity 0.8.28;
 import "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardTransientUpgradeable.sol";
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -33,7 +33,7 @@ contract CreditBroker is
   UUPSUpgradeable,
   AccessControlEnumerableUpgradeable,
   PausableUpgradeable,
-  ReentrancyGuardUpgradeable,
+  ReentrancyGuardTransientUpgradeable,
   ICreditBroker
 {
   using SafeERC20 for IERC20;
@@ -177,7 +177,7 @@ contract CreditBroker is
 
     __AccessControlEnumerable_init();
     __Pausable_init();
-    __ReentrancyGuard_init();
+    __ReentrancyGuardTransient_init();
     // grant roles
     _grantRole(DEFAULT_ADMIN_ROLE, _admin);
     _grantRole(MANAGER, _manager);
