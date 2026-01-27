@@ -7,6 +7,7 @@ import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgr
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 import { MerkleProof } from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import { ICreditToken, IERC20 } from "./interfaces/ICreditToken.sol";
 
 /**
  * @title Credit Token
@@ -14,7 +15,13 @@ import { MerkleProof } from "@openzeppelin/contracts/utils/cryptography/MerklePr
  * @notice ERC20 token representing credit scores of users, with minting and burning based on verified credit scores via Merkle proofs.
  *         Tokens are 1:1 minted/burned according to the user's credit score.
  */
-contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerableUpgradeable, PausableUpgradeable {
+contract CreditToken is
+  ERC20Upgradeable,
+  UUPSUpgradeable,
+  AccessControlEnumerableUpgradeable,
+  PausableUpgradeable,
+  ICreditToken
+{
   ///@dev Merkle tree root for credit score verification
   bytes32 public merkleRoot;
 
@@ -92,22 +99,25 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
     _setRoleAdmin(TRANSFERER, MANAGER);
   }
 
-  function mint(address, uint256) external {
-    revert("Disabled");
-  }
-
   /// @dev only Moolah can transfer
   /// @param to The address of the recipient.
   /// @param value The amount to be transferred.
   /// @return bool Returns true on success, false otherwise.
-  function transfer(address to, uint256 value) public override onlyRole(TRANSFERER) returns (bool) {
+  function transfer(
+    address to,
+    uint256 value
+  ) public override(IERC20, ERC20Upgradeable) onlyRole(TRANSFERER) returns (bool) {
     address owner = _msgSender();
     _transfer(owner, to, value);
     return true;
   }
 
   /// @dev only Moolah can call transferFrom
-  function transferFrom(address from, address to, uint256 value) public override onlyRole(TRANSFERER) returns (bool) {
+  function transferFrom(
+    address from,
+    address to,
+    uint256 value
+  ) public override(IERC20, ERC20Upgradeable) onlyRole(TRANSFERER) returns (bool) {
     address spender = _msgSender();
     _spendAllowance(from, spender, value);
     _transfer(from, to, value);
@@ -118,7 +128,7 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
     address[] calldata _users,
     uint256[] calldata _scores,
     bytes32[][] calldata _proofs
-  ) external {
+  ) external override {
     require(_users.length == _scores.length, "Mismatched inputs");
     require(_users.length == _proofs.length, "Mismatched inputs");
 
@@ -133,7 +143,7 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
    * @param _score The latest credit score of the user.
    * @param _proof The Merkle proof for the user's latest credit score.
    */
-  function syncCreditScore(address _user, uint256 _score, bytes32[] memory _proof) public {
+  function syncCreditScore(address _user, uint256 _score, bytes32[] memory _proof) public override {
     require(merkleRoot != bytes32(0), "Invalid merkle root");
 
     CreditScore storage userScore = creditScores[_user];
@@ -194,7 +204,7 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
    * @param _user The address of the user.
    * @return uint256 The debt amount of the user.
    */
-  function debtOf(address _user) public view returns (uint256) {
+  function debtOf(address _user) public view override returns (uint256) {
     uint256 score = creditScores[_user].score;
     return userAmounts[_user] > score ? userAmounts[_user] - score : 0;
   }
@@ -203,7 +213,7 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
 
   /// @dev Set pending merkle root.
   /// @param _merkleRoot New merkle root to be set as pending
-  function setPendingMerkleRoot(bytes32 _merkleRoot) external onlyRole(BOT) whenNotPaused {
+  function setPendingMerkleRoot(bytes32 _merkleRoot) external override onlyRole(BOT) whenNotPaused {
     require(
       _merkleRoot != bytes32(0) &&
         _merkleRoot != pendingMerkleRoot &&
@@ -219,7 +229,7 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
   }
 
   /// @dev Accept the pending merkle root; pending merkle root can only be accepted after 1 day of setting
-  function acceptMerkleRoot() external onlyRole(BOT) whenNotPaused {
+  function acceptMerkleRoot() external override onlyRole(BOT) whenNotPaused {
     require(pendingMerkleRoot != bytes32(0) && pendingMerkleRoot != merkleRoot, "Invalid pending merkle root");
     require(block.timestamp >= lastSetTime + waitingPeriod, "Not ready to accept");
 
@@ -232,7 +242,7 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
   }
 
   /// @dev Revoke the pending merkle root by Manager
-  function revokePendingMerkleRoot() external onlyRole(MANAGER) {
+  function revokePendingMerkleRoot() external override onlyRole(MANAGER) {
     require(pendingMerkleRoot != bytes32(0), "Pending merkle root is zero");
 
     pendingMerkleRoot = bytes32(0);
