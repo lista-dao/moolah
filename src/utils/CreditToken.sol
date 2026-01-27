@@ -169,12 +169,6 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
       uint256 burnAmount = userAmounts[_user] - _newScore;
       uint256 actualBurned = _safeBurn(_user, burnAmount);
       userAmounts[_user] -= actualBurned;
-    } else {
-      // equal, check if can burn
-      if (debt > 0 && balanceOf(_user) > 0) {
-        uint256 actualBurned = _safeBurn(_user, debt);
-        userAmounts[_user] -= actualBurned;
-      }
     }
   }
 
