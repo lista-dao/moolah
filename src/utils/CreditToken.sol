@@ -46,7 +46,7 @@ contract CreditToken is
   /// @dev last time pending merkle root was set
   uint256 public lastSetTime;
 
-  /// @dev the waiting period before accepting the pending merkle root; 1 day by default
+  /// @dev the waiting period before accepting the pending merkle root; 6 hours by default
   uint256 public waitingPeriod;
 
   // ------- Roles ------- //
