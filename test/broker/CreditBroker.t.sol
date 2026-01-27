@@ -208,7 +208,7 @@ contract CreditBrokerTest is Test {
     (uint period, uint penaltyRate, uint noInterestPeriod) = broker.graceConfig();
     assertEq(period, 3 days);
     assertEq(penaltyRate, 15 * 1e25);
-    assertEq(noInterestPeriod, 1 minutes);
+    assertEq(noInterestPeriod, 1);
   }
 
   function _deployCreditToken() public {
@@ -220,6 +220,7 @@ contract CreditBrokerTest is Test {
         ADMIN,
         MANAGER,
         BOT,
+        PAUSER,
         new address[](0),
         "Credit Token",
         "CRDT"
@@ -634,7 +635,7 @@ contract CreditBrokerTest is Test {
     assertEq(positions[0].interestRepaid, 0);
     assertEq(positions[0].principalRepaid, 0);
     assertEq(uint(positions[0].termType), 1);
-    assertEq(positions[0].noInterestUntil, block.timestamp + 60);
+    assertEq(positions[0].noInterestUntil, block.timestamp + 1);
 
     // Check balance
     assertEq(creditToken.balanceOf(borrower), 400 ether, "mint 500 and then supply 100");
@@ -668,7 +669,7 @@ contract CreditBrokerTest is Test {
     assertEq(positions[1].interestRepaid, 0);
     assertEq(positions[1].principalRepaid, 0);
     assertEq(uint(positions[1].termType), 1);
-    assertEq(positions[1].noInterestUntil, positions[1].start + 60);
+    assertEq(positions[1].noInterestUntil, positions[1].start + 1);
     assertEq(positions[1].end, positions[1].start + duration);
 
     // 2nd borrow: Check balance

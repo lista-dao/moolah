@@ -36,7 +36,7 @@ struct GraceConfig {
   /// @dev penalty rate for delayed repayment after grace period; e.g., 15% = 0.15 * RATE_SCALE
   /// @dev e.g., if penaltyRate is 15%, user should pay additional 15% * userDebt as penalty after grace period
   uint256 penaltyRate;
-  /// @dev no interest period in seconds, small value; 1 minute by default
+  /// @dev no interest period in seconds, small value; 1 second by default
   /// @dev if users repay within this period after borrowing, no interest will be charged
   /// @dev used for upfront interest term type only
   uint256 noInterestPeriod;
