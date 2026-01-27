@@ -102,7 +102,7 @@ contract CreditToken is
     _setRoleAdmin(TRANSFERER, MANAGER);
   }
 
-  /// @dev only Moolah can transfer
+  /// @dev only Credit Brokers and Moolah can call transfer
   /// @param to The address of the recipient.
   /// @param value The amount to be transferred.
   /// @return bool Returns true on success, false otherwise.
@@ -115,7 +115,7 @@ contract CreditToken is
     return true;
   }
 
-  /// @dev only Moolah can call transferFrom
+  /// @dev only Credit Brokers and Moolah can call transferFrom
   function transferFrom(
     address from,
     address to,
