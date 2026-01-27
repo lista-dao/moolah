@@ -175,9 +175,9 @@ contract CreditBroker is
       "broker/zero-address"
     );
 
-    __AccessControlEnumerable_init();
-    __Pausable_init();
-    __ReentrancyGuardTransient_init();
+    __AccessControlEnumerable_init_unchained();
+    __Pausable_init_unchained();
+    __ReentrancyGuardTransient_init_unchained();
     // grant roles
     _grantRole(DEFAULT_ADMIN_ROLE, _admin);
     _grantRole(MANAGER, _manager);

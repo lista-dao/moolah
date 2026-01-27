@@ -76,8 +76,8 @@ contract CreditBrokerInterestRelayer is
       "relayer/zero-address-provided"
     );
 
-    __AccessControlEnumerable_init();
-    __ReentrancyGuardTransient_init();
+    __AccessControlEnumerable_init_unchained();
+    __ReentrancyGuardTransient_init_unchained();
     // grant roles
     _grantRole(DEFAULT_ADMIN_ROLE, _admin);
     _grantRole(MANAGER, _manager);
