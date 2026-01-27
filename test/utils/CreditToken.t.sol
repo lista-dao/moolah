@@ -430,6 +430,20 @@ contract CreditTokenTest is Test {
     assertEq(creditToken.paused(), false);
   }
 
+  function test_changeWaitingPeriod() public {
+    uint256 newPeriod = 12 hours;
+    vm.prank(manager);
+    creditToken.changeWaitingPeriod(newPeriod);
+    assertEq(creditToken.waitingPeriod(), newPeriod);
+
+    // should revert when there is outstanding pending merkle root
+    vm.prank(bot);
+    creditToken.setPendingMerkleRoot(merkleRoot);
+    vm.expectRevert("Pending merkle root exists");
+    vm.prank(manager);
+    creditToken.changeWaitingPeriod(6 hours);
+  }
+
   function _generateTree(address _account, uint256 _score, uint256 _versionId) public {
     bytes32[] memory data = new bytes32[](4);
     data[0] = keccak256(abi.encode(block.chainid, address(creditToken), _account, _score, _versionId));
