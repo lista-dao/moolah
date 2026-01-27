@@ -99,6 +99,7 @@ library CreditBrokerMath {
       uint256 fixedPosDebt = _fixedPos.principal - _fixedPos.principalRepaid;
       if (fixedPosDebt > 0 && fixedPosDebt < minLoan) {
         isValid = false;
+        break;
       }
     }
   }
