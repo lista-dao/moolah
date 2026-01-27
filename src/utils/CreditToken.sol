@@ -76,8 +76,8 @@ contract CreditToken is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerab
     require(_manager != address(0), "Zero address");
     require(_bot != address(0), "Zero address");
 
-    __ERC20_init(_name, _symbol);
-    __AccessControl_init();
+    __ERC20_init_unchained(_name, _symbol);
+    __AccessControl_init_unchained();
 
     _grantRole(DEFAULT_ADMIN_ROLE, _admin);
     _grantRole(MANAGER, _manager);
