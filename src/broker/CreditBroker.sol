@@ -4,7 +4,7 @@ pragma solidity 0.8.28;
 import "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardTransientUpgradeable.sol";
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -33,7 +33,7 @@ contract CreditBroker is
   UUPSUpgradeable,
   AccessControlEnumerableUpgradeable,
   PausableUpgradeable,
-  ReentrancyGuardUpgradeable,
+  ReentrancyGuardTransientUpgradeable,
   ICreditBroker
 {
   using SafeERC20 for IERC20;
@@ -90,29 +90,29 @@ contract CreditBroker is
 
   // ------- Modifiers -------
   modifier onlyMoolah() {
-    require(msg.sender == address(MOOLAH), "Broker/not-moolah");
+    require(msg.sender == address(MOOLAH), "not moolah");
     _;
   }
 
   modifier marketIdSet() {
-    require(Id.unwrap(MARKET_ID) != bytes32(0), "Broker/market-not-set");
+    require(Id.unwrap(MARKET_ID) != bytes32(0), "market not set");
     _;
   }
 
   modifier whenBorrowNotPaused() {
-    require(!borrowPaused, "Broker/borrow-paused");
+    require(!borrowPaused, "borrow paused");
     _;
   }
 
   /// @dev ensure user has no debt before borrowing new fixed position
   modifier noDebt() {
-    require(ICreditToken(COLLATERAL_TOKEN).debtOf(msg.sender) == 0, "Broker/user-has-debt");
+    require(ICreditToken(COLLATERAL_TOKEN).debtOf(msg.sender) == 0, "user has debt");
     _;
   }
 
   /// @dev ensure user has no penalized positions before borrowing new fixed position
   modifier userNotPenalized() {
-    require(!isUserPenalized(msg.sender), "broker/user-penalized");
+    require(!isUserPenalized(msg.sender), "user penalized");
     _;
   }
 
@@ -123,7 +123,7 @@ contract CreditBroker is
   }
 
   /**
-   * @dev Constructor for the LendingBroker contract
+   * @dev Constructor for the CreditBroker contract
    * @param moolah The address of the Moolah contract
    * @param relayer The address of the BrokerInterestRelayer contract
    * @param oracle The address of the oracle
@@ -138,7 +138,7 @@ contract CreditBroker is
         oracle != address(0) &&
         lista != address(0) &&
         creditToken != address(0),
-      "broker/zero-address"
+      "zero address"
     );
     // set addresses
     MOOLAH = IMoolah(moolah);
@@ -152,43 +152,32 @@ contract CreditBroker is
   }
 
   /**
-   * @dev Initialize the LendingBroker contract
+   * @dev Initialize the CreditBroker contract
    * @param _admin The address of the admin
    * @param _manager The address of the manager
    * @param _bot The address of the bot
    * @param _pauser The address of the pauser
-   * @param _maxFixedLoanPositions The maximum number of fixed loan positions a user can have
    */
-  function initialize(
-    address _admin,
-    address _manager,
-    address _bot,
-    address _pauser,
-    uint256 _maxFixedLoanPositions
-  ) public initializer {
+  function initialize(address _admin, address _manager, address _bot, address _pauser) public initializer {
     require(
-      _admin != address(0) &&
-        _manager != address(0) &&
-        _bot != address(0) &&
-        _pauser != address(0) &&
-        _maxFixedLoanPositions > 0,
-      "broker/zero-address"
+      _admin != address(0) && _manager != address(0) && _bot != address(0) && _pauser != address(0),
+      "zero address"
     );
 
-    __AccessControlEnumerable_init();
-    __Pausable_init();
-    __ReentrancyGuard_init();
+    __AccessControlEnumerable_init_unchained();
+    __Pausable_init_unchained();
+    __ReentrancyGuardTransient_init_unchained();
     // grant roles
     _grantRole(DEFAULT_ADMIN_ROLE, _admin);
     _grantRole(MANAGER, _manager);
     _grantRole(BOT, _bot);
     _grantRole(PAUSER, _pauser);
-    // init state variables
-    maxFixedLoanPositions = _maxFixedLoanPositions;
 
+    // init state variables
+    maxFixedLoanPositions = 100;
     graceConfig.period = 3 days;
     graceConfig.penaltyRate = 15 * 1e25; // 15% = 0.15 * RATE_SCALE
-    graceConfig.noInterestPeriod = 60; // 1 minute interest free period for upfront interest term type
+    graceConfig.noInterestPeriod = 1; // 1 second no interest period for upfront interest term
 
     listaDiscountRate = 20 * 1e25; // 20% discount if repaying interest with LISTA
 
@@ -303,7 +292,7 @@ contract CreditBroker is
     uint256 score,
     bytes32[] calldata proof
   ) external override marketIdSet whenNotPaused nonReentrant syncCreditScore(msg.sender, score, proof) {
-    require(collateralAmount > 0 || repayAmount > 0, "broker/zero-amounts");
+    require(collateralAmount > 0 || repayAmount > 0, "zero amount");
     if (repayAmount > 0) _repay(repayAmount, posId, msg.sender, 0);
     if (collateralAmount > 0) _withdrawCollateral(collateralAmount, score, proof);
   }
@@ -336,7 +325,7 @@ contract CreditBroker is
     uint256 posId,
     address onBehalf
   ) external override marketIdSet whenNotPaused nonReentrant {
-    require(listaAmount > 0, "broker/zero-lista-amount");
+    require(listaAmount > 0, "zero amount");
     uint256 listaPrice = IOracle(ORACLE).peek(LISTA);
     uint256 maxListaAmount = CreditBrokerMath.getMaxListaForInterestRepay(
       _getFixedPositionByPosId(onBehalf, posId),
@@ -393,8 +382,8 @@ contract CreditBroker is
    * @param user The address of the user
    */
   function peek(address token, address user) external view override marketIdSet returns (uint256 price) {
-    require(user != address(0), "broker/zero-address");
-    require(token == COLLATERAL_TOKEN || token == LOAN_TOKEN, "broker/unsupported-token");
+    require(user != address(0), "zero address");
+    require(token == COLLATERAL_TOKEN || token == LOAN_TOKEN, "invalid token");
     price = CreditBrokerMath.peek(token, user, address(MOOLAH), address(ORACLE));
   }
 
@@ -479,7 +468,7 @@ contract CreditBroker is
   ///////////////////////////////////////
 
   function _supplyCollateral(uint256 amount, uint256 score, bytes32[] calldata proof) internal {
-    require(amount > 0, "broker/zero-amount");
+    require(amount > 0, "zero amount");
 
     // sync msg.sender's credit score with creditToken balance before supplying collateral
     ICreditToken(COLLATERAL_TOKEN).syncCreditScore(msg.sender, score, proof);
@@ -493,7 +482,7 @@ contract CreditBroker is
   }
 
   function _withdrawCollateral(uint256 amount, uint256 score, bytes32[] calldata proof) internal {
-    require(amount > 0, "broker/zero-amount");
+    require(amount > 0, "zero amount");
 
     // withdraw from moolah
     MOOLAH.withdrawCollateral(_getMarketParams(MARKET_ID), amount, msg.sender, address(this));
@@ -506,9 +495,9 @@ contract CreditBroker is
   }
 
   function _borrow(uint256 amount, uint256 termId) internal userNotPenalized noDebt {
-    require(amount > 0, "broker/zero-amount");
+    require(amount > 0, "zero amount");
     address user = msg.sender;
-    require(fixedLoanPositions[user].length < maxFixedLoanPositions, "broker/exceed-max-fixed-positions");
+    require(fixedLoanPositions[user].length < maxFixedLoanPositions, "exceed max positions");
     // get term by Id
     FixedTermAndRate memory term = _getTermById(termId);
     // prepare position info
@@ -520,7 +509,7 @@ contract CreditBroker is
     // no interest until
     uint256 _noInterestPeriod = 0;
     if (term.termType == FixedTermType.UPFRONT_INTEREST) {
-      require(graceConfig.noInterestPeriod > 0, "broker/no-interest-period-not-set");
+      require(graceConfig.noInterestPeriod > 0, "invalid grace config");
       _noInterestPeriod = start + graceConfig.noInterestPeriod;
     }
 
@@ -551,8 +540,8 @@ contract CreditBroker is
   }
 
   function _repay(uint256 amount, uint256 posId, address onBehalf, uint256 receivedInterest) internal {
-    require(amount > 0, "broker/zero-amount");
-    require(onBehalf != address(0), "broker/zero-address");
+    require(amount > 0, "zero amount");
+    require(onBehalf != address(0), "zero address");
     address user = msg.sender;
 
     // fetch position (will revert if not found)
@@ -561,7 +550,7 @@ contract CreditBroker is
     // check if position is penalized; if so, must pay in full
     if (_isPositionPenalized(position)) {
       uint256 totalRepayNeeded = CreditBrokerMath.getTotalRepayNeeded(position, graceConfig);
-      require(amount >= totalRepayNeeded, "broker/penalized-position-must-be-paid-in-full");
+      require(amount >= totalRepayNeeded, "penalized position must fully repaid");
     }
 
     // remaining principal before repayment
@@ -624,7 +613,7 @@ contract CreditBroker is
       _removeFixedPositionByPosId(onBehalf, posId);
       // log paid off penalized position
       if (penalty > 0) {
-        emit PaidOffPenalizedPosition(user, posId, block.timestamp);
+        emit PaidOffPenalizedPosition(onBehalf, posId, block.timestamp);
       }
     } else {
       // update position
@@ -675,7 +664,7 @@ contract CreditBroker is
         return fixedTerms[i];
       }
     }
-    revert("broker/term-not-found");
+    revert("term not found");
   }
 
   /**
@@ -690,7 +679,7 @@ contract CreditBroker is
     // borrow from moolah with zero interest
     MOOLAH.borrow(marketParams, amount, 0, onBehalf, address(this));
     // should increase the loan balance same as borrowed amount
-    require(IERC20(LOAN_TOKEN).balanceOf(address(this)) - preBalance == amount, "broker/invalid-borrowed-amount");
+    require(IERC20(LOAN_TOKEN).balanceOf(address(this)) - preBalance == amount, "invalid borrowed amount");
   }
 
   /**
@@ -745,7 +734,7 @@ contract CreditBroker is
         return;
       }
     }
-    revert("broker/position-not-found");
+    revert("position not found");
   }
 
   /**
@@ -760,7 +749,7 @@ contract CreditBroker is
         return positions[i];
       }
     }
-    revert("broker/position-not-found");
+    revert("position not found");
   }
 
   /**
@@ -776,7 +765,7 @@ contract CreditBroker is
         return;
       }
     }
-    revert("broker/position-not-found");
+    revert("position not found");
   }
 
   /**
@@ -798,7 +787,7 @@ contract CreditBroker is
       }
     }
 
-    require(isValid, "broker/position-below-min-loan");
+    require(isValid, "below min loan");
   }
 
   function liquidate(
@@ -821,52 +810,34 @@ contract CreditBroker is
    */
   function setMarketId(Id marketId) external onlyRole(MANAGER) {
     // can only be set once
-    require(Id.unwrap(MARKET_ID) == bytes32(0), "broker/invalid-market");
+    require(Id.unwrap(MARKET_ID) == bytes32(0), "invalid market");
     MARKET_ID = marketId;
     MarketParams memory _marketParams = MOOLAH.idToMarketParams(marketId);
-    require(_marketParams.collateralToken == COLLATERAL_TOKEN, "broker/invalid-collateral-token");
+    require(_marketParams.collateralToken == COLLATERAL_TOKEN, "invalid collateral");
     LOAN_TOKEN = _marketParams.loanToken;
 
     // set broker name
     string memory collateralTokenName = IERC20Metadata(COLLATERAL_TOKEN).symbol();
     string memory loanTokenName = IERC20Metadata(LOAN_TOKEN).symbol();
-    BROKER_NAME = string(abi.encodePacked("Lista-Lending ", collateralTokenName, "-", loanTokenName, " Broker"));
+    BROKER_NAME = string(abi.encodePacked("Lista-Lending ", collateralTokenName, "-", loanTokenName, " CreditBroker"));
     // emit event
     emit MarketIdSet(marketId);
   }
 
   /**
-   * @dev Add, update or remove a fixed term and rate for borrowing
-   * @notice updated by BOT role from time to time
-   * @param term The fixed term and rate scheme
-   * @param removeTerm True to remove the term, false to add or update
+   * @dev Add a new fixed term and rate product
+   * @param term The fixed term and rate scheme to add
    */
-  function updateFixedTermAndRate(FixedTermAndRate calldata term, bool removeTerm) external onlyRole(BOT) {
-    require(term.termId > 0, "broker/invalid-term-id");
-    require(term.duration > 0, "broker/invalid-duration");
-    require(term.apr >= MIN_FIXED_TERM_APR && term.apr <= MAX_FIXED_TERM_APR, "broker/invalid-apr");
-    // update term if it exists
+  function addFixedTermAndRate(FixedTermAndRate calldata term) external onlyRole(MANAGER) {
+    require(term.termId > 0 && term.duration > 0, "invalid input");
+    require(term.apr >= MIN_FIXED_TERM_APR && term.apr <= MAX_FIXED_TERM_APR, "invalid apr");
+
+    // check if term already exists
     for (uint256 i = 0; i < fixedTerms.length; i++) {
-      // term found
-      if (fixedTerms[i].termId == term.termId) {
-        // remove term
-        if (removeTerm) {
-          fixedTerms[i] = fixedTerms[fixedTerms.length - 1];
-          fixedTerms.pop();
-        } else {
-          fixedTerms[i] = term;
-          emit FixedTermAndRateUpdated(term.termId, term.duration, term.apr);
-        }
-        return;
-      }
+      require(fixedTerms[i].termId != term.termId, "invalid id");
     }
-    // item not found
-    // adding new term
-    if (!removeTerm) {
-      fixedTerms.push(term);
-    } else {
-      revert("broker/term-not-found");
-    }
+    fixedTerms.push(term);
+    emit FixedTermAndRateUpdated(term.termId, term.duration, term.apr);
   }
 
   /**
@@ -874,7 +845,7 @@ contract CreditBroker is
    * @param maxPositions The new maximum number of fixed loan positions
    */
   function setMaxFixedLoanPositions(uint256 maxPositions) external onlyRole(MANAGER) {
-    require(maxFixedLoanPositions != maxPositions, "broker/same-value-provided");
+    require(maxFixedLoanPositions != maxPositions, "invalid input");
     emit MaxFixedLoanPositionsUpdated(maxFixedLoanPositions, maxPositions);
     maxFixedLoanPositions = maxPositions;
   }
@@ -884,7 +855,7 @@ contract CreditBroker is
    * @param paused True to pause, false to unpause
    */
   function setBorrowPaused(bool paused) external onlyRole(MANAGER) {
-    require(borrowPaused != paused, "broker/same-value-provided");
+    require(borrowPaused != paused, "invalid input");
     borrowPaused = paused;
     emit BorrowPaused(paused);
   }
@@ -896,9 +867,9 @@ contract CreditBroker is
    * @param noInterestPeriod The no-interest period for upfront interest term type
    */
   function setGraceConfig(uint256 period, uint256 penaltyRate, uint256 noInterestPeriod) external onlyRole(MANAGER) {
-    require(graceConfig.period != period || graceConfig.penaltyRate != penaltyRate, "broker/same-value-provided");
-    require(penaltyRate <= RATE_SCALE, "broker/invalid-penalty-rate");
-    require(noInterestPeriod > 0 && noInterestPeriod <= 3600, "broker/invalid-no-interest-period");
+    require(graceConfig.period != period || graceConfig.penaltyRate != penaltyRate, "invalid input");
+    require(penaltyRate <= RATE_SCALE, "invalid rate");
+    require(noInterestPeriod > 0 && noInterestPeriod <= 3600, "invalid period");
 
     graceConfig.period = period;
     graceConfig.penaltyRate = penaltyRate;
@@ -912,8 +883,7 @@ contract CreditBroker is
    * @param discountRate The new discount rate
    */
   function setListaDiscountRate(uint256 discountRate) external onlyRole(MANAGER) {
-    require(listaDiscountRate != discountRate, "broker/same-value-provided");
-    require(discountRate < RATE_SCALE, "broker/invalid-discount-rate");
+    require(listaDiscountRate != discountRate && discountRate < RATE_SCALE, "invalid input");
 
     listaDiscountRate = discountRate;
 

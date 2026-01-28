@@ -25,6 +25,7 @@ contract CreditTokenTest is Test {
   address admin = address(0xABCD);
   address manager = address(0xDCBA);
   address bot = address(0xBEEF);
+  address pauser = address(0xCAFE);
   address broker1 = address(0x1111);
   address broker2 = address(0x2222);
 
@@ -43,7 +44,16 @@ contract CreditTokenTest is Test {
     _transferers[2] = moolah;
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(creditToken),
-      abi.encodeWithSelector(CreditToken.initialize.selector, admin, manager, bot, _transferers, "Credit Token", "CRE")
+      abi.encodeWithSelector(
+        CreditToken.initialize.selector,
+        admin,
+        manager,
+        bot,
+        pauser,
+        _transferers,
+        "Credit Token",
+        "CRE"
+      )
     );
 
     creditToken = CreditToken(address(proxy));
@@ -51,6 +61,7 @@ contract CreditTokenTest is Test {
     assertEq(creditToken.hasRole(creditToken.DEFAULT_ADMIN_ROLE(), admin), true);
     assertEq(creditToken.hasRole(creditToken.MANAGER(), manager), true);
     assertEq(creditToken.hasRole(creditToken.BOT(), bot), true);
+    assertEq(creditToken.hasRole(creditToken.PAUSER(), pauser), true);
     assertEq(creditToken.hasRole(creditToken.TRANSFERER(), broker1), true);
     assertEq(creditToken.hasRole(creditToken.TRANSFERER(), broker2), true);
     assertEq(creditToken.hasRole(creditToken.TRANSFERER(), moolah), true);
@@ -407,6 +418,30 @@ contract CreditTokenTest is Test {
 
     vm.expectRevert("Invalid proof");
     creditToken.syncCreditScore(user1, score, fakeProof);
+  }
+
+  function test_pause() public {
+    vm.prank(pauser);
+    creditToken.pause();
+    assertEq(creditToken.paused(), true);
+
+    vm.prank(manager);
+    creditToken.unpause();
+    assertEq(creditToken.paused(), false);
+  }
+
+  function test_changeWaitingPeriod() public {
+    uint256 newPeriod = 12 hours;
+    vm.prank(manager);
+    creditToken.changeWaitingPeriod(newPeriod);
+    assertEq(creditToken.waitingPeriod(), newPeriod);
+
+    // should revert when there is outstanding pending merkle root
+    vm.prank(bot);
+    creditToken.setPendingMerkleRoot(merkleRoot);
+    vm.expectRevert("Pending merkle root exists");
+    vm.prank(manager);
+    creditToken.changeWaitingPeriod(6 hours);
   }
 
   function _generateTree(address _account, uint256 _score, uint256 _versionId) public {
