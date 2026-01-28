@@ -27,7 +27,9 @@ contract CreditBrokerMathTest is Test {
       lastRepaidTime: block.timestamp,
       interestRepaid: 0,
       principalRepaid: 0,
-      noInterestUntil: block.timestamp + graceConfig.noInterestPeriod
+      noInterestUntil: block.timestamp + graceConfig.noInterestPeriod,
+      borrowedShares: 0,
+      isBadDebt: false
     });
   }
 

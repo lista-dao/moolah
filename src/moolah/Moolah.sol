@@ -610,6 +610,37 @@ contract Moolah is
     return (seizedAssets, repaidAssets);
   }
 
+  /// @inheritdoc IMoolahBase
+  function liquidateBrokerPosition(
+    MarketParams memory marketParams,
+    address borrower,
+    uint256 badDebtShares
+  ) external whenNotPaused nonReentrant returns (uint256, uint256) {
+    Id id = marketParams.id();
+    require(msg.sender == brokers[id], ErrorsLib.NOT_BROKER);
+    _accrueInterest(marketParams, id);
+    require(badDebtShares <= position[id][borrower].borrowShares, ErrorsLib.EXCEED_BORROW_SHARES);
+    uint256 badDebtAssets = UtilsLib.min(
+      market[id].totalBorrowAssets,
+      badDebtShares.toAssetsUp(market[id].totalBorrowAssets, market[id].totalBorrowShares)
+    );
+    market[id].totalBorrowAssets -= badDebtAssets.toUint128();
+    market[id].totalSupplyAssets -= badDebtAssets.toUint128();
+    market[id].totalBorrowShares -= badDebtShares.toUint128();
+    position[id][borrower].borrowShares -= badDebtShares.toUint128();
+    emit EventsLib.Liquidate(
+      id,
+      msg.sender, // payable
+      borrower,
+      badDebtAssets,
+      badDebtShares,
+      0,
+      badDebtAssets,
+      badDebtShares
+    );
+    return (0, badDebtAssets);
+  }
+
   /* FLASH LOANS */
 
   /// @inheritdoc IMoolahBase
