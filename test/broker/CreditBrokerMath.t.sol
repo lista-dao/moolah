@@ -85,6 +85,36 @@ contract CreditBrokerMathTest is Test {
     assertApproxEqAbs(penalty, expectedPenalty, 1e15, "penalty mismatch");
   }
 
+  function test_getPenaltyForCreditPosition_zeroGracePeriod() public {
+    // mock a grace config
+    GraceConfig memory graceConfig = GraceConfig({ period: 0, penaltyRate: 15 * 1e25, noInterestPeriod: 60 });
+
+    uint256 repayAmt = 1000 ether;
+    uint256 remainingPrincipal = 500 ether;
+    uint256 accruedInterest = 20 ether;
+
+    // skip past end
+    skip(14 days);
+
+    uint256 endTime = block.timestamp;
+
+    uint256 penalty = CreditBrokerMath.getPenaltyForCreditPosition(
+      remainingPrincipal,
+      accruedInterest,
+      endTime,
+      graceConfig
+    );
+
+    assertEq(penalty, 0, "penalty mismatch");
+
+    endTime = block.timestamp - 1;
+    penalty = CreditBrokerMath.getPenaltyForCreditPosition(remainingPrincipal, accruedInterest, endTime, graceConfig);
+    // expected penalty = debt * penaltyRate
+    uint256 expectedPenalty = (520 ether * 15) / 100; // 15% * debt
+
+    assertEq(penalty, expectedPenalty, "penalty mismatch");
+  }
+
   function test_previewRepayFixedLoanPosition_fully() public {
     skip(duration + 10 days);
 
