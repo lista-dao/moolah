@@ -225,8 +225,6 @@ library CreditBrokerMath {
     uint256 endTime,
     GraceConfig memory graceConfig
   ) public view returns (uint256) {
-    if (graceConfig.period == 0) return 0;
-
     uint256 dueTime = endTime + graceConfig.period;
     // if within grace period, no penalty
     if (block.timestamp <= dueTime) return 0;
