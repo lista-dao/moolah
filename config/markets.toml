@@ -22,6 +22,28 @@ irm = [
     "${ALPHA_IRM}"
 ]
 
+ptCollateral = [
+  "${ptsUSDe09APR2026Plasma}",
+  "${ptsUSDe09APR2026Plasma}",
+  "${ptsUSDe09APR2026Plasma}"
+]
+
+ptLoan = [
+  "${USD1}",
+  "${USDT}",
+  "${U}"
+]
+
+ptOracle = [
+  "${ptsUSDe09APR2026PlasmaBaseOracle}",
+  "${ptsUSDe09APR2026PlasmaBaseOracle}",
+  "${ptsUSDe09APR2026PlasmaBaseOracle}"
+]
+
+multiOracle = "${MULTI_ORACLE}"
+
+admin = "${ADMIN}"
+
 [bsc.uint]
 lltv = [
     "${LLTV_33}",

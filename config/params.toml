@@ -57,6 +57,7 @@ tokens = [
     "0x9be61A38725b265BC3eb7Bfdf17AfDFc9d26C130",
     "0xcE24439F2D9C6a2289F741120FE202248B666666",
     "0xbBD3e74E69e6BDDDA8e5AAdC1460611A8f7cd05a",
+    "0x7EB92A12a15E8a019A26A8b344F1e59b14cb8Ad3"
 ]
 
 ### Oracles
@@ -68,6 +69,14 @@ oracles = [
 irms = [
     "0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c",
     "0x5F9f9173B405C6CEAfa7f98d09e4B8447e9797E6"
+]
+
+ptBaseOracles = [
+    "0x539FA1ce6333F79a0cda5dEB9833B5fAEEABE70E"
+]
+
+wallets = [
+    "0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253"
 ]
 
 [bsc.uint]
@@ -141,7 +150,12 @@ tokenNames = [
     "sUSD1",
     "AT",
     "U",
-    "UUSDT"
+    "UUSDT",
+    "ptsUSDe09APR2026Plasma"
+]
+
+ptBaseOracleNames = [
+    "ptsUSDe09APR2026PlasmaBaseOracle"
 ]
 
 oracleNames = [
@@ -166,4 +180,8 @@ lltvNames = [
     "LLTV_90",
     "LLTV_915",
     "LLTV_965"
+]
+
+walletNames = [
+    "ADMIN"
 ]
