@@ -825,37 +825,19 @@ contract CreditBroker is
   }
 
   /**
-   * @dev Add, update or remove a fixed term and rate for borrowing
-   * @notice updated by BOT role from time to time
-   * @param term The fixed term and rate scheme
-   * @param removeTerm True to remove the term, false to add or update
+   * @dev Add a new fixed term and rate product
+   * @param term The fixed term and rate scheme to add
    */
-  function updateFixedTermAndRate(FixedTermAndRate calldata term, bool removeTerm) external onlyRole(BOT) {
-    require(term.termId > 0, "broker/invalid-term-id");
-    require(term.duration > 0, "broker/invalid-duration");
-    require(term.apr >= MIN_FIXED_TERM_APR && term.apr <= MAX_FIXED_TERM_APR, "broker/invalid-apr");
-    // update term if it exists
+  function addFixedTermAndRate(FixedTermAndRate calldata term) external onlyRole(MANAGER) {
+    require(term.termId > 0 && term.duration > 0, "invalid input");
+    require(term.apr >= MIN_FIXED_TERM_APR && term.apr <= MAX_FIXED_TERM_APR, "invalid apr");
+
+    // check if term already exists
     for (uint256 i = 0; i < fixedTerms.length; i++) {
-      // term found
-      if (fixedTerms[i].termId == term.termId) {
-        // remove term
-        if (removeTerm) {
-          fixedTerms[i] = fixedTerms[fixedTerms.length - 1];
-          fixedTerms.pop();
-        } else {
-          fixedTerms[i] = term;
-          emit FixedTermAndRateUpdated(term.termId, term.duration, term.apr);
-        }
-        return;
-      }
+      require(fixedTerms[i].termId != term.termId, "invalid id");
     }
-    // item not found
-    // adding new term
-    if (!removeTerm) {
-      fixedTerms.push(term);
-    } else {
-      revert("broker/term-not-found");
-    }
+    fixedTerms.push(term);
+    emit FixedTermAndRateUpdated(term.termId, term.duration, term.apr);
   }
 
   /**
