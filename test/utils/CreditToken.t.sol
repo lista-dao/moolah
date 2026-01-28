@@ -25,6 +25,7 @@ contract CreditTokenTest is Test {
   address admin = address(0xABCD);
   address manager = address(0xDCBA);
   address bot = address(0xBEEF);
+  address pauser = address(0xCAFE);
   address broker1 = address(0x1111);
   address broker2 = address(0x2222);
 
@@ -43,7 +44,16 @@ contract CreditTokenTest is Test {
     _transferers[2] = moolah;
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(creditToken),
-      abi.encodeWithSelector(CreditToken.initialize.selector, admin, manager, bot, _transferers, "Credit Token", "CRE")
+      abi.encodeWithSelector(
+        CreditToken.initialize.selector,
+        admin,
+        manager,
+        bot,
+        pauser,
+        _transferers,
+        "Credit Token",
+        "CRE"
+      )
     );
 
     creditToken = CreditToken(address(proxy));
@@ -51,6 +61,7 @@ contract CreditTokenTest is Test {
     assertEq(creditToken.hasRole(creditToken.DEFAULT_ADMIN_ROLE(), admin), true);
     assertEq(creditToken.hasRole(creditToken.MANAGER(), manager), true);
     assertEq(creditToken.hasRole(creditToken.BOT(), bot), true);
+    assertEq(creditToken.hasRole(creditToken.PAUSER(), pauser), true);
     assertEq(creditToken.hasRole(creditToken.TRANSFERER(), broker1), true);
     assertEq(creditToken.hasRole(creditToken.TRANSFERER(), broker2), true);
     assertEq(creditToken.hasRole(creditToken.TRANSFERER(), moolah), true);
@@ -233,6 +244,91 @@ contract CreditTokenTest is Test {
     assertEq(creditToken.debtOf(user1), 0); // bad debt cleared
   }
 
+  // 300 -> transfer out all 300 -> 100 -> 80, should have bad debt of 220
+  function test_newScore_lowerThan_userAmount_noBalance() public {
+    test_decreaseCreditScoreWithBadDebt();
+
+    uint256 decreasedScore = 80 ether;
+    _generateTree(user1, decreasedScore, creditToken.versionId() + 1);
+    test_acceptMerkleRoot();
+
+    assertEq(creditToken.balanceOf(user1), 0); // still 0
+    assertEq(_getUserScore(user1), 100 ether);
+    assertEq(creditToken.userAmounts(user1), 300 ether);
+    assertEq(creditToken.debtOf(user1), 200 ether);
+
+    creditToken.syncCreditScore(user1, decreasedScore, proof);
+
+    // Check credit balance after decrease
+    assertEq(creditToken.balanceOf(user1), 0); // still 0
+
+    // Check last synced score (should reflect bad debt of 220)
+    assertEq(_getUserScore(user1), 80 ether);
+    assertEq(_getUserScoreId(user1), creditToken.versionId());
+    assertEq(creditToken.userAmounts(user1), 300 ether);
+    assertEq(creditToken.debtOf(user1), 220 ether);
+  }
+
+  // 300 -> transfer out all 300 -> 100 -> received 10 -> 80, should have bad debt of 210
+  function test_newScore_lowerThan_userAmount_withSmallBalance() public {
+    test_decreaseCreditScoreWithBadDebt();
+
+    uint256 decreasedScore = 80 ether;
+    _generateTree(user1, decreasedScore, creditToken.versionId() + 1);
+    test_acceptMerkleRoot();
+
+    assertEq(creditToken.balanceOf(user1), 0); // still 0
+    assertEq(_getUserScore(user1), 100 ether);
+    assertEq(creditToken.userAmounts(user1), 300 ether);
+    assertEq(creditToken.debtOf(user1), 200 ether);
+
+    // user1 somehow received 10 tokens
+    vm.prank(broker1);
+    creditToken.transfer(user1, 10 ether);
+
+    assertEq(creditToken.balanceOf(user1), 10 ether);
+    creditToken.syncCreditScore(user1, decreasedScore, proof);
+
+    // Check credit balance after decrease
+    assertEq(creditToken.balanceOf(user1), 0); // all 10 tokens burned to cover bad debt
+
+    // Check last synced score (should reflect bad debt of 210)
+    assertEq(_getUserScore(user1), 80 ether);
+    assertEq(_getUserScoreId(user1), creditToken.versionId());
+    assertEq(creditToken.userAmounts(user1), 290 ether); // user amount reduced by 10 due to burning
+    assertEq(creditToken.debtOf(user1), 210 ether);
+  }
+
+  // 300 -> transfer out all 300 -> 100 -> received 199 -> 80, should have bad debt of 21
+  function test_newScore_lowerThan_userAmount_withLargeBalance() public {
+    test_decreaseCreditScoreWithBadDebt();
+
+    uint256 decreasedScore = 80 ether;
+    _generateTree(user1, decreasedScore, creditToken.versionId() + 1);
+    test_acceptMerkleRoot();
+
+    assertEq(creditToken.balanceOf(user1), 0); // still 0
+    assertEq(_getUserScore(user1), 100 ether);
+    assertEq(creditToken.userAmounts(user1), 300 ether);
+    assertEq(creditToken.debtOf(user1), 200 ether);
+
+    // user1 somehow received 199 tokens
+    vm.prank(broker1);
+    creditToken.transfer(user1, 199 ether);
+
+    assertEq(creditToken.balanceOf(user1), 199 ether);
+    creditToken.syncCreditScore(user1, decreasedScore, proof);
+
+    // Check credit balance after decrease
+    assertEq(creditToken.balanceOf(user1), 0); // all 199 tokens burned to cover bad debt
+
+    // Check last synced score (should reflect bad debt of 11)
+    assertEq(_getUserScore(user1), 80 ether);
+    assertEq(_getUserScoreId(user1), creditToken.versionId());
+    assertEq(creditToken.userAmounts(user1), 101 ether); // user amount reduced by 199 due to burning
+    assertEq(creditToken.debtOf(user1), 21 ether);
+  }
+
   // Increase credit score to 350, (300 -> 100 -> 350) which should cover bad debt of 200 and mint 50 tokens
   function test_hasBadDebtThenIncreaseWithMint() public {
     test_decreaseCreditScoreWithBadDebt();
@@ -322,6 +418,30 @@ contract CreditTokenTest is Test {
 
     vm.expectRevert("Invalid proof");
     creditToken.syncCreditScore(user1, score, fakeProof);
+  }
+
+  function test_pause() public {
+    vm.prank(pauser);
+    creditToken.pause();
+    assertEq(creditToken.paused(), true);
+
+    vm.prank(manager);
+    creditToken.unpause();
+    assertEq(creditToken.paused(), false);
+  }
+
+  function test_changeWaitingPeriod() public {
+    uint256 newPeriod = 12 hours;
+    vm.prank(manager);
+    creditToken.changeWaitingPeriod(newPeriod);
+    assertEq(creditToken.waitingPeriod(), newPeriod);
+
+    // should revert when there is outstanding pending merkle root
+    vm.prank(bot);
+    creditToken.setPendingMerkleRoot(merkleRoot);
+    vm.expectRevert("Pending merkle root exists");
+    vm.prank(manager);
+    creditToken.changeWaitingPeriod(6 hours);
   }
 
   function _generateTree(address _account, uint256 _score, uint256 _versionId) public {

@@ -99,6 +99,7 @@ library CreditBrokerMath {
       uint256 fixedPosDebt = _fixedPos.principal - _fixedPos.principalRepaid;
       if (fixedPosDebt > 0 && fixedPosDebt < minLoan) {
         isValid = false;
+        break;
       }
     }
   }
@@ -117,6 +118,19 @@ library CreditBrokerMath {
       // add interest
       totalDebt += getInterestForFixedPosition(_fixedPos) - _fixedPos.interestRepaid;
     }
+  }
+
+  /**
+   * @dev Get the remaining debt for a fixed loan position
+   * @param fixedPosition The fixed loan position
+   */
+  function getPositionDebt(
+    FixedLoanPosition memory fixedPosition
+  ) external view returns (uint256 remainingPrincipal, uint256 remainingInterest) {
+    // remaining principal before repayment
+    remainingPrincipal = fixedPosition.principal - fixedPosition.principalRepaid;
+    // get outstanding accrued interest
+    remainingInterest = getInterestForFixedPosition(fixedPosition) - fixedPosition.interestRepaid;
   }
 
   function mulDivCeiling(uint256 a, uint256 b, uint256 c) public pure returns (uint256) {
@@ -194,28 +208,6 @@ library CreditBrokerMath {
   }
 
   /**
-   * @dev Get the penalty for a fixed loan position
-   * @param position The fixed loan position to get the penalty for
-   * @param repayAmt The actual repay amount (repay amount excluded accrued interest)
-   */
-  function getPenaltyForFixedPosition(
-    FixedLoanPosition memory position,
-    uint256 repayAmt
-  ) public view returns (uint256 penalty) {
-    // only early repayment will incur penalty
-    if (block.timestamp > position.end) return 0;
-    // time left before expiration
-    uint256 timeLeft = position.end - block.timestamp;
-    // penalty = (repayAmt * APR) * timeleft/term * 1/2
-    penalty = Math.mulDiv(
-      Math.mulDiv(repayAmt, _aprPerSecond(position.apr), RATE_SCALE, Math.Rounding.Ceil), // repayAmt * APR(per second)
-      timeLeft,
-      2,
-      Math.Rounding.Ceil
-    );
-  }
-
-  /**
    * @dev Get the penalty for a credit position if repaid after grace period
    *
    * | ---- Fixed term --- | ---- Grace period ---- | After due time
@@ -223,33 +215,24 @@ library CreditBrokerMath {
    * start                 end                    dueTime
    *
    * @param remainingPrincipal The remaining principal amount
-   * @param repayAmt The actual repay amount (repay amount excluded accrued interest)
+   * @param accruedInterest The accrued interest amount
+   * @param endTime The end time of the fixed loan position
+   * @param graceConfig The grace period configuration
    */
   function getPenaltyForCreditPosition(
-    uint256 repayAmt,
     uint256 remainingPrincipal,
     uint256 accruedInterest, // FE method, know penalty on a position before repay
     uint256 endTime,
     GraceConfig memory graceConfig
   ) public view returns (uint256) {
-    if (graceConfig.period == 0) return 0;
-
     uint256 dueTime = endTime + graceConfig.period;
     // if within grace period, no penalty
     if (block.timestamp <= dueTime) return 0;
 
     // maximum repayable amount = remaining principal + penalty on the debt
     uint256 debt = remainingPrincipal + accruedInterest;
-    uint256 maxPenalty = Math.mulDiv(debt, graceConfig.penaltyRate, RATE_SCALE, Math.Rounding.Ceil);
-    uint256 maxRepayable = remainingPrincipal + maxPenalty;
-
-    // if repay amount clears all debt, charge maximum penalty
-    if (repayAmt >= maxRepayable) {
-      return maxPenalty;
-    }
-
-    // penalty = repayAmt * penaltyRate
-    return Math.mulDiv(repayAmt, graceConfig.penaltyRate, RATE_SCALE, Math.Rounding.Ceil);
+    uint256 penalty = Math.mulDiv(debt, graceConfig.penaltyRate, RATE_SCALE, Math.Rounding.Ceil);
+    return penalty;
   }
 
   /**
@@ -262,7 +245,7 @@ library CreditBrokerMath {
     FixedLoanPosition memory position,
     uint256 listaPrice,
     uint256 discountRate
-  ) public view returns (uint256) {
+  ) external view returns (uint256) {
     // get outstanding accrued interest
     uint256 accruedInterest = getInterestForFixedPosition(position) - position.interestRepaid;
 
@@ -316,7 +299,7 @@ library CreditBrokerMath {
     FixedLoanPosition memory position,
     uint256 amount,
     GraceConfig memory graceConfig
-  ) public view returns (uint256 interestRepaid, uint256 penalty, uint256 principalRepaid) {
+  ) external view returns (uint256 interestRepaid, uint256 penalty, uint256 principalRepaid) {
     // remaining principal before repayment
     uint256 remainingPrincipal = position.principal - position.principalRepaid;
     // get outstanding accrued interest
@@ -326,17 +309,15 @@ library CreditBrokerMath {
     interestRepaid = amount < remainingInterest ? amount : remainingInterest;
     uint256 repayPrincipalAmt = amount - interestRepaid;
 
+    // if this is penalized position, ensure full repayment
+    penalty = getPenaltyForCreditPosition(remainingPrincipal, remainingInterest, position.end, graceConfig);
+    if (penalty > 0) {
+      uint256 totalRepayNeeded = remainingInterest + remainingPrincipal + penalty;
+      if (amount < totalRepayNeeded) return (0, 0, 0);
+    }
+
     // then repay principal if there is any amount left
     if (repayPrincipalAmt > 0) {
-      // ----- penalty
-      penalty = getPenaltyForCreditPosition(
-        repayPrincipalAmt,
-        remainingPrincipal,
-        remainingInterest,
-        position.end,
-        graceConfig
-      );
-
       repayPrincipalAmt -= penalty;
 
       // ----- principal
@@ -349,16 +330,23 @@ library CreditBrokerMath {
   }
 
   /**
-   * @dev Revert if duplicate position IDs are found
-   * @param posIds The position IDs to check for duplicates
+   * @dev Get the total repayable amount needed for a fixed loan position
+   * @param position The fixed loan position to get the total repayable amount for
+   * @param graceConfig The grace period configuration
    */
-  function _revertIfDuplicatePosIds(uint256[] calldata posIds) internal pure {
-    for (uint256 i = 0; i < posIds.length; i++) {
-      uint256 posId = posIds[i];
-      for (uint256 j = i + 1; j < posIds.length; j++) {
-        require(posIds[j] != posId, "Broker/duplicate-pos-id");
-      }
-    }
+  function getTotalRepayNeeded(
+    FixedLoanPosition memory position,
+    GraceConfig memory graceConfig
+  ) external view returns (uint256 totalRepayNeeded) {
+    // remaining principal before repayment
+    uint256 remainingPrincipal = position.principal - position.principalRepaid;
+    // get outstanding accrued interest
+    uint256 remainingInterest = getInterestForFixedPosition(position) - position.interestRepaid;
+
+    // calculate penalty if any
+    uint256 penalty = getPenaltyForCreditPosition(remainingPrincipal, remainingInterest, position.end, graceConfig);
+
+    totalRepayNeeded = remainingPrincipal + remainingInterest + penalty;
   }
 
   // =========================== //
@@ -483,6 +471,7 @@ library CreditBrokerMath {
     uint256 principalToDeduct,
     FixedLoanPosition memory p
   ) public view returns (uint256, uint256, FixedLoanPosition memory) {
+    require(p.termType == FixedTermType.ACCRUE_INTEREST, "broker/only-accrue-interest");
     // remaining principal before repayment
     uint256 remainingPrincipal = p.principal - p.principalRepaid;
     // get accrued interest from LAST REPAID TIME to NOW
