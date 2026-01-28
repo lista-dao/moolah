@@ -76,6 +76,18 @@ contract CreateMarketDeploy is Script, Config {
       vm.setEnv(lltvNames[i], vm.toString(lltvs[i]));
     }
 
+    string[] memory ptBaseOracleNames = config.get("ptBaseOracleNames").toStringArray();
+    address[] memory ptBaseOracles = config.get("ptBaseOracles").toAddressArray();
+    for (uint256 i = 0; i < ptBaseOracleNames.length; i++) {
+      vm.setEnv(ptBaseOracleNames[i], vm.toString(ptBaseOracles[i]));
+    }
+
+    string[] memory walletNames = config.get("walletNames").toStringArray();
+    address[] memory wallets = config.get("wallets").toAddressArray();
+    for (uint256 i = 0; i < walletNames.length; i++) {
+      vm.setEnv(walletNames[i], vm.toString(wallets[i]));
+    }
+
     _loadConfig("./config/markets.toml", true);
   }
 }

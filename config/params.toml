@@ -62,7 +62,10 @@ tokens = [
 
 ### Oracles
 oracles = [
-    "0xf3afD82A4071f272F403dC176916141f44E6c750"
+    "0xf3afD82A4071f272F403dC176916141f44E6c750",
+    "0x9B7FAE34238E37dF77d35559eF62995c066B5e11",
+    "0xd69E4BF784185139994eeb3F0Db9Ea307d31FDdB",
+    "0x09E664516C91461d8ed58C934Af48048D2534fe9"
 ]
 
 ### IRMs
@@ -93,6 +96,7 @@ lltvs = [
     865000000000000000,
     900000000000000000,
     915000000000000000,
+    945000000000000000,
     965000000000000000
 ]
 
@@ -159,7 +163,10 @@ ptBaseOracleNames = [
 ]
 
 oracleNames = [
-    "MULTI_ORACLE"
+    "MULTI_ORACLE",
+    "ptsUSDe09APR2026PlasmaUSD1Oracle",
+    "ptsUSDe09APR2026PlasmaUSDTOracle",
+    "ptsUSDe09APR2026PlasmaUOracle"
 ]
 
 irmNames = [
@@ -179,6 +186,7 @@ lltvNames = [
     "LLTV_865",
     "LLTV_90",
     "LLTV_915",
+    "LLTV_945",
     "LLTV_965"
 ]
 
