@@ -103,9 +103,9 @@ contract CreditBrokerInterestRelayer is
    * @param amount The amount of interest to supply
    */
   function supplyToVault(uint256 amount) external override nonReentrant onlyBroker {
+    supplyAmount += amount;
     // transfer interest from broker
     IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
-    supplyAmount += amount;
 
     // get minLoan
     uint256 minLoan = MOOLAH.minLoan(MOOLAH.idToMarketParams(ICreditBrokerBase(msg.sender).MARKET_ID()));
