@@ -860,7 +860,6 @@ contract CreditBroker is
    * @param noInterestPeriod The no-interest period for upfront interest term type
    */
   function setGraceConfig(uint256 period, uint256 penaltyRate, uint256 noInterestPeriod) external onlyRole(MANAGER) {
-    require(graceConfig.period != period || graceConfig.penaltyRate != penaltyRate, "invalid input");
     require(penaltyRate <= RATE_SCALE, "invalid rate");
     require(noInterestPeriod > 0 && noInterestPeriod <= 3600, "invalid period");
 
