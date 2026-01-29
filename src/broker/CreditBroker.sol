@@ -89,11 +89,6 @@ contract CreditBroker is
   uint256 public listaDiscountRate;
 
   // ------- Modifiers -------
-  modifier onlyMoolah() {
-    require(msg.sender == address(MOOLAH), "not moolah");
-    _;
-  }
-
   modifier marketIdSet() {
     require(Id.unwrap(MARKET_ID) != bytes32(0), "market not set");
     _;
