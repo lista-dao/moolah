@@ -571,6 +571,8 @@ contract CreditBroker is
       position.interestRepaid += repayInterestAmt;
       // supply interest into vault as revenue
       _supplyToMoolahVault(repayInterestAmt);
+
+      emit RepaidFixedLoanInterest(onBehalf, posId, repayInterestAmt, position.interestRepaid);
     }
 
     uint256 penalty = 0;
