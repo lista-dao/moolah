@@ -790,13 +790,7 @@ contract CreditBroker is
     require(isValid, "below min loan");
   }
 
-  function liquidate(
-    MarketParams memory,
-    address,
-    uint256,
-    uint256,
-    bytes calldata
-  ) external marketIdSet whenNotPaused nonReentrant {
+  function liquidate(Id, address) external {
     revert("not-support-liquidation");
   }
 
