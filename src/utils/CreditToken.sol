@@ -88,6 +88,7 @@ contract CreditToken is
 
     __ERC20_init_unchained(_name, _symbol);
     __AccessControl_init_unchained();
+    __Pausable_init_unchained();
 
     _grantRole(DEFAULT_ADMIN_ROLE, _admin);
     _grantRole(MANAGER, _manager);
