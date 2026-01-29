@@ -107,6 +107,7 @@ interface ICreditBroker is ICreditBrokerBase {
     uint256 listaAmount,
     uint256 listaPrice
   );
+  event RepaidFixedLoanInterest(address indexed user, uint256 posId, uint256 repayInterestAmt, uint256 interestRepaid);
 
   /// ------------------------------
   ///        View functions
