@@ -321,6 +321,7 @@ contract CreditBroker is
     address onBehalf
   ) external override marketIdSet whenNotPaused nonReentrant {
     require(listaAmount > 0, "zero amount");
+    require(IERC20Metadata(LOAN_TOKEN).decimals() == IERC20Metadata(LISTA).decimals(), "decimal mismatch");
     uint256 listaPrice = IOracle(ORACLE).peek(LISTA);
     uint256 maxListaAmount = CreditBrokerMath.getMaxListaForInterestRepay(
       _getFixedPositionByPosId(onBehalf, posId),
