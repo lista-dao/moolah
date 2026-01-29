@@ -39,6 +39,8 @@ contract CreditBrokerInterestRelayer is
   EnumerableSet.AddressSet private brokers;
   /// @dev vault token
   address public token;
+  /// @dev LISTA token address
+  address public listaToken;
   /// @dev the amount of loan should be supplied to Moolah vault
   uint256 public supplyAmount;
 
@@ -59,20 +61,23 @@ contract CreditBrokerInterestRelayer is
    * @param _moolah The address of the Moolah contract
    * @param _vault The address of the Moolah vault
    * @param _token The address of the vault token
+   * @param _listaToken The address of the LISTA token
    */
   function initialize(
     address _admin,
     address _manager,
     address _moolah,
     address _vault,
-    address _token
+    address _token,
+    address _listaToken
   ) public initializer {
     require(
       _admin != address(0) &&
         _manager != address(0) &&
         _moolah != address(0) &&
         _vault != address(0) &&
-        _token != address(0),
+        _token != address(0) &&
+        _listaToken != address(0),
       "relayer/zero-address-provided"
     );
 
@@ -85,6 +90,7 @@ contract CreditBrokerInterestRelayer is
     MOOLAH = IMoolah(_moolah);
     vault = _vault;
     token = _token;
+    listaToken = _listaToken;
   }
 
   ///////////////////////////////////////
@@ -177,7 +183,7 @@ contract CreditBrokerInterestRelayer is
    * @param amount The amount of loan to withdraw
    * @param receiver The address of the receiver
    */
-  function withdrawLoan(uint256 amount, address receiver) external nonReentrant onlyRole(MANAGER) {
+  function withdrawLoan(uint256 amount, address receiver) external override nonReentrant onlyRole(MANAGER) {
     require(receiver != address(0), "relayer/zero-address-provided");
     require(amount > 0, "relayer/zero-amount-provided");
 
@@ -188,6 +194,18 @@ contract CreditBrokerInterestRelayer is
     IERC20(token).safeTransfer(receiver, amount);
 
     emit TransferredLoan(msg.sender, amount, remainingLoan, receiver);
+  }
+
+  /**
+   * @dev withdraw LISTA tokens by manager
+   */
+  function withdrawLista(uint256 amount, address receiver) external override nonReentrant onlyRole(MANAGER) {
+    require(receiver != address(0), "relayer/zero-address-provided");
+    require(amount > 0, "relayer/zero-amount-provided");
+
+    IERC20(listaToken).safeTransfer(receiver, amount);
+
+    emit WithdrawnLista(listaToken, amount, receiver);
   }
 
   /// @dev only callable by the DEFAULT_ADMIN_ROLE (must be a TimeLock contract)
