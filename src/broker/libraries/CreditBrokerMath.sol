@@ -236,7 +236,7 @@ library CreditBrokerMath {
   }
 
   /**
-   * @dev Calculate the max LISTA amount accpetable for repaying interest
+   * @dev Calculate the max LISTA amount acceptable for repaying interest
    * @param position The fixed loan position
    * @param listaPrice The current LISTA price in loan token (8 decimal places)
    * @param discountRate The discount rate for LISTA repayment (scaled by RATE_SCALE)
