@@ -38,6 +38,7 @@ struct GraceConfig {
   uint256 penaltyRate;
   /// @dev no interest period in seconds, small value; 1 second by default
   /// @dev if users repay within this period after borrowing, no interest will be charged
+  /// @dev after this period, interest is charged based on the original principal, regardless of any partial repayments
   /// @dev used for upfront interest term type only
   uint256 noInterestPeriod;
 }
