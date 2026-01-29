@@ -398,6 +398,8 @@ contract CreditBroker is
    * @return True if the position is penalized, false otherwise
    */
   function isPositionPenalized(address user, uint256 posId) external view returns (bool) {
+    if (graceConfig.period == 0 && graceConfig.penaltyRate == 0) return false;
+
     FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
 
     return _isPositionPenalized(position);
@@ -414,6 +416,8 @@ contract CreditBroker is
    * @return True if the user has any penalized positions, false otherwise
    */
   function isUserPenalized(address user) public view returns (bool) {
+    if (graceConfig.period == 0 && graceConfig.penaltyRate == 0) return false;
+
     FixedLoanPosition[] memory positions = fixedLoanPositions[user];
 
     bool penalized = false;
