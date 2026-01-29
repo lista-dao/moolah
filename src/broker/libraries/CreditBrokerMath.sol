@@ -253,11 +253,11 @@ library CreditBrokerMath {
       accruedInterest,
       RATE_SCALE - discountRate,
       RATE_SCALE,
-      Math.Rounding.Ceil
+      Math.Rounding.Floor
     );
 
     // convert interest amount to LISTA amount
-    return Math.mulDiv(interestAfterDiscount, 1e8, listaPrice, Math.Rounding.Ceil);
+    return Math.mulDiv(interestAfterDiscount, 1e8, listaPrice, Math.Rounding.Floor);
   }
 
   /**
