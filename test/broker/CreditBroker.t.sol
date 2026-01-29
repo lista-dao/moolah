@@ -133,10 +133,15 @@ contract CreditBrokerTest is Test {
         MANAGER,
         address(moolah),
         address(vault),
-        address(USDT)
+        address(USDT),
+        address(LISTA)
       )
     );
     relayer = CreditBrokerInterestRelayer(address(relayerProxy));
+    assertEq(address(relayer.MOOLAH()), address(moolah));
+    assertEq(relayer.vault(), address(vault));
+    assertEq(relayer.token(), address(USDT));
+    assertEq(relayer.listaToken(), address(LISTA));
 
     // Deploy CreditBroker proxy first (used as oracle by the market)
     CreditBroker bImpl = new CreditBroker(
@@ -732,6 +737,12 @@ contract CreditBrokerTest is Test {
 
     assertEq(position.interestRepaid, interestAmount, "fixed position interestRepaid mismatch after interest repay");
     assertEq(position.principalRepaid, 0, "fixed position interestRepaid mismatch after interest repay");
+
+    // withdraw LISTA from relayer
+    vm.prank(MANAGER);
+    relayer.withdrawLista(listaAmount, MANAGER);
+    assertEq(LISTA.balanceOf(MANAGER), listaAmount, "manager LISTA balance mismatch after withdraw from relayer");
+    assertEq(LISTA.balanceOf(address(relayer)), 0, "relayer LISTA balance should be zero after withdraw");
   }
 
   // 1K collateral supplied, then full withdraw 1K

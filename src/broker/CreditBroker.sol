@@ -89,11 +89,6 @@ contract CreditBroker is
   uint256 public listaDiscountRate;
 
   // ------- Modifiers -------
-  modifier onlyMoolah() {
-    require(msg.sender == address(MOOLAH), "not moolah");
-    _;
-  }
-
   modifier marketIdSet() {
     require(Id.unwrap(MARKET_ID) != bytes32(0), "market not set");
     _;
@@ -326,6 +321,7 @@ contract CreditBroker is
     address onBehalf
   ) external override marketIdSet whenNotPaused nonReentrant {
     require(listaAmount > 0, "zero amount");
+    require(IERC20Metadata(LOAN_TOKEN).decimals() == IERC20Metadata(LISTA).decimals(), "decimal mismatch");
     uint256 listaPrice = IOracle(ORACLE).peek(LISTA);
     uint256 maxListaAmount = CreditBrokerMath.getMaxListaForInterestRepay(
       _getFixedPositionByPosId(onBehalf, posId),
@@ -403,6 +399,8 @@ contract CreditBroker is
    * @return True if the position is penalized, false otherwise
    */
   function isPositionPenalized(address user, uint256 posId) external view returns (bool) {
+    if (graceConfig.period == 0 && graceConfig.penaltyRate == 0) return false;
+
     FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
 
     return _isPositionPenalized(position);
@@ -419,6 +417,8 @@ contract CreditBroker is
    * @return True if the user has any penalized positions, false otherwise
    */
   function isUserPenalized(address user) public view returns (bool) {
+    if (graceConfig.period == 0 && graceConfig.penaltyRate == 0) return false;
+
     FixedLoanPosition[] memory positions = fixedLoanPositions[user];
 
     bool penalized = false;
@@ -790,13 +790,7 @@ contract CreditBroker is
     require(isValid, "below min loan");
   }
 
-  function liquidate(
-    MarketParams memory,
-    address,
-    uint256,
-    uint256,
-    bytes calldata
-  ) external marketIdSet whenNotPaused nonReentrant {
+  function liquidate(Id, address) external {
     revert("not-support-liquidation");
   }
 
@@ -867,7 +861,6 @@ contract CreditBroker is
    * @param noInterestPeriod The no-interest period for upfront interest term type
    */
   function setGraceConfig(uint256 period, uint256 penaltyRate, uint256 noInterestPeriod) external onlyRole(MANAGER) {
-    require(graceConfig.period != period || graceConfig.penaltyRate != penaltyRate, "invalid input");
     require(penaltyRate <= RATE_SCALE, "invalid rate");
     require(noInterestPeriod > 0 && noInterestPeriod <= 3600, "invalid period");
 

@@ -7,6 +7,7 @@ import { ICreditBroker, FixedLoanPosition, FixedTermAndRate, GraceConfig, FixedT
 contract CreditBrokerMathTest is Test {
   FixedLoanPosition position;
   GraceConfig graceConfig;
+  FixedLoanPosition position2;
 
   uint256 termId = 1;
   uint256 duration = 14 days;
@@ -21,6 +22,18 @@ contract CreditBrokerMathTest is Test {
       termType: FixedTermType.UPFRONT_INTEREST,
       posId: 1,
       principal: 1_000 ether,
+      apr: apr,
+      start: block.timestamp,
+      end: block.timestamp + duration,
+      lastRepaidTime: block.timestamp,
+      interestRepaid: 0,
+      principalRepaid: 0,
+      noInterestUntil: block.timestamp + graceConfig.noInterestPeriod
+    });
+    position2 = FixedLoanPosition({
+      termType: FixedTermType.UPFRONT_INTEREST,
+      posId: 1,
+      principal: 60, // 9 / 0.15
       apr: apr,
       start: block.timestamp,
       end: block.timestamp + duration,
@@ -200,6 +213,32 @@ contract CreditBrokerMathTest is Test {
     uint256 expectedMaxLista = ((1e8 * totalInterest * 80) / 100) / listaPrice; // considering 20% discount
 
     assertApproxEqAbs(maxLista, expectedMaxLista, 1e15, "max lista mismatch");
+  }
+
+  function test_getMaxListaForInterestRepay_Floor() public {
+    skip(61); // skip no interest period
+    uint256 listaPrice = 1e8; // $1 per LISTA
+    uint listaDiscountRate = 20 * 1e25; // 20% discount
+
+    uint256 maxLista = CreditBrokerMath.getMaxListaForInterestRepay(position2, listaPrice, listaDiscountRate);
+    uint totalInterest = 9; // 60 * 0.15
+
+    // max lista should be floored to 8 LISTA
+    // - accruedInterest = 9 (in smallest loan-token units)
+    // - listaPrice = 1e8 ($1)
+    // - discountRate = 20%
+    // => maxLista = (9 * 1e8 * 80%) / 1e8 = 7.2 LISTA => floored to 7 LISTA
+    // => interestAmountFromLista = floor(7 / 0.8) = 8.75 => 8
+    uint256 expectedMaxLista = 7;
+    assertEq(maxLista, expectedMaxLista, "max lista mismatch");
+
+    // => interestAmountFromLista = floor(7 / 0.8) = 8.75 => 8
+    uint256 interestAmountFromLista = CreditBrokerMath.getInterestAmountFromLista(
+      maxLista,
+      listaPrice,
+      listaDiscountRate
+    );
+    assertGe(totalInterest, interestAmountFromLista);
   }
 
   function test_getInterestAmountFromLista() public {
