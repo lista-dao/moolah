@@ -15,7 +15,7 @@ contract StableSwapLPCollateralDeploy is Script {
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
 
-    string memory name = "$U & USDT-SmartLP";
+    string memory name = "USDC & USDT-SmartLP";
 
     StableSwapLPCollateral impl = new StableSwapLPCollateral(MOOLAH);
     ERC1967Proxy proxy = new ERC1967Proxy(

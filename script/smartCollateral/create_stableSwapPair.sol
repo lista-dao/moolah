@@ -29,10 +29,10 @@ contract StableSwapPairDeploy is Script {
     uint _fee = 1000000; // 0.01%; swap fee
     uint _adminFee = 2e9; // 20% swap fee goes to admin
     uint _priceDiffThreshold = 5e16; // 5%
-    string memory name = "$U & USDT-LP";
+    string memory name = "USDC & USDT-LP";
 
     (address _lp, address _pool) = factory.createSwapPair(
-      DOLLAR_U,
+      USDC,
       USDT,
       name,
       name,
