@@ -321,7 +321,7 @@ contract CreditBroker is
     address onBehalf
   ) external override marketIdSet whenNotPaused nonReentrant {
     require(listaAmount > 0, "zero amount");
-    require(IERC20Metadata(LOAN_TOKEN).decimals() == IERC20Metadata(LISTA).decimals(), "decimal mismatch");
+    require(IERC20Metadata(LOAN_TOKEN).decimals() == 18, "decimal mismatch");
     uint256 listaPrice = IOracle(ORACLE).peek(LISTA);
     uint256 maxListaAmount = CreditBrokerMath.getMaxListaForInterestRepay(
       _getFixedPositionByPosId(onBehalf, posId),
@@ -571,11 +571,10 @@ contract CreditBroker is
       position.interestRepaid += repayInterestAmt;
       // supply interest into vault as revenue
       _supplyToMoolahVault(repayInterestAmt);
-
-      emit RepaidFixedLoanInterest(onBehalf, posId, repayInterestAmt, position.interestRepaid);
     }
 
     uint256 penalty = 0;
+    uint256 principalRepaid = 0;
     // then repay principal if there is any amount left
     if (repayPrincipalAmt > 0) {
       // ----- delay penalty
@@ -598,7 +597,7 @@ contract CreditBroker is
       // the rest will be used to repay partially
       uint256 repayablePrincipal = UtilsLib.min(repayPrincipalAmt, remainingPrincipal);
       if (repayablePrincipal > 0) {
-        uint256 principalRepaid = _repayToMoolah(user, onBehalf, repayablePrincipal);
+        principalRepaid = _repayToMoolah(user, onBehalf, repayablePrincipal);
         position.principalRepaid += principalRepaid;
         if (position.termType == FixedTermType.ACCRUE_INTEREST) {
           // reset repaid interest to zero (all accrued interest has been cleared)
@@ -634,7 +633,10 @@ contract CreditBroker is
       position.end,
       position.apr,
       position.principalRepaid,
-      position.principalRepaid >= position.principal
+      principalRepaid,
+      repayInterestAmt,
+      penalty,
+      position.interestRepaid
     );
   }
 

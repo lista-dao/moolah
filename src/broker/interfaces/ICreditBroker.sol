@@ -85,13 +85,23 @@ interface ICreditBroker is ICreditBrokerBase {
   );
   event RepaidFixedLoanPosition(
     address indexed user,
+    /// @dev the position ID
     uint256 posId,
+    /// @dev the principal of the position
     uint256 principal,
     uint256 start,
     uint256 end,
     uint256 apr,
+    /// @dev total principal repaid after this repayment
     uint256 principalRepaid,
-    bool fullyRepaid
+    /// @dev the amount of principal repaid in this repayment
+    uint256 repayPrincipal,
+    /// @dev the amount of interest repaid in this repayment
+    uint256 repayInterest,
+    /// @dev the penalty paid in this repayment
+    uint256 repayPenalty,
+    /// @dev the total interest repaid after this repayment
+    uint256 totalInterestRepaid
   );
   event FixedLoanPositionRemoved(address indexed user, uint256 posId);
   event MaxFixedLoanPositionsUpdated(uint256 oldMax, uint256 newMax);
@@ -108,7 +118,6 @@ interface ICreditBroker is ICreditBrokerBase {
     uint256 listaAmount,
     uint256 listaPrice
   );
-  event RepaidFixedLoanInterest(address indexed user, uint256 posId, uint256 repayInterestAmt, uint256 interestRepaid);
 
   /// ------------------------------
   ///        View functions
