@@ -38,6 +38,7 @@ struct GraceConfig {
   uint256 penaltyRate;
   /// @dev no interest period in seconds, small value; 1 second by default
   /// @dev if users repay within this period after borrowing, no interest will be charged
+  /// @dev after this period, interest is charged based on the original principal, regardless of any partial repayments
   /// @dev used for upfront interest term type only
   uint256 noInterestPeriod;
 }
@@ -84,13 +85,23 @@ interface ICreditBroker is ICreditBrokerBase {
   );
   event RepaidFixedLoanPosition(
     address indexed user,
+    /// @dev the position ID
     uint256 posId,
+    /// @dev the principal of the position
     uint256 principal,
     uint256 start,
     uint256 end,
     uint256 apr,
+    /// @dev total principal repaid after this repayment
     uint256 principalRepaid,
-    bool fullyRepaid
+    /// @dev the amount of principal repaid in this repayment
+    uint256 repayPrincipal,
+    /// @dev the amount of interest repaid in this repayment
+    uint256 repayInterest,
+    /// @dev the penalty paid in this repayment
+    uint256 repayPenalty,
+    /// @dev the total interest repaid after this repayment
+    uint256 totalInterestRepaid
   );
   event FixedLoanPositionRemoved(address indexed user, uint256 posId);
   event MaxFixedLoanPositionsUpdated(uint256 oldMax, uint256 newMax);
