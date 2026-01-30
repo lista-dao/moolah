@@ -221,7 +221,7 @@ library CreditBrokerMath {
    */
   function getPenaltyForCreditPosition(
     uint256 remainingPrincipal,
-    uint256 accruedInterest, // FE method, know penalty on a position before repay
+    uint256 accruedInterest,
     uint256 endTime,
     GraceConfig memory graceConfig
   ) public view returns (uint256) {
@@ -229,7 +229,7 @@ library CreditBrokerMath {
     // if within grace period, no penalty
     if (block.timestamp <= dueTime) return 0;
 
-    // maximum repayable amount = remaining principal + penalty on the debt
+    // penalty = penaltyRate * (remainingPrincipal + accruedInterest)
     uint256 debt = remainingPrincipal + accruedInterest;
     uint256 penalty = Math.mulDiv(debt, graceConfig.penaltyRate, RATE_SCALE, Math.Rounding.Ceil);
     return penalty;
