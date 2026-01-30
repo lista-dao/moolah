@@ -43,10 +43,17 @@ contract CreditBrokerInterestRelayer is
   address public listaToken;
   /// @dev the amount of loan should be supplied to Moolah vault
   uint256 public supplyAmount;
+  /// @dev the switch to turn on/off `repayInterestWithLista` feature
+  bool public allowTransferLoan;
 
   // ------- Modifiers -------
   modifier onlyBroker() {
     require(brokers.contains(msg.sender), "relayer/not-broker");
+    _;
+  }
+
+  modifier whenAllowTransferLoan() {
+    require(allowTransferLoan, "relayer/transfer-loan-not-allowed");
     _;
   }
 
@@ -91,6 +98,10 @@ contract CreditBrokerInterestRelayer is
     vault = _vault;
     token = _token;
     listaToken = _listaToken;
+
+    allowTransferLoan = false;
+
+    emit SetAllowTransferLoan(allowTransferLoan);
   }
 
   ///////////////////////////////////////
@@ -128,9 +139,10 @@ contract CreditBrokerInterestRelayer is
 
   /**
    * @dev Broker transfers loan amount from Relayer to itself; due to repaying interest in LISTA
+   * @notice This function is only callable when `allowTransferLoan` is true
    * @param amount The amount of loan to transfer
    */
-  function transferLoan(uint256 amount) external override nonReentrant onlyBroker {
+  function transferLoan(uint256 amount) external override nonReentrant onlyBroker whenAllowTransferLoan {
     uint256 balance = IERC20(token).balanceOf(address(this));
     uint256 remainingLoan = balance - supplyAmount;
     require(amount <= remainingLoan, "relayer/insufficient-loan-balance");
@@ -206,6 +218,16 @@ contract CreditBrokerInterestRelayer is
     IERC20(listaToken).safeTransfer(receiver, amount);
 
     emit WithdrawnLista(listaToken, amount, receiver);
+  }
+
+  /**
+   * @dev set `allowTransferLoan` flag
+   */
+  function setAllowTransferLoan(bool allow) external onlyRole(MANAGER) {
+    require(allowTransferLoan != allow, "relayer/same-value-provided");
+    allowTransferLoan = allow;
+
+    emit SetAllowTransferLoan(allow);
   }
 
   /// @dev only callable by the DEFAULT_ADMIN_ROLE (must be a TimeLock contract)
