@@ -27,4 +27,5 @@ interface ICreditBrokerInterestRelayer {
   event SuppliedToMoolahVault(uint256 amount);
   event TransferredLoan(address indexed caller, uint256 amount, uint256 remainingLoan, address receiver);
   event WithdrawnLista(address indexed token, uint256 amount, address receiver);
+  event SetAllowTransferLoan(bool allow);
 }

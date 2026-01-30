@@ -142,6 +142,7 @@ contract CreditBrokerTest is Test {
     assertEq(relayer.vault(), address(vault));
     assertEq(relayer.token(), address(USDT));
     assertEq(relayer.listaToken(), address(LISTA));
+    assertEq(relayer.allowTransferLoan(), false);
 
     // Deploy CreditBroker proxy first (used as oracle by the market)
     CreditBroker bImpl = new CreditBroker(
@@ -715,8 +716,17 @@ contract CreditBrokerTest is Test {
     uint before = USDT.balanceOf(borrower);
     vm.startPrank(borrower);
     LISTA.approve(address(broker), type(uint256).max);
+    vm.expectRevert("relayer/transfer-loan-not-allowed");
     broker.repayInterestWithLista(0, listaAmount, 1, borrower); // only repay interest with LISTA
     vm.stopPrank();
+
+    vm.prank(MANAGER);
+    relayer.setAllowTransferLoan(true);
+    assertEq(relayer.allowTransferLoan(), true);
+
+    // repay interest with LISTA should succeed now
+    vm.prank(borrower);
+    broker.repayInterestWithLista(0, listaAmount, 1, borrower); // only repay interest with LISTA
 
     // check LISTA and USDT balance
     assertEq(LISTA.balanceOf(borrower), 0, "borrower LISTA balance mismatch after interest repay");
