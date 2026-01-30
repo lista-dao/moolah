@@ -329,11 +329,13 @@ contract LendingBroker is
       _supplyToMoolahVault(repayInterestAmt);
     }
 
+    uint256 penalty = 0;
+    uint256 principalRepaid = 0;
     // then repay principal if there is any amount left
     if (repayPrincipalAmt > 0) {
       // ----- penalty
       // check penalty if user is repaying before expiration
-      uint256 penalty = _getPenaltyForFixedPosition(position, UtilsLib.min(repayPrincipalAmt, remainingPrincipal));
+      penalty = _getPenaltyForFixedPosition(position, UtilsLib.min(repayPrincipalAmt, remainingPrincipal));
       // supply penalty into vault as revenue
       if (penalty > 0) {
         IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), penalty);
@@ -344,7 +346,7 @@ contract LendingBroker is
       // the rest will be used to repay partially
       uint256 repayablePrincipal = UtilsLib.min(repayPrincipalAmt, remainingPrincipal);
       if (repayablePrincipal > 0) {
-        uint256 principalRepaid = _repayToMoolah(user, onBehalf, repayablePrincipal);
+        principalRepaid = _repayToMoolah(user, onBehalf, repayablePrincipal);
         position.principalRepaid += principalRepaid;
         // reset repaid interest to zero (all accrued interest has been cleared)
         position.interestRepaid = 0;
@@ -374,7 +376,10 @@ contract LendingBroker is
       position.end,
       position.apr,
       position.principalRepaid,
-      position.principalRepaid >= position.principal
+      principalRepaid,
+      repayInterestAmt,
+      penalty,
+      position.interestRepaid
     );
   }
 
