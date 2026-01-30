@@ -120,7 +120,7 @@ contract CreditBroker is
   /**
    * @dev Constructor for the CreditBroker contract
    * @param moolah The address of the Moolah contract
-   * @param relayer The address of the BrokerInterestRelayer contract
+   * @param relayer The address of the CreditBrokerInterestRelayer contract
    * @param oracle The address of the oracle
    * @param lista The address of the LISTA token
    * @param creditToken The address of the credit token
@@ -262,6 +262,7 @@ contract CreditBroker is
   /**
    * @dev withdraw collateral(credit token) from Moolah
    * @param amount The amount of credit token to withdraw
+   * @param score The credit score of the user
    * @param proof The merkle proof for credit score sync
    */
   function withdrawCollateral(
