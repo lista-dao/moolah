@@ -27,6 +27,8 @@ struct FixedLoanPosition {
   uint256 interestRepaid; // the interest repaid since `lastRepaidTime`, reset to zero when partial of principal is repaid
   uint256 principalRepaid; // the principal repaid
   uint256 noInterestUntil; // only for upfront interest term type, the time until which no interest is charged
+  uint256 borrowedShares; // the shares of the borrowed amount at the time of borrowing
+  bool isBadDebt; // whether liquidation of the position has been triggered.
 }
 
 struct GraceConfig {

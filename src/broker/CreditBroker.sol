@@ -19,6 +19,7 @@ import { SharesMathLib } from "../moolah/libraries/SharesMathLib.sol";
 import { Id, IMoolah, MarketParams, Market, Position } from "../moolah/interfaces/IMoolah.sol";
 import { IOracle } from "../moolah/interfaces/IOracle.sol";
 import { UtilsLib } from "../moolah/libraries/UtilsLib.sol";
+import { MoolahOperateLib } from "./libraries/MoolahOperateLib.sol";
 
 import { ICreditToken } from "../utils/interfaces/ICreditToken.sol";
 
@@ -515,7 +516,8 @@ contract CreditBroker is
     }
 
     // update state for user's fixed positions
-    fixedLoanPositions[user].push(
+    FixedLoanPosition[] storage userPositions = fixedLoanPositions[user];
+    userPositions.push(
       FixedLoanPosition({
         termType: term.termType,
         posId: fixedPosUuid,
@@ -526,12 +528,15 @@ contract CreditBroker is
         lastRepaidTime: start,
         interestRepaid: 0,
         principalRepaid: 0,
-        noInterestUntil: _noInterestPeriod
+        noInterestUntil: _noInterestPeriod,
+        borrowedShares: 0,
+        isBadDebt: false
       })
     );
 
     // borrow from moolah
-    _borrowFromMoolah(user, amount);
+    uint256 borrowedShares = MoolahOperateLib.borrowFromMoolah(LOAN_TOKEN, address(MOOLAH), MARKET_ID, user, amount);
+    userPositions[userPositions.length - 1].borrowedShares = borrowedShares;
     // transfer loan token to user
     IERC20(LOAN_TOKEN).safeTransfer(user, amount);
     // validate positions
@@ -571,7 +576,7 @@ contract CreditBroker is
       // update repaid interest amount
       position.interestRepaid += repayInterestAmt;
       // supply interest into vault as revenue
-      _supplyToMoolahVault(repayInterestAmt);
+      MoolahOperateLib.supplyToMoolahVault(LOAN_TOKEN, RELAYER, repayInterestAmt);
     }
 
     uint256 penalty = 0;
@@ -592,14 +597,29 @@ contract CreditBroker is
       if (penalty > 0) {
         IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), penalty);
         repayPrincipalAmt -= penalty;
-        _supplyToMoolahVault(penalty);
+        MoolahOperateLib.supplyToMoolahVault(LOAN_TOKEN, RELAYER, penalty);
       }
 
       // the rest will be used to repay partially
       uint256 repayablePrincipal = UtilsLib.min(repayPrincipalAmt, remainingPrincipal);
       if (repayablePrincipal > 0) {
-        principalRepaid = _repayToMoolah(user, onBehalf, repayablePrincipal);
-        position.principalRepaid += principalRepaid;
+        if (position.isBadDebt) {
+          IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), repayablePrincipal);
+          MoolahOperateLib.supplyToMoolahVault(LOAN_TOKEN, RELAYER, repayablePrincipal);
+          position.principalRepaid += repayablePrincipal;
+        } else {
+          uint256 repaidShares;
+          (principalRepaid, repaidShares) = MoolahOperateLib.repayToMoolah(
+            LOAN_TOKEN,
+            address(MOOLAH),
+            MARKET_ID,
+            user,
+            onBehalf,
+            repayablePrincipal
+          );
+          position.principalRepaid += principalRepaid;
+          position.borrowedShares -= repaidShares;
+        }
         if (position.termType == FixedTermType.ACCRUE_INTEREST) {
           // reset repaid interest to zero (all accrued interest has been cleared)
           position.interestRepaid = 0;
@@ -670,55 +690,6 @@ contract CreditBroker is
       }
     }
     revert("term not found");
-  }
-
-  /**
-   * @dev Borrow an amount on behalf of a user from Moolah
-   * @param onBehalf The address of the user to borrow on behalf of
-   * @param amount The amount to borrow
-   */
-  function _borrowFromMoolah(address onBehalf, uint256 amount) internal {
-    MarketParams memory marketParams = _getMarketParams(MARKET_ID);
-    // pre-balance
-    uint256 preBalance = IERC20(LOAN_TOKEN).balanceOf(address(this));
-    // borrow from moolah with zero interest
-    MOOLAH.borrow(marketParams, amount, 0, onBehalf, address(this));
-    // should increase the loan balance same as borrowed amount
-    require(IERC20(LOAN_TOKEN).balanceOf(address(this)) - preBalance == amount, "invalid borrowed amount");
-  }
-
-  /**
-   * @dev Repay an amount on behalf of a user to Moolah
-   * @param payer The address of the user who pays for the repayment
-   * @param onBehalf The address of the user to repay on behalf of
-   * @param amount The amount to repay
-   */
-  function _repayToMoolah(address payer, address onBehalf, uint256 amount) internal returns (uint256 assetsRepaid) {
-    IERC20(LOAN_TOKEN).safeTransferFrom(payer, address(this), amount);
-    IERC20(LOAN_TOKEN).safeIncreaseAllowance(address(MOOLAH), amount);
-
-    Market memory market = MOOLAH.market(MARKET_ID);
-    // convert amount to shares
-    uint256 amountShares = amount.toSharesDown(market.totalBorrowAssets, market.totalBorrowShares);
-    // using `shares` to ensure full repayment
-    (assetsRepaid /* sharesRepaid */, ) = MOOLAH.repay(_getMarketParams(MARKET_ID), 0, amountShares, onBehalf, "");
-    // refund any excess amount to payer
-    if (amount > assetsRepaid) {
-      IERC20(LOAN_TOKEN).safeTransfer(payer, amount - assetsRepaid);
-    }
-  }
-
-  /**
-   * @dev Supply an amount of interest to Moolah
-   * @param interest The amount of interest to supply
-   */
-  function _supplyToMoolahVault(uint256 interest) internal {
-    if (interest > 0) {
-      // approve to relayer
-      IERC20(LOAN_TOKEN).safeIncreaseAllowance(RELAYER, interest);
-      // supply interest to relayer to be deposited into vault
-      ICreditBrokerInterestRelayer(RELAYER).supplyToVault(interest);
-    }
   }
 
   /**
