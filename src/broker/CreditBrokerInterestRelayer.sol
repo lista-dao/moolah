@@ -3,7 +3,7 @@ pragma solidity 0.8.28;
 
 import "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardTransientUpgradeable.sol";
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -21,7 +21,7 @@ import { ICreditBrokerInterestRelayer } from "./interfaces/ICreditBrokerInterest
 contract CreditBrokerInterestRelayer is
   UUPSUpgradeable,
   AccessControlEnumerableUpgradeable,
-  ReentrancyGuardUpgradeable,
+  ReentrancyGuardTransientUpgradeable,
   ICreditBrokerInterestRelayer
 {
   using SafeERC20 for IERC20;
@@ -39,12 +39,21 @@ contract CreditBrokerInterestRelayer is
   EnumerableSet.AddressSet private brokers;
   /// @dev vault token
   address public token;
+  /// @dev LISTA token address
+  address public listaToken;
   /// @dev the amount of loan should be supplied to Moolah vault
   uint256 public supplyAmount;
+  /// @dev the switch to turn on/off `repayInterestWithLista` feature
+  bool public allowTransferLoan;
 
   // ------- Modifiers -------
   modifier onlyBroker() {
     require(brokers.contains(msg.sender), "relayer/not-broker");
+    _;
+  }
+
+  modifier whenAllowTransferLoan() {
+    require(allowTransferLoan, "relayer/transfer-loan-not-allowed");
     _;
   }
 
@@ -59,25 +68,28 @@ contract CreditBrokerInterestRelayer is
    * @param _moolah The address of the Moolah contract
    * @param _vault The address of the Moolah vault
    * @param _token The address of the vault token
+   * @param _listaToken The address of the LISTA token
    */
   function initialize(
     address _admin,
     address _manager,
     address _moolah,
     address _vault,
-    address _token
+    address _token,
+    address _listaToken
   ) public initializer {
     require(
       _admin != address(0) &&
         _manager != address(0) &&
         _moolah != address(0) &&
         _vault != address(0) &&
-        _token != address(0),
+        _token != address(0) &&
+        _listaToken != address(0),
       "relayer/zero-address-provided"
     );
 
-    __AccessControlEnumerable_init();
-    __ReentrancyGuard_init();
+    __AccessControlEnumerable_init_unchained();
+    __ReentrancyGuardTransient_init_unchained();
     // grant roles
     _grantRole(DEFAULT_ADMIN_ROLE, _admin);
     _grantRole(MANAGER, _manager);
@@ -85,6 +97,11 @@ contract CreditBrokerInterestRelayer is
     MOOLAH = IMoolah(_moolah);
     vault = _vault;
     token = _token;
+    listaToken = _listaToken;
+
+    allowTransferLoan = false;
+
+    emit SetAllowTransferLoan(allowTransferLoan);
   }
 
   ///////////////////////////////////////
@@ -97,9 +114,9 @@ contract CreditBrokerInterestRelayer is
    * @param amount The amount of interest to supply
    */
   function supplyToVault(uint256 amount) external override nonReentrant onlyBroker {
+    supplyAmount += amount;
     // transfer interest from broker
     IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
-    supplyAmount += amount;
 
     // get minLoan
     uint256 minLoan = MOOLAH.minLoan(MOOLAH.idToMarketParams(ICreditBrokerBase(msg.sender).MARKET_ID()));
@@ -122,9 +139,10 @@ contract CreditBrokerInterestRelayer is
 
   /**
    * @dev Broker transfers loan amount from Relayer to itself; due to repaying interest in LISTA
+   * @notice This function is only callable when `allowTransferLoan` is true
    * @param amount The amount of loan to transfer
    */
-  function transferLoan(uint256 amount) external override nonReentrant onlyBroker {
+  function transferLoan(uint256 amount) external override nonReentrant onlyBroker whenAllowTransferLoan {
     uint256 balance = IERC20(token).balanceOf(address(this));
     uint256 remainingLoan = balance - supplyAmount;
     require(amount <= remainingLoan, "relayer/insufficient-loan-balance");
@@ -177,7 +195,7 @@ contract CreditBrokerInterestRelayer is
    * @param amount The amount of loan to withdraw
    * @param receiver The address of the receiver
    */
-  function withdrawLoan(uint256 amount, address receiver) external nonReentrant onlyRole(MANAGER) {
+  function withdrawLoan(uint256 amount, address receiver) external override nonReentrant onlyRole(MANAGER) {
     require(receiver != address(0), "relayer/zero-address-provided");
     require(amount > 0, "relayer/zero-amount-provided");
 
@@ -188,6 +206,28 @@ contract CreditBrokerInterestRelayer is
     IERC20(token).safeTransfer(receiver, amount);
 
     emit TransferredLoan(msg.sender, amount, remainingLoan, receiver);
+  }
+
+  /**
+   * @dev withdraw LISTA tokens by manager
+   */
+  function withdrawLista(uint256 amount, address receiver) external override nonReentrant onlyRole(MANAGER) {
+    require(receiver != address(0), "relayer/zero-address-provided");
+    require(amount > 0, "relayer/zero-amount-provided");
+
+    IERC20(listaToken).safeTransfer(receiver, amount);
+
+    emit WithdrawnLista(listaToken, amount, receiver);
+  }
+
+  /**
+   * @dev set `allowTransferLoan` flag
+   */
+  function setAllowTransferLoan(bool allow) external onlyRole(MANAGER) {
+    require(allowTransferLoan != allow, "relayer/same-value-provided");
+    allowTransferLoan = allow;
+
+    emit SetAllowTransferLoan(allow);
   }
 
   /// @dev only callable by the DEFAULT_ADMIN_ROLE (must be a TimeLock contract)

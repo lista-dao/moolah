@@ -26,6 +26,7 @@ import { UtilsLib } from "moolah/libraries/UtilsLib.sol";
 import { ORACLE_PRICE_SCALE, LIQUIDATION_CURSOR, MAX_LIQUIDATION_INCENTIVE_FACTOR } from "moolah/libraries/ConstantsLib.sol";
 
 import { CreditToken } from "../../src/utils/CreditToken.sol";
+import { CreditBrokerInfo } from "../../src/broker/CreditBrokerInfo.sol";
 import { Merkle } from "murky/src/Merkle.sol";
 
 contract CreditBrokerTest is Test {
@@ -40,6 +41,7 @@ contract CreditBrokerTest is Test {
   CreditBroker public broker;
   MoolahVault public vault;
   CreditBrokerInterestRelayer public relayer;
+  CreditBrokerInfo public info;
 
   // Market commons
   MarketParams public marketParams;
@@ -95,6 +97,14 @@ contract CreditBrokerTest is Test {
     LISTA.setSymbol("LISTA");
     LISTA.setDecimals(USDT_DECIMALS);
 
+    // Deploy CreditBrokerInfo
+    CreditBrokerInfo infoImpl = new CreditBrokerInfo();
+    ERC1967Proxy infoProxy = new ERC1967Proxy(
+      address(infoImpl),
+      abi.encodeWithSelector(CreditBrokerInfo.initialize.selector, ADMIN)
+    );
+    info = CreditBrokerInfo(address(infoProxy));
+
     // Deploy CreditToken as collateral token
     _deployCreditToken();
 
@@ -123,16 +133,28 @@ contract CreditBrokerTest is Test {
         MANAGER,
         address(moolah),
         address(vault),
-        address(USDT)
+        address(USDT),
+        address(LISTA)
       )
     );
     relayer = CreditBrokerInterestRelayer(address(relayerProxy));
+    assertEq(address(relayer.MOOLAH()), address(moolah));
+    assertEq(relayer.vault(), address(vault));
+    assertEq(relayer.token(), address(USDT));
+    assertEq(relayer.listaToken(), address(LISTA));
+    assertEq(relayer.allowTransferLoan(), false);
 
     // Deploy CreditBroker proxy first (used as oracle by the market)
-    CreditBroker bImpl = new CreditBroker(address(moolah), address(relayer), address(oracle), address(LISTA));
+    CreditBroker bImpl = new CreditBroker(
+      address(moolah),
+      address(relayer),
+      address(oracle),
+      address(LISTA),
+      address(creditToken)
+    );
     ERC1967Proxy bProxy = new ERC1967Proxy(
       address(bImpl),
-      abi.encodeWithSelector(CreditBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, 10)
+      abi.encodeWithSelector(CreditBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER)
     );
     broker = CreditBroker(payable(address(bProxy)));
 
@@ -140,6 +162,8 @@ contract CreditBrokerTest is Test {
     assertEq(address(broker.MOOLAH()), address(moolah));
     assertEq(broker.RELAYER(), address(relayer));
     assertEq(address(broker.ORACLE()), address(oracle));
+    assertEq(address(broker.COLLATERAL_TOKEN()), address(creditToken));
+    assertEq(broker.TOKEN(), address(creditToken));
 
     // Create market using CreditBroker as the oracle address
     marketParams = MarketParams({
@@ -190,7 +214,8 @@ contract CreditBrokerTest is Test {
     (uint period, uint penaltyRate, uint noInterestPeriod) = broker.graceConfig();
     assertEq(period, 3 days);
     assertEq(penaltyRate, 15 * 1e25);
-    assertEq(noInterestPeriod, 1 minutes);
+    assertEq(noInterestPeriod, 1);
+    assertEq(broker.maxFixedLoanPositions(), 100);
   }
 
   function _deployCreditToken() public {
@@ -202,6 +227,7 @@ contract CreditBrokerTest is Test {
         ADMIN,
         MANAGER,
         BOT,
+        PAUSER,
         new address[](0),
         "Credit Token",
         "CRDT"
@@ -228,7 +254,7 @@ contract CreditBrokerTest is Test {
     vm.prank(BOT);
     creditToken.setPendingMerkleRoot(merkleRoot);
 
-    vm.warp(block.timestamp + 1 days + 1);
+    vm.warp(vm.getBlockTimestamp() + 1 days + 1);
 
     vm.prank(BOT);
     creditToken.acceptMerkleRoot();
@@ -315,7 +341,7 @@ contract CreditBrokerTest is Test {
     _generateTree(borrower, COLLATERAL, creditToken.versionId() + 1);
     vm.startPrank(borrower);
     creditToken.approve(address(broker), type(uint256).max);
-    broker.supplyCollateral(marketParams, COLLATERAL, COLLATERAL, proof);
+    broker.supplyCollateral(COLLATERAL, COLLATERAL, proof);
     vm.stopPrank();
 
     // Check balance
@@ -337,6 +363,69 @@ contract CreditBrokerTest is Test {
     assertEq(pos.collateral, COLLATERAL, "moolah position collateral mismatch");
   }
 
+  // score = 500 and supply 100, then score = 300 and supply 200, should succeed
+  function test_supplyAndBorrow_noBorrow_decreaseScore() public {
+    uint score = 500 ether;
+    uint supplyAmount = 100 ether;
+    _generateTree(borrower, score, creditToken.versionId() + 1);
+
+    vm.startPrank(borrower);
+    creditToken.approve(address(broker), type(uint256).max);
+    broker.supplyAndBorrow(supplyAmount, 0, 1, score, proof);
+    vm.stopPrank();
+
+    skip(2 days);
+
+    // decrease score
+    score = 300 ether;
+    _generateTree(borrower, score, creditToken.versionId() + 1);
+    supplyAmount = 200 ether;
+    vm.startPrank(borrower);
+    broker.supplyAndBorrow(supplyAmount, 0, 1, score, proof);
+    vm.stopPrank();
+  }
+
+  // score = 500 and supply 500, no borrow, no withdraw, then score = 300 and should be able to borrow 300
+  function test_supplyCollateralMax_decreaseScore() public {
+    // Setup a fixed term product
+    uint256 termId = 1;
+    uint256 duration = 14 days;
+    uint256 apr = 105 * 1e25;
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type1 });
+
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term);
+
+    // setup broker to be provider
+    vm.prank(MANAGER);
+    moolah.setProvider(id, address(broker), true);
+
+    skip(1 days);
+
+    uint score = 500 ether;
+    uint supplyAmount = 500 ether;
+    _generateTree(borrower, score, creditToken.versionId() + 1);
+
+    vm.startPrank(borrower);
+    creditToken.approve(address(broker), type(uint256).max);
+    broker.supplyAndBorrow(supplyAmount, 0, termId, score, proof);
+    vm.stopPrank();
+
+    skip(2 days);
+
+    // decrease score
+    score = 300 ether;
+    _generateTree(borrower, score, creditToken.versionId() + 1);
+
+    uint borrowAmount = 300 ether;
+    vm.startPrank(borrower);
+    broker.supplyAndBorrow(0, borrowAmount, termId, score, proof);
+    vm.stopPrank();
+
+    // check balance
+    assertEq(USDT.balanceOf(borrower), 300 ether, "borrower loan token balance mismatch after borrow");
+  }
+
   function test_doubleSupplyShouldRevert() public {
     test_supplyCollateral();
 
@@ -344,7 +433,7 @@ contract CreditBrokerTest is Test {
 
     vm.expectRevert();
     vm.prank(borrower);
-    broker.supplyCollateral(marketParams, COLLATERAL, COLLATERAL, proof);
+    broker.supplyCollateral(COLLATERAL, COLLATERAL, proof);
 
     // Check broker state
     assertEq(broker.fixedPosUuid(), 0);
@@ -362,8 +451,8 @@ contract CreditBrokerTest is Test {
     uint256 apr = 105 * 1e25;
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type1 });
 
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term);
 
     uint256 newScore = COLLATERAL * 3;
     uint256 borrowAmount = COLLATERAL / 2;
@@ -374,10 +463,12 @@ contract CreditBrokerTest is Test {
     assertEq(creditToken.totalSupply(), COLLATERAL, "total supply before mismatch");
     assertEq(USDT.balanceOf(borrower), 0, "borrower loan token balance mismatch before borrow");
 
+    Position memory beforePos = moolah.position(broker.MARKET_ID(), borrower);
     vm.startPrank(borrower);
     creditToken.approve(address(broker), type(uint256).max);
-    broker.supplyAndBorrow(marketParams, 2 * COLLATERAL, borrowAmount, termId, newScore, proof);
+    broker.supplyAndBorrow(2 * COLLATERAL, borrowAmount, termId, newScore, proof);
     vm.stopPrank();
+    Position memory afterPos = moolah.position(broker.MARKET_ID(), borrower);
 
     // Verify global uuid
     assertEq(broker.fixedPosUuid(), 1);
@@ -394,6 +485,11 @@ contract CreditBrokerTest is Test {
     assertEq(positions[0].interestRepaid, 0);
     assertEq(positions[0].principalRepaid, 0);
 
+    assertEq(
+      afterPos.borrowShares - beforePos.borrowShares,
+      positions[0].borrowedShares,
+      "borrowShares increase mismatch"
+    );
     // Check balance
     assertEq(creditToken.balanceOf(borrower), beforeBalance, "should not change borrower collateral balance");
     assertEq(creditToken.balanceOf(address(moolah)), 3 * COLLATERAL, "moolah collateral after mismatch");
@@ -416,8 +512,8 @@ contract CreditBrokerTest is Test {
     uint256 apr = 105 * 1e25;
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type1 });
 
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term);
 
     uint256 newScore = COLLATERAL * 3;
     uint256 borrowAmount = newScore; // max borrow at 100% LTV
@@ -430,7 +526,7 @@ contract CreditBrokerTest is Test {
 
     vm.startPrank(borrower);
     creditToken.approve(address(broker), type(uint256).max);
-    broker.supplyAndBorrow(marketParams, 2 * COLLATERAL, borrowAmount, termId, newScore, proof);
+    broker.supplyAndBorrow(2 * COLLATERAL, borrowAmount, termId, newScore, proof);
     vm.stopPrank();
 
     // Verify global uuid
@@ -468,8 +564,8 @@ contract CreditBrokerTest is Test {
     uint256 apr = 1e27 + (0.15 * 1e27 * (365 days)) / duration; // 15% APR for 14 days
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type2 });
 
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term);
 
     uint256 newScore = COLLATERAL * 3;
     uint256 borrowAmount = newScore; // max borrow at 100% LTV
@@ -482,7 +578,7 @@ contract CreditBrokerTest is Test {
 
     vm.startPrank(borrower);
     creditToken.approve(address(broker), type(uint256).max);
-    broker.supplyAndBorrow(marketParams, borrowAmount, borrowAmount, termId, newScore, proof);
+    broker.supplyAndBorrow(borrowAmount, borrowAmount, termId, newScore, proof);
     vm.stopPrank();
 
     // Verify global uuid
@@ -520,8 +616,8 @@ contract CreditBrokerTest is Test {
     uint256 apr = 1e27 + (0.15 * 1e27 * (365 days)) / duration; // 15% APR for 14 days
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type2 });
 
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term);
 
     uint256 newScore = 500 ether;
     uint256 borrowAmount = 100 ether;
@@ -536,7 +632,7 @@ contract CreditBrokerTest is Test {
     // 1st borrow: 100 principal, 0 interest
     vm.startPrank(borrower);
     creditToken.approve(address(broker), type(uint256).max);
-    broker.supplyAndBorrow(marketParams, borrowAmount, borrowAmount, termId, newScore, proof);
+    broker.supplyAndBorrow(borrowAmount, borrowAmount, termId, newScore, proof);
 
     // Verify global uuid
     assertEq(broker.fixedPosUuid(), 1);
@@ -553,7 +649,7 @@ contract CreditBrokerTest is Test {
     assertEq(positions[0].interestRepaid, 0);
     assertEq(positions[0].principalRepaid, 0);
     assertEq(uint(positions[0].termType), 1);
-    assertEq(positions[0].noInterestUntil, block.timestamp + 60);
+    assertEq(positions[0].noInterestUntil, block.timestamp + 1);
 
     // Check balance
     assertEq(creditToken.balanceOf(borrower), 400 ether, "mint 500 and then supply 100");
@@ -566,10 +662,10 @@ contract CreditBrokerTest is Test {
 
     // 2nd borrow: 400, should fail
     vm.expectRevert("insufficient collateral");
-    broker.supplyAndBorrow(marketParams, 400 ether, 400 ether, termId, newScore, proof);
+    broker.supplyAndBorrow(400 ether, 400 ether, termId, newScore, proof);
     // 2nd borrow: 380, should succeed
     borrowAmount = 380 ether;
-    broker.supplyAndBorrow(marketParams, 400 ether, 380 ether, termId, newScore, proof);
+    broker.supplyAndBorrow(400 ether, 380 ether, termId, newScore, proof);
 
     vm.stopPrank();
 
@@ -587,7 +683,7 @@ contract CreditBrokerTest is Test {
     assertEq(positions[1].interestRepaid, 0);
     assertEq(positions[1].principalRepaid, 0);
     assertEq(uint(positions[1].termType), 1);
-    assertEq(positions[1].noInterestUntil, positions[1].start + 60);
+    assertEq(positions[1].noInterestUntil, positions[1].start + 1);
     assertEq(positions[1].end, positions[1].start + duration);
 
     // 2nd borrow: Check balance
@@ -616,7 +712,7 @@ contract CreditBrokerTest is Test {
     skip(7 days);
     uint totalDebt = broker.getUserTotalDebt(borrower);
     uint usdtBefore = USDT.balanceOf(address(moolah));
-    uint listaAmount = broker.getMaxListaForInterestRepay(position);
+    uint listaAmount = info.getMaxListaToRepay(address(broker), borrower, position.posId);
     uint256 interestAmount = CreditBrokerMath.getInterestAmountFromLista(
       listaAmount,
       oracle.peek(address(LISTA)),
@@ -624,13 +720,24 @@ contract CreditBrokerTest is Test {
     );
     LISTA.setBalance(borrower, listaAmount);
     USDT.setBalance(address(relayer), interestAmount); // relayer needs to have USDT to pay moolah
+    uint before = USDT.balanceOf(borrower);
     vm.startPrank(borrower);
     LISTA.approve(address(broker), type(uint256).max);
+    vm.expectRevert("relayer/transfer-loan-not-allowed");
     broker.repayInterestWithLista(0, listaAmount, 1, borrower); // only repay interest with LISTA
     vm.stopPrank();
 
+    vm.prank(MANAGER);
+    relayer.setAllowTransferLoan(true);
+    assertEq(relayer.allowTransferLoan(), true);
+
+    // repay interest with LISTA should succeed now
+    vm.prank(borrower);
+    broker.repayInterestWithLista(0, listaAmount, 1, borrower); // only repay interest with LISTA
+
     // check LISTA and USDT balance
     assertEq(LISTA.balanceOf(borrower), 0, "borrower LISTA balance mismatch after interest repay");
+    assertEq(USDT.balanceOf(borrower), before, "borrower LISTA balance mismatch after interest repay");
     assertEq(USDT.balanceOf(address(relayer)), 0, "relayer USDT balance mismatch after interest repay");
     assertEq(LISTA.balanceOf(address(relayer)), listaAmount, "borrower LISTA balance mismatch after interest repay");
     assertEq(
@@ -647,6 +754,12 @@ contract CreditBrokerTest is Test {
 
     assertEq(position.interestRepaid, interestAmount, "fixed position interestRepaid mismatch after interest repay");
     assertEq(position.principalRepaid, 0, "fixed position interestRepaid mismatch after interest repay");
+
+    // withdraw LISTA from relayer
+    vm.prank(MANAGER);
+    relayer.withdrawLista(listaAmount, MANAGER);
+    assertEq(LISTA.balanceOf(MANAGER), listaAmount, "manager LISTA balance mismatch after withdraw from relayer");
+    assertEq(LISTA.balanceOf(address(relayer)), 0, "relayer LISTA balance should be zero after withdraw");
   }
 
   // 1K collateral supplied, then full withdraw 1K
@@ -658,7 +771,7 @@ contract CreditBrokerTest is Test {
     uint256 beforeBalanceMoolah = creditToken.balanceOf(address(moolah));
 
     vm.prank(borrower);
-    broker.withdrawCollateral(marketParams, withdrawAmt, COLLATERAL, proof);
+    broker.withdrawCollateral(withdrawAmt, COLLATERAL, proof);
 
     // Check balance
     assertEq(creditToken.balanceOf(borrower) - beforeBalance, withdrawAmt, "withdrawal amount mismatch");
@@ -689,8 +802,8 @@ contract CreditBrokerTest is Test {
 
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type1 });
 
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term);
 
     // Borrow fixed
     uint256 fixedAmt = 500 ether;
@@ -711,8 +824,16 @@ contract CreditBrokerTest is Test {
     uint256 partialPrincipal = 100 ether;
     uint256 partialBuffer = 0.1 ether; // cover accrued interest while penalty is handled separately
     uint256 partialRepay = partialPrincipal + partialBuffer;
+    Position memory positionBefore = moolah.position(marketParams.id(), borrower);
     vm.prank(borrower);
     broker.repay(partialRepay, posId, borrower);
+    Position memory positionAfter = moolah.position(marketParams.id(), borrower);
+    FixedLoanPosition[] memory newPositions = broker.userFixedPositions(borrower);
+    assertEq(
+      positionBefore.borrowShares - positionAfter.borrowShares,
+      positions[0].borrowedShares - newPositions[0].borrowedShares,
+      "share burn mismatch after partial repay"
+    );
 
     positions = broker.userFixedPositions(borrower);
     assertEq(positions.length, 1);
@@ -755,8 +876,8 @@ contract CreditBrokerTest is Test {
     uint256 duration = 14 days;
     uint256 apr = 1e27 + (0.15 * 1e27 * (365 days)) / duration; // 15% APR for 14 days
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type2 });
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term);
 
     // Borrow fixed
     uint256 fixedAmt = 500 ether;
@@ -796,7 +917,7 @@ contract CreditBrokerTest is Test {
     USDT.setBalance(borrower, debt);
     vm.startPrank(borrower);
     USDT.approve(address(broker), type(uint256).max);
-    broker.repayAndWithdraw(marketParams, COLLATERAL, debt, posId, COLLATERAL, proof);
+    broker.repayAndWithdraw(COLLATERAL, debt, posId, COLLATERAL, proof);
     vm.stopPrank();
 
     // check balance
@@ -814,6 +935,38 @@ contract CreditBrokerTest is Test {
     assertEq(creditToken.debtOf(borrower), 0, "borrower credit debt mismatch after full repay");
   }
 
+  // User score = 1K -> supplied all -> User score = 800 -> Can only borrow up to 800
+  function test_fixedBorrow_decreaseScore_afterSupplyAll() public {
+    test_supplyCollateral();
+
+    // Setup a fixed term product
+    uint256 termId = 1;
+    uint256 duration = 14 days;
+    uint256 apr = 105 * 1e25;
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type1 });
+
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term);
+
+    // decrease score to 800
+    uint256 newScore = 800 ether;
+    _generateTree(borrower, newScore, creditToken.versionId() + 1);
+
+    uint256 borrowAmount = 800 ether + 1;
+    vm.prank(borrower);
+    vm.expectRevert("insufficient collateral");
+    broker.borrow(borrowAmount, termId, newScore, proof);
+
+    borrowAmount = newScore;
+    vm.prank(borrower);
+    broker.borrow(borrowAmount, termId, newScore, proof);
+
+    // Verify a fixed position created
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    assertEq(positions.length, 1);
+    assertEq(positions[0].principal, borrowAmount);
+  }
+
   // Supply 1K collateral, borrow 300 fixed, partial repay 40 by 3rd party
   function test_fixedRepayOnBehalfByThirdParty() public {
     test_supplyCollateral();
@@ -823,8 +976,8 @@ contract CreditBrokerTest is Test {
       apr: 105 * 1e25, // 5% APR
       termType: type1
     });
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term);
 
     uint256 fixedAmt = 300 ether;
     vm.prank(borrower);
@@ -894,15 +1047,14 @@ contract CreditBrokerTest is Test {
   // Supply 1K collateral, borrow 350 fixed, full repay by 3rd party after 10 days
   function test_fixedRepayOnBehalfByThirdParty_fullClose() public {
     test_supplyCollateral();
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(
       FixedTermAndRate({
         termId: 22,
         duration: 14 days,
         apr: 105 * 1e25, // 5% APR
         termType: type1
-      }),
-      false
+      })
     );
 
     uint256 fixedAmt = 350 ether;
@@ -979,14 +1131,14 @@ contract CreditBrokerTest is Test {
       apr: 105 * 1e25,
       termType: type1
     });
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term);
 
     _generateTree(borrower, COLLATERAL, creditToken.versionId() + 1);
 
     vm.startPrank(borrower);
     creditToken.approve(address(broker), COLLATERAL);
-    broker.supplyAndBorrow(marketParams, COLLATERAL, COLLATERAL, termId, COLLATERAL, proof);
+    broker.supplyAndBorrow(COLLATERAL, COLLATERAL, termId, COLLATERAL, proof);
     vm.stopPrank();
 
     // Advance time to after term end but within grace period, no delay penalty should apply
@@ -999,7 +1151,8 @@ contract CreditBrokerTest is Test {
     assertEq(beforePos.principalRepaid, 0, "unexpected principal repaid");
     assertEq(beforePos.interestRepaid, 0, "unexpected interest repaid");
     uint256 posId = beforePos.posId;
-    assertFalse(broker.isPositionPenalized(borrower, posId), "position should not be penalized");
+    bool isPenalized = broker.isPositionPenalized(borrower, posId);
+    assertFalse(isPenalized, "position should not be penalized");
 
     uint256 interestDue = CreditBrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.interestRepaid;
     assertGt(interestDue, 0, "interest did not accrue");
@@ -1011,7 +1164,7 @@ contract CreditBrokerTest is Test {
     USDT.setBalance(borrower, debtAmount);
     vm.startPrank(borrower);
     USDT.approve(address(broker), debtAmount);
-    broker.repayAndWithdraw(marketParams, COLLATERAL, debtAmount, posId, COLLATERAL, proof);
+    broker.repayAndWithdraw(COLLATERAL, debtAmount, posId, COLLATERAL, proof);
 
     FixedLoanPosition[] memory afterPositions = broker.userFixedPositions(borrower);
     assertEq(afterPositions.length, 0, "fixed position not removed");
@@ -1034,14 +1187,14 @@ contract CreditBrokerTest is Test {
       apr: 105 * 1e25,
       termType: type1
     });
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term);
 
     _generateTree(borrower, COLLATERAL, creditToken.versionId() + 1);
 
     vm.startPrank(borrower);
     creditToken.approve(address(broker), COLLATERAL);
-    broker.supplyAndBorrow(marketParams, COLLATERAL, COLLATERAL, termId, COLLATERAL, proof);
+    broker.supplyAndBorrow(COLLATERAL, COLLATERAL, termId, COLLATERAL, proof);
     vm.stopPrank();
 
     // Advance time to after grace period
@@ -1054,7 +1207,8 @@ contract CreditBrokerTest is Test {
     assertEq(beforePos.principalRepaid, 0, "unexpected principal repaid");
     assertEq(beforePos.interestRepaid, 0, "unexpected interest repaid");
     uint256 posId = beforePos.posId;
-    assertTrue(broker.isPositionPenalized(borrower, posId), "position should be penalized");
+    bool isPenalized = broker.isPositionPenalized(borrower, posId);
+    assertTrue(isPenalized, "position should be penalized");
 
     uint256 interestDue = CreditBrokerMath.getAccruedInterestForFixedPosition(beforePos) - beforePos.interestRepaid;
     assertApproxEqAbs(interestDue, 1.9178 ether, 1e14, "unexpected interest due");
@@ -1072,7 +1226,10 @@ contract CreditBrokerTest is Test {
     USDT.setBalance(borrower, beforeBalance);
     vm.startPrank(borrower);
     USDT.approve(address(broker), beforeBalance);
-    broker.repayAndWithdraw(marketParams, COLLATERAL, beforeBalance, posId, COLLATERAL, proof);
+    vm.expectRevert("penalized position must fully repaid");
+    broker.repayAndWithdraw(COLLATERAL, 1 ether, posId, COLLATERAL, proof);
+
+    broker.repayAndWithdraw(COLLATERAL, beforeBalance, posId, COLLATERAL, proof);
     vm.stopPrank();
 
     FixedLoanPosition[] memory afterPositions = broker.userFixedPositions(borrower);
@@ -1081,6 +1238,27 @@ contract CreditBrokerTest is Test {
     uint userUsdtBalance = USDT.balanceOf(borrower);
     assertApproxEqAbs(userUsdtBalance, beforeBalance - debt, 1e16, "unexpected user USDT balance after repay");
     assertEq(creditToken.balanceOf(borrower), COLLATERAL, "unexpected user collateral balance after withdraw");
+  }
+
+  // Penalized user cannot borrow again until cleared
+  function test_penalizedUserCannotBorrowAgain() public {
+    test_supplyAndBorrow_MaxBorrow_Upfront();
+    uint256 termId = 1;
+
+    skip(20 days); // after term end + grace period
+    assertEq(broker.isUserPenalized(borrower), true, "user should be penalized");
+
+    uint256 newScore = COLLATERAL * 4;
+    uint256 borrowAmount = COLLATERAL; // 1K
+    _generateTree(borrower, newScore, creditToken.versionId() + 1);
+
+    vm.startPrank(borrower);
+    creditToken.approve(address(broker), type(uint256).max);
+    vm.expectRevert("user penalized");
+    broker.supplyAndBorrow(borrowAmount, borrowAmount, termId, newScore, proof);
+    vm.expectRevert("user penalized");
+    broker.borrow(borrowAmount, termId, newScore, proof);
+    vm.stopPrank();
   }
 
   // -----------------------------
@@ -1096,17 +1274,17 @@ contract CreditBrokerTest is Test {
       apr: 105 * 1e25,
       termType: type1
     });
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term);
 
-    vm.expectRevert(bytes("broker/zero-amount"));
+    vm.expectRevert(bytes("zero amount"));
     vm.prank(borrower);
     broker.borrow(0, 111, COLLATERAL, proof);
   }
 
   function test_borrowFixedTermNotFound_Reverts() public {
     test_supplyCollateral();
-    vm.expectRevert(bytes("broker/term-not-found"));
+    vm.expectRevert(bytes("term not found"));
     vm.prank(borrower);
     broker.borrow(100 ether, 999, COLLATERAL, proof);
   }
@@ -1120,7 +1298,7 @@ contract CreditBrokerTest is Test {
   function test_setBorrowPaused_sameValue_reverts() public {
     vm.prank(MANAGER);
     broker.setBorrowPaused(true);
-    vm.expectRevert(bytes("broker/same-value-provided"));
+    vm.expectRevert(bytes("invalid input"));
     vm.prank(MANAGER);
     broker.setBorrowPaused(true);
   }
@@ -1132,12 +1310,12 @@ contract CreditBrokerTest is Test {
       apr: 105 * 1e25,
       termType: type1
     });
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term);
     vm.prank(MANAGER);
     broker.setBorrowPaused(true);
 
-    vm.expectRevert(bytes("Broker/borrow-paused"));
+    vm.expectRevert(bytes("borrow paused"));
     vm.prank(borrower);
     broker.borrow(1 ether, 111, COLLATERAL, proof);
   }
@@ -1164,7 +1342,7 @@ contract CreditBrokerTest is Test {
     });
     vm.expectRevert(); // AccessControlUnauthorizedAccount
     vm.prank(borrower);
-    broker.updateFixedTermAndRate(term, false);
+    broker.addFixedTermAndRate(term);
   }
 
   // Supply 1K collateral, borrow 15 fixed, set max fixed positions to 1, borrow another fixed -> revert
@@ -1176,14 +1354,14 @@ contract CreditBrokerTest is Test {
       apr: 105 * 1e25,
       termType: type1
     });
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term);
     vm.prank(MANAGER);
     broker.setMaxFixedLoanPositions(1);
 
     vm.startPrank(borrower);
     broker.borrow(15 ether, 11, COLLATERAL, proof);
-    vm.expectRevert(bytes("broker/exceed-max-fixed-positions"));
+    vm.expectRevert(bytes("exceed max positions"));
     broker.borrow(15 ether, 11, COLLATERAL, proof);
     vm.stopPrank();
   }
@@ -1208,8 +1386,8 @@ contract CreditBrokerTest is Test {
       termType: type1
     });
 
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term);
     // initial price from oracle
     uint256 p0 = broker.peek(address(creditToken), borrower);
     vm.prank(borrower);
@@ -1220,13 +1398,19 @@ contract CreditBrokerTest is Test {
   }
 
   function test_peekUnsupportedToken_Reverts() public {
-    vm.expectRevert(bytes("broker/unsupported-token"));
+    vm.expectRevert(bytes("invalid token"));
     broker.peek(address(0xDEA), borrower);
   }
 
   function test_marketIdSet_guard_reverts() public {
     // Deploy a second broker without setting market id
-    CreditBroker bImpl2 = new CreditBroker(address(moolah), address(vault), address(oracle), address(LISTA));
+    CreditBroker bImpl2 = new CreditBroker(
+      address(moolah),
+      address(vault),
+      address(oracle),
+      address(LISTA),
+      address(creditToken)
+    );
     ERC1967Proxy bProxy2 = new ERC1967Proxy(
       address(bImpl2),
       abi.encodeWithSelector(CreditBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, 10)
@@ -1240,16 +1424,16 @@ contract CreditBrokerTest is Test {
 
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type1 });
 
-    vm.prank(BOT);
-    broker2.updateFixedTermAndRate(term, false);
+    vm.prank(MANAGER);
+    broker2.addFixedTermAndRate(term);
 
-    vm.expectRevert(bytes("Broker/market-not-set"));
+    vm.expectRevert(bytes("market not set"));
     vm.prank(borrower);
     broker2.borrow(1 ether, termId, COLLATERAL, proof);
   }
 
   function test_setMarketId_onlyOnce_reverts() public {
-    vm.expectRevert(bytes("broker/invalid-market"));
+    vm.expectRevert(bytes("invalid market"));
     vm.prank(MANAGER);
     broker.setMarketId(id);
   }
@@ -1264,55 +1448,17 @@ contract CreditBrokerTest is Test {
     FixedTermAndRate memory term2 = FixedTermAndRate({ termId: 1, duration: 0, apr: 105 * 1e25, termType: type1 });
     FixedTermAndRate memory term3 = FixedTermAndRate({ termId: 2, duration: 90 days, apr: 0, termType: type1 });
     // termId = 0
-    vm.expectRevert(bytes("broker/invalid-term-id"));
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term1, false);
+    vm.expectRevert(bytes("invalid input"));
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term1);
     // duration = 0
-    vm.expectRevert(bytes("broker/invalid-duration"));
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term2, false);
+    vm.expectRevert(bytes("invalid input"));
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term2);
     // apr < RATE_SCALE
-    vm.expectRevert(bytes("broker/invalid-apr"));
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term3, false);
-  }
-
-  function test_removeFixedTerm_success_and_notFound_revert() public {
-    FixedTermAndRate memory term = FixedTermAndRate({ termId: 3, duration: 10 days, apr: 105 * 1e25, termType: type1 });
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
-    // ensure added
-    FixedTermAndRate[] memory terms = broker.getFixedTerms();
-    assertEq(terms.length, 1);
-    assertEq(terms[0].termId, 3);
-    // remove
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, true);
-    terms = broker.getFixedTerms();
-    assertEq(terms.length, 0);
-    // remove again -> revert
-    vm.expectRevert(bytes("broker/term-not-found"));
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, true);
-  }
-
-  function test_getFixedTerms_update_inPlace() public {
-    FixedTermAndRate memory term = FixedTermAndRate({ termId: 5, duration: 7 days, apr: 105 * 1e25, termType: type1 });
-    FixedTermAndRate memory updatedTerm = FixedTermAndRate({
-      termId: 5,
-      duration: 14 days,
-      apr: 110 * 1e25,
-      termType: type1
-    });
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(updatedTerm, false);
-    FixedTermAndRate[] memory terms = broker.getFixedTerms();
-    assertEq(terms.length, 1);
-    assertEq(terms[0].termId, 5);
-    assertEq(terms[0].duration, 14 days);
-    assertEq(terms[0].apr, 110 * 1e25);
+    vm.expectRevert(bytes("invalid apr"));
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term3);
   }
 
   function test_peek_otherUser_noCollateral_returnsOraclePrice() public {
@@ -1325,9 +1471,9 @@ contract CreditBrokerTest is Test {
 
   function test_setMaxFixedLoanPositions_sameValue_reverts() public {
     // default is 10 (from initialize)
-    vm.expectRevert(bytes("broker/same-value-provided"));
+    vm.expectRevert(bytes("invalid input"));
     vm.prank(MANAGER);
-    broker.setMaxFixedLoanPositions(10);
+    broker.setMaxFixedLoanPositions(100);
   }
 
   function test_checkPositionsBelowMinLoanFixed_reverts() public {
@@ -1339,8 +1485,8 @@ contract CreditBrokerTest is Test {
       termType: type1
     });
     // create a short-term fixed position
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term);
 
     vm.prank(MANAGER);
     moolah.setMinLoanValue(10e8);
@@ -1368,8 +1514,8 @@ contract CreditBrokerTest is Test {
       termType: type1
     });
     // create a short-term fixed position
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
+    vm.prank(MANAGER);
+    broker.addFixedTermAndRate(term);
 
     vm.prank(MANAGER);
     moolah.setMinLoanValue(10e8);
