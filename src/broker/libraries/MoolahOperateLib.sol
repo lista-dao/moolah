@@ -74,6 +74,8 @@ library MoolahOperateLib {
 
   /**
    * @dev Supply an amount of interest to Moolah
+   * @notice There is a known MEV issue here where supplied interest can be front-run by vault suppliers;
+   * @notice The impact is limited by applying a conservative cap in credit markets.
    * @param loanToken The address of the loan token
    * @param relayer The address of the interest relayer
    * @param interest The amount of interest to supply
