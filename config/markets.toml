@@ -3,27 +3,54 @@ enendpoint_url = "${BSC_RPC_URL}"
 
 [bsc.address]
 loan = [
+    "${USD1}",
     "${USDT}",
-    "${USD1}"
+    "${U}"
 ]
 
 collateral = [
-    "${WBNB}",
-    "${BTCB}"
+    "${ptsUSDe09APR2026Plasma}",
+    "${ptsUSDe09APR2026Plasma}",
+    "${ptsUSDe09APR2026Plasma}"
 ]
 
 oracle = [
-    "${MULTI_ORACLE}",
-    "${MULTI_ORACLE}"
+    "${ptsUSDe09APR2026PlasmaUSD1Oracle}",
+    "${ptsUSDe09APR2026PlasmaUSDTOracle}",
+    "${ptsUSDe09APR2026PlasmaUOracle}"
 ]
 
 irm = [
     "${IRM}",
-    "${ALPHA_IRM}"
+    "${IRM}",
+    "${IRM}"
 ]
+
+ptCollateral = [
+  "${ptsUSDe09APR2026Plasma}",
+  "${ptsUSDe09APR2026Plasma}",
+  "${ptsUSDe09APR2026Plasma}"
+]
+
+ptLoan = [
+  "${USD1}",
+  "${USDT}",
+  "${U}"
+]
+
+ptOracle = [
+  "${ptsUSDe09APR2026PlasmaBaseOracle}",
+  "${ptsUSDe09APR2026PlasmaBaseOracle}",
+  "${ptsUSDe09APR2026PlasmaBaseOracle}"
+]
+
+multiOracle = "${MULTI_ORACLE}"
+
+admin = "${ADMIN}"
 
 [bsc.uint]
 lltv = [
-    "${LLTV_33}",
-    "${LLTV_33}"
+    "${LLTV_945}",
+    "${LLTV_945}",
+    "${LLTV_945}"
 ]
