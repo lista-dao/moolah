@@ -6,9 +6,9 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { CreditBrokerInterestRelayer } from "../../src/broker/CreditBrokerInterestRelayer.sol";
 
 contract DeployBrokerInterestRelayer is Script {
-  address moolah_testnet = 0x4c26397D4ef9EEae55735a1631e69Da965eBC41A;
-  address vault = 0x22f0223C503b544b547f825a3eB509FB1406a313;
-  address u_testnet = 0x1f7E0B2883573fe590c10Bf4eAE358E1fBd7c4aa;
+  address vault = 0x4E82Fa869F8D05c8F94900d4652Fdb82f3C7A004;
+  address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
+  address _u = 0xcE24439F2D9C6a2289F741120FE202248B666666;
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY_TESTNET");
@@ -23,7 +23,7 @@ contract DeployBrokerInterestRelayer is Script {
     // Deploy CreditBrokerInterestRelayer proxy
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, moolah_testnet, vault, u_testnet)
+      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, moolah, vault, _u)
     );
     console.log("CreditBrokerInterestRelayer proxy: ", address(proxy));
 
