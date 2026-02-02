@@ -6,12 +6,11 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { CreditBroker } from "../../src/broker/CreditBroker.sol";
 
 contract DeployCreditBroker is Script {
-  address moolah_testnet = 0x4c26397D4ef9EEae55735a1631e69Da965eBC41A;
-  address interestRelayer = 0x915d31C45Fc02482cba1C5A2fe46213991c5020a;
-  address oracle = 0x79e9675cDe605Ef9965AbCE185C5FD08d0DE16B1;
-  uint256 maxFixedLoanPositions = 10;
-  address lista_testnet = 0x90b94D605E069569Adf33C0e73E26a83637c94B1;
-  address creditToken_testnet = 0xd0D36982474f8BD8A6f4B311b843f644187df50B;
+  address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
+  address interestRelayer = address(0);
+  address oracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
+  address lista = 0xFceB31A79F71AC9CBDCF853519c1b12D379EdC46;
+  address creditToken = address(0);
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY_TESTNET");
@@ -20,16 +19,16 @@ contract DeployCreditBroker is Script {
     vm.startBroadcast(deployerPrivateKey);
 
     // Deploy CreditBroker implementation
-    CreditBroker impl = new CreditBroker(moolah_testnet, interestRelayer, oracle, lista_testnet, creditToken_testnet);
+    CreditBroker impl = new CreditBroker(moolah, interestRelayer, oracle, lista, creditToken);
     console.log("CreditBroker implementation: ", address(impl));
-    /*
+
     // Deploy CreditBroker proxy
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, deployer, deployer, maxFixedLoanPositions)
+      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, deployer, deployer)
     );
     console.log("CreditBroker proxy: ", address(proxy));
-*/
+
     vm.stopBroadcast();
   }
 }
