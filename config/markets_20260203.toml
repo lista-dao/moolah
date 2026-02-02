@@ -1,0 +1,56 @@
+[bsc]
+enendpoint_url = "${BSC_RPC_URL}"
+
+[bsc.address]
+loan = [
+    "${USD1}",
+    "${USDT}",
+    "${U}",
+]
+
+collateral = [
+    "${ptUSDe07May2026}",
+    "${ptUSDe07May2026}",
+    "${ptUSDe07May2026}",
+]
+
+oracle = [
+  "${ptUSDe07May2026USD1Oracle}",
+  "${ptUSDe07May2026USDTOracle}",
+  "${ptUSDe07May2026UOracle}",
+]
+
+irm = [
+    "${IRM}",
+    "${IRM}",
+    "${IRM}",
+]
+
+ptCollateral = [
+  "${ptUSDe07May2026}",
+  "${ptUSDe07May2026}",
+  "${ptUSDe07May2026}"
+]
+
+ptLoan = [
+  "${USD1}",
+  "${USDT}",
+  "${U}"
+]
+
+ptOracle = [
+  "${ptUSDe07May2026BaseOracle}",
+  "${ptUSDe07May2026BaseOracle}",
+  "${ptUSDe07May2026BaseOracle}"
+]
+
+multiOracle = "${MULTI_ORACLE}"
+
+admin = "${ADMIN}"
+
+[bsc.uint]
+lltv = [
+    "${LLTV_945}",
+    "${LLTV_945}",
+    "${LLTV_945}",
+]

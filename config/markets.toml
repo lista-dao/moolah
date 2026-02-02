@@ -43,9 +43,9 @@ irm = [
 ]
 
 ptCollateral = [
-  "${ptsUSDe09APR2026Plasma}",
-  "${ptsUSDe09APR2026Plasma}",
-  "${ptsUSDe09APR2026Plasma}"
+  "${ptUSDe07May2026}",
+  "${ptUSDe07May2026}",
+  "${ptUSDe07May2026}"
 ]
 
 ptLoan = [
@@ -55,9 +55,9 @@ ptLoan = [
 ]
 
 ptOracle = [
-  "${ptsUSDe09APR2026PlasmaBaseOracle}",
-  "${ptsUSDe09APR2026PlasmaBaseOracle}",
-  "${ptsUSDe09APR2026PlasmaBaseOracle}"
+  "${ptUSDe07May2026BaseOracle}",
+  "${ptUSDe07May2026BaseOracle}",
+  "${ptUSDe07May2026BaseOracle}"
 ]
 
 multiOracle = "${MULTI_ORACLE}"

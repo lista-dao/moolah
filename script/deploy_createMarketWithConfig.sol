@@ -88,6 +88,6 @@ contract CreateMarketDeploy is Script, Config {
       vm.setEnv(walletNames[i], vm.toString(wallets[i]));
     }
 
-    _loadConfig("./config/markets.toml", true);
+    _loadConfig("./config/markets_20260203.toml", true);
   }
 }
