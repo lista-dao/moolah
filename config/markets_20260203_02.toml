@@ -3,27 +3,27 @@ enendpoint_url = "${BSC_RPC_URL}"
 
 [bsc.address]
 loan = [
-    "${USD1}",
-    "${USDT}",
-    "${U}",
+  "${USD1}",
+  "${USDT}",
+  "${U}",
 ]
 
 collateral = [
-    "${ptUSDe07May2026}",
-    "${ptUSDe07May2026}",
-    "${ptUSDe07May2026}",
+  "${ptSrUSDe02APR2026}",
+  "${ptSrUSDe02APR2026}",
+  "${ptSrUSDe02APR2026}",
 ]
 
 oracle = [
-  "${ptUSDe07May2026USD1Oracle}",
-  "${ptUSDe07May2026USDTOracle}",
-  "${ptUSDe07May2026UOracle}",
+  "${ptSrUSDe02APR2026USD1Oracle}",
+  "${ptSrUSDe02APR2026USDTOracle}",
+  "${ptSrUSDe02APR2026UOracle}",
 ]
 
 irm = [
-    "${IRM}",
-    "${IRM}",
-    "${IRM}",
+  "${IRM}",
+  "${IRM}",
+  "${IRM}",
 ]
 
 ptCollateral = [
@@ -50,7 +50,7 @@ admin = "${ADMIN}"
 
 [bsc.uint]
 lltv = [
-    "${LLTV_945}",
-    "${LLTV_945}",
-    "${LLTV_945}",
+  "${LLTV_90}",
+  "${LLTV_90}",
+  "${LLTV_90}",
 ]

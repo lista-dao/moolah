@@ -7,7 +7,7 @@ import { MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { Config } from "forge-std/Config.sol";
 
-contract CreateMarketWithConfigDeploy is Script, Config {
+contract CreateMarketWithConfigTestDeploy is Script, Config {
   using MarketParamsLib for MarketParams;
   Moolah moolah = Moolah(0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C);
   address moolahManager = 0xd7e38800201D6a42C408Bf79d8723740C4E7f631;
@@ -25,7 +25,7 @@ contract CreateMarketWithConfigDeploy is Script, Config {
     uint256[] memory lltvs = config.get("lltv").toUint256Array();
 
     // create market
-    vm.startBroadcast(deployerPrivateKey);
+    vm.startPrank(moolahManager);
     for (uint256 i = 0; i < loans.length; i++) {
       MarketParams memory param = MarketParams({
         loanToken: loans[i],
@@ -47,7 +47,7 @@ contract CreateMarketWithConfigDeploy is Script, Config {
       moolah.createMarket(param);
       console.log("market created");
     }
-    vm.stopBroadcast();
+    vm.stopPrank();
   }
 
   function _loadMarketParams() private {
