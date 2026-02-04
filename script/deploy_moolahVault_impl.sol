@@ -11,6 +11,7 @@ contract MoolahVaultDeploy is Script {
   address WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
   address BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
   address USDT = 0x55d398326f99059fF775485246999027B3197955;
+  address U = 0xcE24439F2D9C6a2289F741120FE202248B666666;
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -19,7 +20,7 @@ contract MoolahVaultDeploy is Script {
     vm.startBroadcast(deployerPrivateKey);
 
     // Deploy MoolahVault implementation
-    MoolahVault implWBnb = new MoolahVault(moolah, WBNB);
+    MoolahVault implWBnb = new MoolahVault(moolah, U);
     console.log("MoolahVault(WBNB) implementation: ", address(implWBnb));
 
     vm.stopBroadcast();
