@@ -65,7 +65,7 @@ contract MoolahVaultConfigDeploy is Script {
       loanToken: $U,
       collateralToken: creditToken,
       oracle: creditBroker,
-      irm: irm,
+      irm: alphaIrm,
       lltv: lltv100
     });
 
