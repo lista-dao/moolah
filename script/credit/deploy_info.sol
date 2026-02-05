@@ -7,7 +7,7 @@ import { CreditBrokerInfo } from "../../src/broker/CreditBrokerInfo.sol";
 
 contract DeployCreditBrokerInfo is Script {
   function run() public {
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY_TESTNET");
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

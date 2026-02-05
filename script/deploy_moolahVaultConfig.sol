@@ -9,7 +9,7 @@ import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 contract MoolahVaultConfigDeploy is Script {
   using MarketParamsLib for MarketParams;
   // todo update vault
-  MoolahVault vault = MoolahVault(0x384729E442b7636709896e9a3bEf63EF70C22FB0);
+  MoolahVault vault = MoolahVault(0x4E82Fa869F8D05c8F94900d4652Fdb82f3C7A004);
   uint256 fee = 10 * 1e16;
   address feeRecipient = 0x2E2Eed557FAb1d2E11fEA1E1a23FF8f1b23551f3;
   address skimRecipient = 0x1d60bBBEF79Fb9540D271Dbb01925380323A8f66;
@@ -30,13 +30,17 @@ contract MoolahVaultConfigDeploy is Script {
   address lisUSD = 0x0782b6d8c4551B9760e74c0545a9bCD90bdc41E5;
   address $U = 0xcE24439F2D9C6a2289F741120FE202248B666666;
   address $UUSDT = 0xbBD3e74E69e6BDDDA8e5AAdC1460611A8f7cd05a;
+  address creditToken = 0x1f9831626CE85909794eEaA5C35BF34DB3eB52d8;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
+  address $UUSDTSmartProvider = 0x9994D77E5cdcAD9f9055b13402A7BF8C24d4C841;
+  address creditBroker = 0x2A6704D56BDedF4c7564C9534D7fa8D8D204D578;
+
   address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
   address alphaIrm = 0x5F9f9173B405C6CEAfa7f98d09e4B8447e9797E6;
+
   address bot = 0x91fC4BA20685339781888eCA3E9E1c12d40F0e13;
-  address $UUSDTSmartProvider = 0x9994D77E5cdcAD9f9055b13402A7BF8C24d4C841;
 
   uint256 lltv50 = 50 * 1e16;
   uint256 lltv70 = 70 * 1e16;
@@ -45,6 +49,7 @@ contract MoolahVaultConfigDeploy is Script {
   uint256 lltv86 = 86 * 1e16;
   uint256 lltv90 = 90 * 1e16;
   uint256 lltv965 = 965 * 1e15;
+  uint256 lltv100 = 1e18;
 
   bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
   bytes32 public constant MANAGER = keccak256("MANAGER");
@@ -56,47 +61,12 @@ contract MoolahVaultConfigDeploy is Script {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams memory WBNBParams = MarketParams({
+    MarketParams memory creditParams = MarketParams({
       loanToken: $U,
-      collateralToken: WBNB,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv86
-    });
-    MarketParams memory slisBNBParams = MarketParams({
-      loanToken: $U,
-      collateralToken: slisBNB,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv86
-    });
-    MarketParams memory BTCBParams = MarketParams({
-      loanToken: $U,
-      collateralToken: BTCB,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv86
-    });
-    MarketParams memory USDTParams = MarketParams({
-      loanToken: $U,
-      collateralToken: USDT,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv965
-    });
-    MarketParams memory USD1Params = MarketParams({
-      loanToken: $U,
-      collateralToken: USD1,
-      oracle: multiOracle,
-      irm: irm,
-      lltv: lltv965
-    });
-    MarketParams memory UUSDTParams = MarketParams({
-      loanToken: $U,
-      collateralToken: $UUSDT,
-      oracle: $UUSDTSmartProvider,
-      irm: irm,
-      lltv: lltv965
+      collateralToken: creditToken,
+      oracle: creditBroker,
+      irm: alphaIrm,
+      lltv: lltv100
     });
 
     vm.startBroadcast(deployerPrivateKey);
@@ -111,26 +81,11 @@ contract MoolahVaultConfigDeploy is Script {
 
     vault.setFee(fee);
 
-    vault.setCap(WBNBParams, 50_000_000 ether);
-    vault.setCap(slisBNBParams, 50_000_000 ether);
-    vault.setCap(BTCBParams, 50_000_000 ether);
-    vault.setCap(USDTParams, 50_000_000 ether);
-    vault.setCap(USD1Params, 50_000_000 ether);
-    vault.setCap(UUSDTParams, 50_000_000 ether);
+    vault.setCap(creditParams, 100_000 ether);
 
-    Id WBNBId = WBNBParams.id();
-    Id slisBNBId = slisBNBParams.id();
-    Id BTCBId = BTCBParams.id();
-    Id USDTId = USDTParams.id();
-    Id USD1Id = USD1Params.id();
-    Id UUSDTId = UUSDTParams.id();
-    Id[] memory supplyQueue = new Id[](6);
-    supplyQueue[0] = WBNBId;
-    supplyQueue[1] = slisBNBId;
-    supplyQueue[2] = BTCBId;
-    supplyQueue[3] = USDTId;
-    supplyQueue[4] = USD1Id;
-    supplyQueue[5] = UUSDTId;
+    Id creditId = creditParams.id();
+    Id[] memory supplyQueue = new Id[](1);
+    supplyQueue[0] = creditId;
 
     vault.setSupplyQueue(supplyQueue);
     vm.stopBroadcast();

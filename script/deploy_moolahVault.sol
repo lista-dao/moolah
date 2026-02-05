@@ -12,8 +12,8 @@ contract MoolahVaultDeploy is Script {
   address asset = 0xcE24439F2D9C6a2289F741120FE202248B666666; // U
 
   MoolahVault impl = MoolahVault(0xA1f832c7C7ECf91A53b4ff36E0ABdb5133C15982);
-  string name = "Lista U Vault";
-  string symbol = "U";
+  string name = "Lista Credit Vault";
+  string symbol = "Credit Vault";
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
