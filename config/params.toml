@@ -63,6 +63,7 @@ tokens = [
   "0xEA5FF211eF700DccC521a1e6501C9fe1B95D8EE7",
   "0x7E318884f6f299031F4Fa88D7A324E076d460A4b",
   "0x0EA46a4C257071352b57E9F6d054fC137F6E14b9",
+  "0xe052823b4aefc6e230FAf46231A57d0905E30AE0",
 ]
 
 ### Oracles
@@ -90,6 +91,7 @@ ptBaseOracles = [
   "0x539FA1ce6333F79a0cda5dEB9833B5fAEEABE70E",
   "0xac15dD96f1059a7F58c89e1bB57417C804DA6157",
   "0x2FEed35e88ac4de0fe8f43F13BAd378E4Dc7Ad99",
+  "0x55791D105E485Da4DE7e275090c64a8De12080a7",
 ]
 
 wallets = [
@@ -175,12 +177,14 @@ tokenNames = [
   "wNLPUSDT",
   "ptUSDe07May2026",
   "ptSrUSDe02APR2026",
+  "ptSlisBNBx25JUN2026",
 ]
 
 ptBaseOracleNames = [
   "ptsUSDe09APR2026PlasmaBaseOracle",
   "ptUSDe07May2026BaseOracle",
   "ptSrUSDe02APR2026BaseOracle",
+  "ptSlisBNBx25JUN2026BaseOracle",
 ]
 
 oracleNames = [
