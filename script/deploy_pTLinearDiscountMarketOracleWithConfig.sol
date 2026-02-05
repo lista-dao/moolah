@@ -5,16 +5,18 @@ import { Config } from "forge-std/Config.sol";
 
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-import { PTLinearDiscountOracle } from "../src/oracle/PTLinearDiscountOracle.sol";
+import { PTLinearDiscountMarketOracle } from "../src/oracle/PTLinearDiscountMarketOracle.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
-contract PTLinearDiscountOracleWithConfigDeploy is Script, Config {
+contract PTLinearDiscountMarketOracleWithConfigDeploy is Script, Config {
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    _loadMarketParams();
+    string memory configPath = "./config/pt_oracles_20260205.toml";
+
+    _loadMarketParams(configPath);
 
     address[] memory loans = config.get("ptLoan").toAddressArray();
     address[] memory collaterals = config.get("ptCollateral").toAddressArray();
@@ -25,12 +27,14 @@ contract PTLinearDiscountOracleWithConfigDeploy is Script, Config {
 
     for (uint256 i = 0; i < loans.length; i++) {
       console.log(
-        "Deploying PTLinearDiscountOracle for loan:",
+        "Deploying PTLinearDiscountMarketOracle for loan:",
         IERC20Metadata(loans[i]).symbol(),
         " and collateral:",
         IERC20Metadata(collaterals[i]).symbol()
       );
-      deploy_PTOracle(admin, collaterals[i], loans[i], oracles[i], multiOracle);
+      address proxy = deploy_PTOracle(admin, collaterals[i], loans[i], oracles[i], multiOracle);
+
+      config.set("ptMarketOracle", vm.toString(proxy));
     }
 
     vm.stopBroadcast();
@@ -42,19 +46,29 @@ contract PTLinearDiscountOracleWithConfigDeploy is Script, Config {
     address loan,
     address collateralOracle,
     address loanOracle
-  ) public {
+  ) public returns (address) {
     // Deploy implementation
-    PTLinearDiscountOracle impl = new PTLinearDiscountOracle();
-    console.log("PTLinearDiscountOracle implementation: ", address(impl));
+    PTLinearDiscountMarketOracle impl = new PTLinearDiscountMarketOracle();
+    console.log("PTLinearDiscountMarketOracle implementation: ", address(impl));
     // Deploy OracleAdaptor proxy
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, admin, collateral, collateralOracle, loan, loanOracle)
+      abi.encodeWithSelector(
+        impl.initialize.selector,
+        admin,
+        collateral,
+        collateralOracle,
+        loan,
+        loanOracle,
+        loan,
+        loanOracle
+      )
     );
-    console.log("PTLinearDiscountOracle proxy: ", address(proxy));
+    console.log("PTLinearDiscountMarketOracle proxy: ", address(proxy));
+    return address(proxy);
   }
 
-  function _loadMarketParams() private {
+  function _loadMarketParams(string memory configPath) private {
     _loadConfig("./config/params.toml", true);
     string[] memory tokenNames = config.get("tokenNames").toStringArray();
     address[] memory tokens = config.get("tokens").toAddressArray();
@@ -80,6 +94,6 @@ contract PTLinearDiscountOracleWithConfigDeploy is Script, Config {
       vm.setEnv(walletNames[i], vm.toString(wallets[i]));
     }
 
-    _loadConfig("./config/pt_oracles_20260205.toml", true);
+    _loadConfig(configPath, true);
   }
 }
