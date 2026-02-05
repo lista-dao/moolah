@@ -1,57 +1,53 @@
 pragma solidity 0.8.28;
 
 import "forge-std/Script.sol";
+
+import { Moolah } from "moolah/Moolah.sol";
+import { MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
+import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { Config } from "forge-std/Config.sol";
 
-import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+contract CreateMarketWithConfigTestDeploy is Script, Config {
+  using MarketParamsLib for MarketParams;
+  Moolah moolah = Moolah(0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C);
+  address moolahManager = 0xd7e38800201D6a42C408Bf79d8723740C4E7f631;
 
-import { PTLinearDiscountOracle } from "../src/oracle/PTLinearDiscountOracle.sol";
-import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-
-contract PTLinearDiscountOracleWithConfigDeploy is Script, Config {
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
     _loadMarketParams();
+    address[] memory loans = config.get("loan").toAddressArray();
+    address[] memory collaterals = config.get("collateral").toAddressArray();
+    address[] memory oracles = config.get("oracle").toAddressArray();
+    address[] memory irms = config.get("irm").toAddressArray();
+    uint256[] memory lltvs = config.get("lltv").toUint256Array();
 
-    address[] memory loans = config.get("ptLoan").toAddressArray();
-    address[] memory collaterals = config.get("ptCollateral").toAddressArray();
-    address[] memory oracles = config.get("ptOracle").toAddressArray();
-    address multiOracle = config.get("multiOracle").toAddress();
-    address admin = config.get("admin").toAddress();
-    vm.startBroadcast(deployerPrivateKey);
-
+    // create market
+    vm.startPrank(moolahManager);
     for (uint256 i = 0; i < loans.length; i++) {
-      console.log(
-        "Deploying PTLinearDiscountOracle for loan:",
-        IERC20Metadata(loans[i]).symbol(),
-        " and collateral:",
-        IERC20Metadata(collaterals[i]).symbol()
-      );
-      deploy_PTOracle(admin, collaterals[i], loans[i], oracles[i], multiOracle);
+      MarketParams memory param = MarketParams({
+        loanToken: loans[i],
+        collateralToken: collaterals[i],
+        oracle: oracles[i],
+        irm: irms[i],
+        lltv: lltvs[i]
+      });
+      Id id = param.id();
+      console.log("market id:");
+      console.logBytes32(Id.unwrap(id));
+      // check if market already exists
+      (, , , , uint128 lastUpdate, ) = moolah.market(id);
+      if (lastUpdate != 0) {
+        console.log("market already exists");
+        continue;
+      }
+      // create market
+      moolah.createMarket(param);
+      console.log("market created");
     }
-
-    vm.stopBroadcast();
-  }
-
-  function deploy_PTOracle(
-    address admin,
-    address collateral,
-    address loan,
-    address collateralOracle,
-    address loanOracle
-  ) public {
-    // Deploy implementation
-    PTLinearDiscountOracle impl = new PTLinearDiscountOracle();
-    console.log("PTLinearDiscountOracle implementation: ", address(impl));
-    // Deploy OracleAdaptor proxy
-    ERC1967Proxy proxy = new ERC1967Proxy(
-      address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, admin, collateral, collateralOracle, loan, loanOracle)
-    );
-    console.log("PTLinearDiscountOracle proxy: ", address(proxy));
+    vm.stopPrank();
   }
 
   function _loadMarketParams() private {

@@ -7,7 +7,7 @@ import { MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { Config } from "forge-std/Config.sol";
 
-contract CreateMarketDeploy is Script, Config {
+contract CreateMarketWithConfigDeploy is Script, Config {
   using MarketParamsLib for MarketParams;
   Moolah moolah = Moolah(0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C);
   address moolahManager = 0xd7e38800201D6a42C408Bf79d8723740C4E7f631;
@@ -88,6 +88,6 @@ contract CreateMarketDeploy is Script, Config {
       vm.setEnv(walletNames[i], vm.toString(wallets[i]));
     }
 
-    _loadConfig("./config/markets.toml", true);
+    _loadConfig("./config/markets_20260203_02.toml", true);
   }
 }
