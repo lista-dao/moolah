@@ -68,18 +68,6 @@ contract PTLinearDiscountOracleWithConfigDeploy is Script, Config {
       vm.setEnv(oracleNames[i], vm.toString(oracles[i]));
     }
 
-    string[] memory irmNames = config.get("irmNames").toStringArray();
-    address[] memory irms = config.get("irms").toAddressArray();
-    for (uint256 i = 0; i < irmNames.length; i++) {
-      vm.setEnv(irmNames[i], vm.toString(irms[i]));
-    }
-
-    string[] memory lltvNames = config.get("lltvNames").toStringArray();
-    uint256[] memory lltvs = config.get("lltvs").toUint256Array();
-    for (uint256 i = 0; i < lltvNames.length; i++) {
-      vm.setEnv(lltvNames[i], vm.toString(lltvs[i]));
-    }
-
     string[] memory ptBaseOracleNames = config.get("ptBaseOracleNames").toStringArray();
     address[] memory ptBaseOracles = config.get("ptBaseOracles").toAddressArray();
     for (uint256 i = 0; i < ptBaseOracleNames.length; i++) {
@@ -92,6 +80,6 @@ contract PTLinearDiscountOracleWithConfigDeploy is Script, Config {
       vm.setEnv(walletNames[i], vm.toString(wallets[i]));
     }
 
-    _loadConfig("./config/markets_20260203_02.toml", true);
+    _loadConfig("./config/pt_oracles_20260205.toml", true);
   }
 }
