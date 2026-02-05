@@ -2,18 +2,11 @@
 enendpoint_url = "${BSC_RPC_URL}"
 
 [bsc.address]
-ptCollateral = [
-  "${ptSlisBNBx25JUN2026}",
-]
-
-ptLoan = [
-  "${WBNB}",
-]
-
-ptOracle = [
-  "${ptSlisBNBx25JUN2026BaseOracle}",
-]
-
+ptCollateral = ["${ptSlisBNBx25JUN2026}"]
+ptLoan = ["${WBNB}"]
+ptOracle = ["${ptSlisBNBx25JUN2026BaseOracle}"]
 multiOracle = "${MULTI_ORACLE}"
-
 admin = "${ADMIN}"
+
+[bsc.string]
+ptMarketOracle = "0xf9135dCC8c520331c73e8538BC22e409Af8BA265"
