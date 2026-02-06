@@ -767,13 +767,20 @@ contract CreditBroker is
   }
 
   /**
+   * @dev Liquidate function is not supported in this broker
+   */
+  function liquidate(Id id, address borrower) external {
+    revert("not supported");
+  }
+
+  /**
    * @dev Liquidate a penalized fixed loan position
    * @param borrower The address of the borrower
    * @param posId The ID of the position to liquidate
    */
   function liquidate(address borrower, uint256 posId) external onlyRole(BOT) marketIdSet whenNotPaused nonReentrant {
     // find position
-    FixedLoanPosition[] storage positions = fixedLoanPositions[borrower];
+    FixedLoanPosition[] memory positions = fixedLoanPositions[borrower];
     uint256 posIndex = type(uint256).max;
     for (uint256 i = 0; i < positions.length; i++) {
       if (positions[i].posId == posId) {
@@ -792,8 +799,8 @@ contract CreditBroker is
     // liquidate position in Moolah
     MOOLAH.liquidateBrokerPosition(_getMarketParams(MARKET_ID), borrower, positions[posIndex].borrowedShares);
     // mark position as bad debt and set borrowed shares to zero
-    positions[posIndex].borrowedShares = 0;
-    positions[posIndex].isBadDebt = true;
+    fixedLoanPositions[borrower][posIndex].borrowedShares = 0;
+    fixedLoanPositions[borrower][posIndex].isBadDebt = true;
     emit PositionLiquidate(borrower, posIndex);
   }
 
