@@ -1569,4 +1569,22 @@ contract CreditBrokerTest is Test {
     broker.repay(repayAmount, positions[0].posId, borrower);
     vm.stopPrank();
   }
+
+  function test_liquidateWithMoolah() public {
+    test_supplyAndBorrow();
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    (uint256 period, , ) = broker.graceConfig();
+    vm.warp(positions[0].end + period + 1);
+
+    vm.mockCall(
+      address(broker),
+      abi.encodeWithSelector(bytes4(keccak256("getUserTotalDebt(address)")), borrower),
+      abi.encode(5000 ether)
+    );
+
+    vm.startPrank(BOT);
+    vm.expectRevert("not supported");
+    moolah.liquidate(marketParams, borrower, 0, positions[0].borrowedShares, "");
+    vm.stopPrank();
+  }
 }
