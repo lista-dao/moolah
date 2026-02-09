@@ -657,7 +657,8 @@ contract CreditBroker is
       principalRepaid,
       repayInterestAmt,
       penalty,
-      position.interestRepaid
+      position.interestRepaid,
+      position.isBadDebt
     );
   }
 
