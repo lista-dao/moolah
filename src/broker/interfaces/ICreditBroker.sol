@@ -66,6 +66,7 @@ interface ICreditBrokerBase {
   ///      decreasing according to the accruing interest for collateral token
   /// @param token The address of the token to peek
   /// @param user The address of the user to peek
+  /// @return price The price of the token for the user, scaled by 1e8
   function peek(address token, address user) external view returns (uint256 price);
 
   /// @dev get the lista discount rate for interest repayment
