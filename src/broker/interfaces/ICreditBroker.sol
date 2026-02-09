@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import { Id, MarketParams, IMoolah } from "moolah/interfaces/IMoolah.sol";
 import { IOracle } from "../../moolah/interfaces/IOracle.sol";
+import { IProvider } from "../../provider/interfaces/IProvider.sol";
 
 enum FixedTermType {
   ACCRUE_INTEREST, // 0: interest is accrued over time, user pays interest based on time elapsed
@@ -72,7 +73,7 @@ interface ICreditBrokerBase {
 }
 
 /// @dev Broker interface
-interface ICreditBroker is ICreditBrokerBase {
+interface ICreditBroker is ICreditBrokerBase, IProvider {
   /// ------------------------------
   ///            Events
   /// ------------------------------
