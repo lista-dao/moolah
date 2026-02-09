@@ -105,7 +105,9 @@ interface ICreditBroker is ICreditBrokerBase, IProvider {
     /// @dev the penalty paid in this repayment
     uint256 repayPenalty,
     /// @dev the total interest repaid after this repayment
-    uint256 totalInterestRepaid
+    uint256 totalInterestRepaid,
+    /// @dev is the position marked as bad debt
+    bool isBadDebt
   );
   event FixedLoanPositionRemoved(address indexed user, uint256 posId);
   event MaxFixedLoanPositionsUpdated(uint256 oldMax, uint256 newMax);
