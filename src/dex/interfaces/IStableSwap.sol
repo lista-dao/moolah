@@ -18,6 +18,8 @@ interface IStableSwap {
 
   function balances(uint256 i) external view returns (uint256);
 
+  function admin_balances(uint256 i) external view returns (uint256);
+
   function N_COINS() external view returns (uint256);
 
   function RATES(uint256 i) external view returns (uint256);
@@ -53,6 +55,8 @@ interface IStableSwap {
   function remove_liquidity_imbalance(uint256[N_COINS] memory amounts, uint256 max_burn_amount) external;
 
   function remove_liquidity_one_coin(uint256 _token_amount, uint256 i, uint256 min_amount) external;
+
+  function withdraw_admin_fees() external;
 
   // events
   event TokenExchange(
