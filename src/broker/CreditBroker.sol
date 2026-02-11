@@ -802,7 +802,7 @@ contract CreditBroker is
     // mark position as bad debt and set borrowed shares to zero
     fixedLoanPositions[borrower][posIndex].borrowedShares = 0;
     fixedLoanPositions[borrower][posIndex].isBadDebt = true;
-    emit PositionLiquidate(borrower, posIndex);
+    emit PositionLiquidate(borrower, posId);
   }
 
   ///////////////////////////////////////
