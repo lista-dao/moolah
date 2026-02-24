@@ -486,6 +486,12 @@ contract CreditBroker is
   function _withdrawCollateral(uint256 amount, uint256 score, bytes32[] calldata proof) internal {
     require(amount > 0, "zero amount");
 
+    FixedLoanPosition[] memory positions = fixedLoanPositions[msg.sender];
+    // if position is bad debt, user cannot withdraw collateral
+    for (uint256 i = 0; i < positions.length; i++) {
+      require(!positions[i].isBadDebt, "bad debt position exists");
+    }
+
     // withdraw from moolah
     MOOLAH.withdrawCollateral(_getMarketParams(MARKET_ID), amount, msg.sender, address(this));
 
