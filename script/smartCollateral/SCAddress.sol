@@ -1,4 +1,4 @@
-pragma solidity 0.8.28;
+pragma solidity 0.8.34;
 
 address constant MOOLAH = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
 

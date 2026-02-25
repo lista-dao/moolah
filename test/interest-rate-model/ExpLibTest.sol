@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.28;
+pragma solidity 0.8.34;
 
 import { MathLib, WAD_INT } from "interest-rate-model/libraries/MathLib.sol";
 import { ExpLib } from "interest-rate-model/libraries/ExpLib.sol";

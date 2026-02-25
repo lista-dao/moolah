@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.28;
+pragma solidity 0.8.34;
 
 import { MarketParams, Id, Position, Market, IMoolah } from "../interfaces/IMoolah.sol";
 import { SharesMathLib } from "./SharesMathLib.sol";

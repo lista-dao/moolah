@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Powered by Morpho - Based on Morpho Blue smart contracts
-pragma solidity 0.8.28;
+pragma solidity 0.8.34;
 
 import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
