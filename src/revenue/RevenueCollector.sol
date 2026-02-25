@@ -15,6 +15,7 @@ import { ILiquidator } from "../liquidator/ILiquidator.sol";
  */
 contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   using EnumerableSet for EnumerableSet.AddressSet;
+  using SafeERC20 for IERC20;
 
   /// @dev Sets of stable swap pools
   EnumerableSet.AddressSet private stableSwapPools;
@@ -66,13 +67,13 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
 
     for (uint256 i = 0; i < pools.length; i++) {
       require(pools[i] != address(0), "zero address");
-      stableSwapPools.add(pools[i]);
+      require(stableSwapPools.add(pools[i]), "already added");
       emit StableSwapPoolUpdated(pools[i], true);
     }
 
     for (uint256 i = 0; i < _liquidators.length; i++) {
       require(_liquidators[i] != address(0), "zero address");
-      liquidators.add(_liquidators[i]);
+      require(liquidators.add(_liquidators[i]), "already added");
       emit LiquidatorUpdated(_liquidators[i], true);
     }
   }
@@ -178,9 +179,10 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     require(amount > 0, "invalid amount");
 
     if (asset != BNB_ADDRESS) {
-      SafeERC20.safeTransfer(IERC20(asset), to, amount);
+      IERC20(asset).safeTransfer(to, amount);
     } else {
-      payable(to).transfer(amount);
+      (bool success, ) = to.call{ value: amount }("");
+      require(success, "BNB transfer failed");
     }
   }
 
