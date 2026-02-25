@@ -1,4 +1,4 @@
-pragma solidity ^0.8.28;
+pragma solidity ^0.8.34;
 
 import "forge-std/Test.sol";
 import { CreditBrokerMath, RATE_SCALE } from "../../src/broker/libraries/CreditBrokerMath.sol";

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.28;
+pragma solidity 0.8.34;
 
 /// @dev The maximum fee a market can have (25%).
 uint256 constant MAX_FEE = 0.25e18;
