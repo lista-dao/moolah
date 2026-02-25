@@ -30,6 +30,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
   mapping(bytes32 => bool) public marketWhitelist;
   mapping(address => bool) public pairWhitelist;
   mapping(address => bool) public smartProviders;
+  address public revenueReceiver;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // manager role
@@ -94,6 +95,17 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     msg.sender.safeTransferETH(amount);
   }
 
+  /// @dev withdraw tokens or BNB to revenue receiver.
+  /// @param token The address of the token.
+  /// @param amount The amount to withdraw.
+  function withdraw(address token, uint256 amount) external onlyRole(BOT) {
+    if (token == BNB_ADDRESS) {
+      revenueReceiver.safeTransferETH(amount);
+    } else {
+      token.safeTransfer(revenueReceiver, amount);
+    }
+  }
+
   /// @dev sets the token whitelist.
   /// @param token The address of the token.
   /// @param status The status of the token.
@@ -146,6 +158,14 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     require(pairWhitelist[pair] != status, WhitelistSameStatus());
     pairWhitelist[pair] = status;
     emit PairWhitelistChanged(pair, status);
+  }
+
+  /// @dev sets the revenue receiver.
+  /// @param receiver The address of the revenue receiver.
+  function setRevenueReceiver(address receiver) external onlyRole(MANAGER) {
+    require(receiver != address(0), ZERO_ADDRESS);
+    require(revenueReceiver != receiver, WhitelistSameStatus());
+    revenueReceiver = receiver;
   }
 
   /// @dev sell tokens.

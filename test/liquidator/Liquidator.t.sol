@@ -16,11 +16,13 @@ contract LiquidatorTest is BaseTest {
   address BOT;
   MockOneInch oneInch;
   address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+  address revenueReceiver;
 
   function setUp() public override {
     super.setUp();
 
     BOT = makeAddr("Bot");
+    revenueReceiver = makeAddr("RevenueReceiver");
     oneInch = new MockOneInch();
 
     Liquidator impl = new Liquidator(address(moolah));
@@ -161,5 +163,28 @@ contract LiquidatorTest is BaseTest {
     vm.stopPrank();
 
     assertEq(liquidator.marketWhitelist(Id.unwrap(marketParams.id())), true, "market should be whitelisted");
+  }
+
+  function testSetRevenueReceiver() public {
+    vm.startPrank(OWNER);
+    liquidator.setRevenueReceiver(revenueReceiver);
+    vm.stopPrank();
+
+    assertEq(liquidator.revenueReceiver(), revenueReceiver, "revenue receiver should be set");
+  }
+
+  function testWithdraw() public {
+    testSetRevenueReceiver();
+    uint256 amount = 1e18;
+    loanToken.setBalance(address(liquidator), amount);
+    deal(address(liquidator), amount);
+
+    vm.startPrank(BOT);
+    liquidator.withdraw(address(loanToken), amount);
+    liquidator.withdraw(BNB_ADDRESS, amount);
+    vm.stopPrank();
+
+    assertEq(loanToken.balanceOf(revenueReceiver), amount, "loanToken balance");
+    assertEq(address(revenueReceiver).balance, amount, "BNB balance");
   }
 }

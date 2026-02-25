@@ -21,6 +21,7 @@ interface ILiquidator {
   }
   function withdrawETH(uint256 amount) external;
   function withdrawERC20(address token, uint256 amount) external;
+  function withdraw(address token, uint256 amount) external;
   function flashLiquidate(
     bytes32 id,
     address borrower,
@@ -56,5 +57,9 @@ interface ILiquidator {
 
   function setPairWhitelist(address pair, bool status) external;
 
+  function setRevenueReceiver(address receiver) external;
+
   function marketWhitelist(bytes32 id) external view returns (bool);
+
+  function revenueReceiver() external view returns (address);
 }
