@@ -20,6 +20,7 @@ import { Id, IMoolah, MarketParams, Market, Position } from "../moolah/interface
 import { IOracle } from "../moolah/interfaces/IOracle.sol";
 import { UtilsLib } from "../moolah/libraries/UtilsLib.sol";
 import { MoolahOperateLib } from "./libraries/MoolahOperateLib.sol";
+import { CreditBrokerLib } from "./libraries/CreditBrokerLib.sol";
 
 import { ICreditToken } from "../utils/interfaces/ICreditToken.sol";
 
@@ -58,9 +59,6 @@ contract CreditBroker is
   address public immutable COLLATERAL_TOKEN;
   /// @dev credit token address; used in `Moolah.setProvider`
   address public immutable TOKEN;
-
-  uint256 public constant MAX_FIXED_TERM_APR = 9e27; // 8 * RATE_SCALE = 800% MAX APR
-  uint256 public constant MIN_FIXED_TERM_APR = 105 * 1e25; // 0.05 * RATE_SCALE = 5% MIN APR
 
   address public LOAN_TOKEN;
   Id public MARKET_ID;
@@ -836,19 +834,13 @@ contract CreditBroker is
   }
 
   /**
-   * @dev Add a new fixed term and rate product
-   * @param term The fixed term and rate scheme to add
+   * @dev Add, update or remove a fixed term and rate product
+   * @param term The fixed term and rate scheme to add, update or remove
+   * @param removeTerm True to remove the term, false to add or update the term
+   * @notice if termId already exists, it will be updated; if removeTerm is true, the term will be removed; otherwise, the term will be added
    */
-  function addFixedTermAndRate(FixedTermAndRate calldata term) external onlyRole(MANAGER) {
-    require(term.termId > 0 && term.duration > 0, "invalid input");
-    require(term.apr >= MIN_FIXED_TERM_APR && term.apr <= MAX_FIXED_TERM_APR, "invalid apr");
-
-    // check if term already exists
-    for (uint256 i = 0; i < fixedTerms.length; i++) {
-      require(fixedTerms[i].termId != term.termId, "invalid id");
-    }
-    fixedTerms.push(term);
-    emit FixedTermAndRateUpdated(term.termId, term.duration, term.apr);
+  function updateFixedTermAndRate(FixedTermAndRate calldata term, bool removeTerm) external onlyRole(MANAGER) {
+    CreditBrokerLib.updateFixedTermAndRate(fixedTerms, term, removeTerm);
   }
 
   /**

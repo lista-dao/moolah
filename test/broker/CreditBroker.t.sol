@@ -394,7 +394,7 @@ contract CreditBrokerTest is Test {
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type1 });
 
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
 
     // setup broker to be provider
     vm.prank(MANAGER);
@@ -452,7 +452,7 @@ contract CreditBrokerTest is Test {
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type1 });
 
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
 
     uint256 newScore = COLLATERAL * 3;
     uint256 borrowAmount = COLLATERAL / 2;
@@ -513,7 +513,7 @@ contract CreditBrokerTest is Test {
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type1 });
 
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
 
     uint256 newScore = COLLATERAL * 3;
     uint256 borrowAmount = newScore; // max borrow at 100% LTV
@@ -565,7 +565,7 @@ contract CreditBrokerTest is Test {
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type2 });
 
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
 
     uint256 newScore = COLLATERAL * 3;
     uint256 borrowAmount = newScore; // max borrow at 100% LTV
@@ -617,7 +617,7 @@ contract CreditBrokerTest is Test {
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type2 });
 
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
 
     uint256 newScore = 500 ether;
     uint256 borrowAmount = 100 ether;
@@ -803,7 +803,7 @@ contract CreditBrokerTest is Test {
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type1 });
 
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
 
     // Borrow fixed
     uint256 fixedAmt = 500 ether;
@@ -877,7 +877,7 @@ contract CreditBrokerTest is Test {
     uint256 apr = 1e27 + (0.15 * 1e27 * (365 days)) / duration; // 15% APR for 14 days
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type2 });
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
 
     // Borrow fixed
     uint256 fixedAmt = 500 ether;
@@ -946,7 +946,7 @@ contract CreditBrokerTest is Test {
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type1 });
 
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
 
     // decrease score to 800
     uint256 newScore = 800 ether;
@@ -977,7 +977,7 @@ contract CreditBrokerTest is Test {
       termType: type1
     });
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
 
     uint256 fixedAmt = 300 ether;
     vm.prank(borrower);
@@ -1048,13 +1048,14 @@ contract CreditBrokerTest is Test {
   function test_fixedRepayOnBehalfByThirdParty_fullClose() public {
     test_supplyCollateral();
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(
+    broker.updateFixedTermAndRate(
       FixedTermAndRate({
         termId: 22,
         duration: 14 days,
         apr: 105 * 1e25, // 5% APR
         termType: type1
-      })
+      }),
+      false
     );
 
     uint256 fixedAmt = 350 ether;
@@ -1132,7 +1133,7 @@ contract CreditBrokerTest is Test {
       termType: type1
     });
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
 
     _generateTree(borrower, COLLATERAL, creditToken.versionId() + 1);
 
@@ -1188,7 +1189,7 @@ contract CreditBrokerTest is Test {
       termType: type1
     });
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
 
     _generateTree(borrower, COLLATERAL, creditToken.versionId() + 1);
 
@@ -1275,7 +1276,7 @@ contract CreditBrokerTest is Test {
       termType: type1
     });
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
 
     vm.expectRevert(bytes("zero amount"));
     vm.prank(borrower);
@@ -1311,7 +1312,7 @@ contract CreditBrokerTest is Test {
       termType: type1
     });
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
     vm.prank(MANAGER);
     broker.setBorrowPaused(true);
 
@@ -1342,7 +1343,7 @@ contract CreditBrokerTest is Test {
     });
     vm.expectRevert(); // AccessControlUnauthorizedAccount
     vm.prank(borrower);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
   }
 
   // Supply 1K collateral, borrow 15 fixed, set max fixed positions to 1, borrow another fixed -> revert
@@ -1355,7 +1356,7 @@ contract CreditBrokerTest is Test {
       termType: type1
     });
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
     vm.prank(MANAGER);
     broker.setMaxFixedLoanPositions(1);
 
@@ -1387,7 +1388,7 @@ contract CreditBrokerTest is Test {
     });
 
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
     // initial price from oracle
     uint256 p0 = broker.peek(address(creditToken), borrower);
     vm.prank(borrower);
@@ -1425,7 +1426,7 @@ contract CreditBrokerTest is Test {
     FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: duration, apr: apr, termType: type1 });
 
     vm.prank(MANAGER);
-    broker2.addFixedTermAndRate(term);
+    broker2.updateFixedTermAndRate(term, false);
 
     vm.expectRevert(bytes("market not set"));
     vm.prank(borrower);
@@ -1450,15 +1451,15 @@ contract CreditBrokerTest is Test {
     // termId = 0
     vm.expectRevert(bytes("invalid input"));
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term1);
+    broker.updateFixedTermAndRate(term1, false);
     // duration = 0
     vm.expectRevert(bytes("invalid input"));
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term2);
+    broker.updateFixedTermAndRate(term2, false);
     // apr < RATE_SCALE
     vm.expectRevert(bytes("invalid apr"));
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term3);
+    broker.updateFixedTermAndRate(term3, false);
   }
 
   function test_peek_otherUser_noCollateral_returnsOraclePrice() public {
@@ -1486,7 +1487,7 @@ contract CreditBrokerTest is Test {
     });
     // create a short-term fixed position
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
 
     vm.prank(MANAGER);
     moolah.setMinLoanValue(10e8);
@@ -1515,7 +1516,7 @@ contract CreditBrokerTest is Test {
     });
     // create a short-term fixed position
     vm.prank(MANAGER);
-    broker.addFixedTermAndRate(term);
+    broker.updateFixedTermAndRate(term, false);
 
     vm.prank(MANAGER);
     moolah.setMinLoanValue(10e8);

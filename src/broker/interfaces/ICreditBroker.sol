@@ -111,7 +111,6 @@ interface ICreditBroker is ICreditBrokerBase, IProvider {
   );
   event FixedLoanPositionRemoved(address indexed user, uint256 posId);
   event MaxFixedLoanPositionsUpdated(uint256 oldMax, uint256 newMax);
-  event FixedTermAndRateUpdated(uint256 termId, uint256 duration, uint256 apr);
   event MarketIdSet(Id marketId);
   event BorrowPaused(bool paused);
   event GraceConfigUpdated(uint256 newPeriod, uint256 newPenaltyRate, uint256 newNoInterestPeriod);
