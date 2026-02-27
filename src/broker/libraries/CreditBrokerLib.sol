@@ -5,7 +5,6 @@ import { FixedTermAndRate } from "../interfaces/ICreditBroker.sol";
 
 library CreditBrokerLib {
   uint256 public constant MAX_FIXED_TERM_APR = 9e27; // 8 * RATE_SCALE = 800% MAX APR
-  uint256 public constant MIN_FIXED_TERM_APR = 105 * 1e25; // 0.05 * RATE_SCALE = 5% MIN APR
 
   event FixedTermAndRateUpdated(uint256 termId, uint256 duration, uint256 apr);
 
@@ -15,7 +14,7 @@ library CreditBrokerLib {
     bool removeTerm
   ) public {
     require(term.termId > 0 && term.duration > 0, "invalid input");
-    require(term.apr >= MIN_FIXED_TERM_APR && term.apr <= MAX_FIXED_TERM_APR, "invalid apr");
+    require(term.apr >= 1e27 && term.apr <= MAX_FIXED_TERM_APR, "invalid apr");
 
     // check if term already exists
     for (uint256 i = 0; i < fixedTerms.length; i++) {
