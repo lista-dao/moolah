@@ -119,7 +119,6 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     address[] calldata assets,
     uint256[] calldata amounts
   ) external onlyRole(BOT) {
-    require(liquidators.contains(liquidator), "not whitelisted liquidator");
     require(assets.length == amounts.length, "length mismatch");
     require(assets.length > 0 && assets.length <= MAX_LENGTH, "invalid length");
 
