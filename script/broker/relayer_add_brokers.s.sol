@@ -9,9 +9,7 @@ interface IBrokerInterestRelayer {
 }
 
 contract DeployBrokerInterestRelayer is Script {
-  address[] brokers = [
-    0xf7c4701e90867f33745F73d5edF2143f0DE03f9d
-  ];
+  address[] brokers = [0xf7c4701e90867f33745F73d5edF2143f0DE03f9d];
 
   IBrokerInterestRelayer relayer;
 

@@ -8,9 +8,7 @@ interface IAccessControl {
 }
 
 contract RenounceRolesScript is Script {
-  address[] brokers = [
-    0xf7c4701e90867f33745F73d5edF2143f0DE03f9d
-  ];
+  address[] brokers = [0xf7c4701e90867f33745F73d5edF2143f0DE03f9d];
 
   address brokerInterestRelayer = 0x35720fcA79F33E3817479E0c6abFaD38ea1a9DaC;
 

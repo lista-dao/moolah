@@ -8,13 +8,9 @@ interface IBroker {
 }
 
 contract BrokerSetMarketIdScript is Script {
-  bytes32[] marketIds = [
-    bytes32(0xc1264ae84203b5660478bba5cfe15d9f579aa98402fb073bff65c31040f12f1a)
-  ];
+  bytes32[] marketIds = [bytes32(0xc1264ae84203b5660478bba5cfe15d9f579aa98402fb073bff65c31040f12f1a)];
 
-  address[] brokers = [
-    0xf7c4701e90867f33745F73d5edF2143f0DE03f9d
-  ];
+  address[] brokers = [0xf7c4701e90867f33745F73d5edF2143f0DE03f9d];
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
