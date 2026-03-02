@@ -11,7 +11,7 @@ import { ILiquidator } from "../liquidator/ILiquidator.sol";
 
 /**
  * @title RevenueCollector
- * @notice The RevenueCollector contract is responsible for collecting admin fees from stable swap pools and liquidation fees from liquidator contracts.
+ * @notice The RevenueCollector contract is responsible for collecting admin fees from stable swap pools and liquidation revenues from liquidator contracts.
  */
 contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   using EnumerableSet for EnumerableSet.AddressSet;
@@ -109,7 +109,7 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   }
 
   /**
-   * @notice Claims fees from liquidator contract
+   * @notice Claims revenues from liquidator contracts for multiple assets.
    * @param liquidator The address of the liquidator
    * @param assets The list of assets
    * @param amounts The list of amounts corresponding to each asset
@@ -232,7 +232,7 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   }
 
   /**
-   * @dev Previews the claim without actually withdrawing the fees.
+   * @dev Previews the claim without actually withdrawing the liquidation revenues from the liquidator contract.
    * Checks if the liquidator has enough balance of the asset to claim the specified amount.
    * @param liquidator The address of the liquidator
    * @param asset The address of the asset to claim
