@@ -9,14 +9,10 @@ interface IAccessControl {
 
 contract RenounceRolesScript is Script {
   address[] brokers = [
-    0x6BAF9648cffB7C9c4cB7275000a27b9a7dBD59Bc,
-    0x0cffd57f93190892ac2dB8A01596304268Bc2014,
-    0x30DDB3A48863E4897AaCDD5D202E23270d75BaE1
+    0xf7c4701e90867f33745F73d5edF2143f0DE03f9d
   ];
 
-  address brokerInterestRelayer = 0xcb2590F10728e3ffc725d7ECf88EcFd0d92c9d6a;
-  address rateCalculator = 0xF81A3067ACF683B7f2f40a22bCF17c8310be2330;
-  address brokerLiquidator = 0x3AA647a1e902833b61E503DbBFbc58992daa4868;
+  address brokerInterestRelayer = 0x35720fcA79F33E3817479E0c6abFaD38ea1a9DaC;
 
   bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
   bytes32 public constant MANAGER = keccak256("MANAGER");
@@ -40,18 +36,6 @@ contract RenounceRolesScript is Script {
     console.log("Renounced DEFAULT_ADMIN_ROLE from brokerInterestRelayer");
     IAccessControl(brokerInterestRelayer).renounceRole(MANAGER, brokerInterestRelayer);
     console.log("Renounced MANAGER role from brokerInterestRelayer");
-
-    // renounce roles from rateCalculator
-    IAccessControl(rateCalculator).renounceRole(DEFAULT_ADMIN_ROLE, rateCalculator);
-    console.log("Renounced DEFAULT_ADMIN_ROLE from rateCalculator");
-    IAccessControl(rateCalculator).renounceRole(MANAGER, rateCalculator);
-    console.log("Renounced MANAGER role from rateCalculator");
-
-    // renounce roles from brokerLiquidator
-    IAccessControl(brokerLiquidator).renounceRole(DEFAULT_ADMIN_ROLE, brokerLiquidator);
-    console.log("Renounced DEFAULT_ADMIN_ROLE from brokerLiquidator");
-    IAccessControl(brokerLiquidator).renounceRole(MANAGER, brokerLiquidator);
-    console.log("Renounced MANAGER role from brokerLiquidator");
 
     vm.stopBroadcast();
   }

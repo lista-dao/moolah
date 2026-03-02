@@ -8,12 +8,10 @@ interface IBroker {
 }
 
 contract BrokerWhitelistLiquidatorScript is Script {
-  address brokerLiquidator = address(0x0);
+  address brokerLiquidator = 0x3AA647a1e902833b61E503DbBFbc58992daa4868;
 
   address[] brokers = [
-    0x0000000000000000000000000000000000000000,
-    0x0000000000000000000000000000000000000000,
-    0x0000000000000000000000000000000000000000
+    0xf7c4701e90867f33745F73d5edF2143f0DE03f9d
   ];
 
   function run() public {
