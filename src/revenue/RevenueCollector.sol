@@ -35,6 +35,9 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
 
   event StableSwapPoolUpdated(address indexed pool, bool addPool);
   event LiquidatorUpdated(address indexed liquidator, bool addLiquidator);
+  event StableSwapFeeCollected(address indexed pool);
+  event LiquidationFeeCollected(address indexed liquidator, address indexed asset, uint256 amount);
+  event EmergencyWithdraw(address indexed asset, uint256 amount, address indexed to);
 
   constructor() {
     _disableInitializers();
@@ -101,6 +104,8 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   function _claimDexFee(address pool) internal {
     require(stableSwapPools.contains(pool), "not whitelisted pool");
     IStableSwap(pool).withdraw_admin_fees();
+
+    emit StableSwapFeeCollected(pool);
   }
 
   /**
@@ -143,6 +148,8 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     } else {
       ILiquidator(_liquidator).withdrawETH(amount);
     }
+
+    emit LiquidationFeeCollected(_liquidator, asset, amount);
   }
 
   /// @dev To receive BNB
@@ -184,6 +191,8 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
       (bool success, ) = to.call{ value: amount }("");
       require(success, "BNB transfer failed");
     }
+
+    emit EmergencyWithdraw(asset, amount, to);
   }
 
   //// ----------------------------- View Functions ----------------------------- ////
@@ -212,6 +221,7 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   function previewClaimDexFee(
     address pool
   ) external view returns (uint256[2] memory adminFees, uint256[2] memory prices) {
+    require(stableSwapPools.contains(pool), "not whitelisted pool");
     IStableSwap stableSwap = IStableSwap(pool);
 
     for (uint256 i = 0; i < 2; i++) {
