@@ -23,16 +23,16 @@ contract RenounceRolesScript is Script {
 
     // renounce roles from brokers
     for (uint256 i = 0; i < brokers.length; i++) {
-      IAccessControl(brokers[i]).renounceRole(DEFAULT_ADMIN_ROLE, brokers[i]);
+      IAccessControl(brokers[i]).renounceRole(DEFAULT_ADMIN_ROLE, deployer);
       console.log("Renounced DEFAULT_ADMIN_ROLE from broker: ", brokers[i]);
-      IAccessControl(brokers[i]).renounceRole(MANAGER, brokers[i]);
+      IAccessControl(brokers[i]).renounceRole(MANAGER, deployer);
       console.log("Renounced MANAGER role from broker: ", brokers[i]);
     }
 
     // renounce roles from brokerInterestRelayer
-    IAccessControl(brokerInterestRelayer).renounceRole(DEFAULT_ADMIN_ROLE, brokerInterestRelayer);
+    IAccessControl(brokerInterestRelayer).renounceRole(DEFAULT_ADMIN_ROLE, deployer);
     console.log("Renounced DEFAULT_ADMIN_ROLE from brokerInterestRelayer");
-    IAccessControl(brokerInterestRelayer).renounceRole(MANAGER, brokerInterestRelayer);
+    IAccessControl(brokerInterestRelayer).renounceRole(MANAGER, deployer);
     console.log("Renounced MANAGER role from brokerInterestRelayer");
 
     vm.stopBroadcast();
