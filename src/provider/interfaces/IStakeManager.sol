@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.28;
+pragma solidity 0.8.34;
 
 interface IStakeManager {
   function convertBnbToSnBnb(uint256 _amount) external view returns (uint256);

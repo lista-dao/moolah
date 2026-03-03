@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.28;
+pragma solidity 0.8.34;
 
 import { Id, MarketParams, IMoolah } from "moolah/interfaces/IMoolah.sol";
 import { IOracle } from "../../moolah/interfaces/IOracle.sol";
+import { IProvider } from "../../provider/interfaces/IProvider.sol";
 
 enum FixedTermType {
   ACCRUE_INTEREST, // 0: interest is accrued over time, user pays interest based on time elapsed
@@ -65,6 +66,7 @@ interface ICreditBrokerBase {
   ///      decreasing according to the accruing interest for collateral token
   /// @param token The address of the token to peek
   /// @param user The address of the user to peek
+  /// @return price The price of the token for the user, scaled by 1e8
   function peek(address token, address user) external view returns (uint256 price);
 
   /// @dev get the lista discount rate for interest repayment
@@ -72,7 +74,7 @@ interface ICreditBrokerBase {
 }
 
 /// @dev Broker interface
-interface ICreditBroker is ICreditBrokerBase {
+interface ICreditBroker is ICreditBrokerBase, IProvider {
   /// ------------------------------
   ///            Events
   /// ------------------------------
@@ -103,11 +105,12 @@ interface ICreditBroker is ICreditBrokerBase {
     /// @dev the penalty paid in this repayment
     uint256 repayPenalty,
     /// @dev the total interest repaid after this repayment
-    uint256 totalInterestRepaid
+    uint256 totalInterestRepaid,
+    /// @dev is the position marked as bad debt
+    bool isBadDebt
   );
   event FixedLoanPositionRemoved(address indexed user, uint256 posId);
   event MaxFixedLoanPositionsUpdated(uint256 oldMax, uint256 newMax);
-  event FixedTermAndRateUpdated(uint256 termId, uint256 duration, uint256 apr);
   event MarketIdSet(Id marketId);
   event BorrowPaused(bool paused);
   event GraceConfigUpdated(uint256 newPeriod, uint256 newPenaltyRate, uint256 newNoInterestPeriod);

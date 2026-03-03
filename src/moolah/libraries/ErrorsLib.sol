@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.28;
+pragma solidity 0.8.34;
 
 /// @title ErrorsLib
 /// @author Lista DAO
@@ -104,6 +104,8 @@ library ErrorsLib {
 
   /// @notice Thrown when the caller is not a broker.
   string internal constant NOT_BROKER = "not broker";
+
+  string internal constant BROKER_POSITION = "broker position cannot be liquidated directly";
 
   string internal constant EXCEED_MPC_CAP = "exceed mpc cap";
 

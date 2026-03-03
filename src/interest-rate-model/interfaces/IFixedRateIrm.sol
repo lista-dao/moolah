@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.28;
+pragma solidity 0.8.34;
 
 import { IIrm } from "moolah/interfaces/IIrm.sol";
 import { Id } from "moolah/interfaces/IMoolah.sol";

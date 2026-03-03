@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.28;
+pragma solidity 0.8.34;
 
 struct RateConfig {
   uint256 currentRate; // the current rate, scaled by 1e2
