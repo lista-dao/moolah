@@ -1,4 +1,4 @@
-pragma solidity 0.8.28;
+pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
 
@@ -64,6 +64,7 @@ contract CreateMarketDeploy is Script {
   address U = 0xcE24439F2D9C6a2289F741120FE202248B666666;
   address UUSDT = 0xbBD3e74E69e6BDDDA8e5AAdC1460611A8f7cd05a;
   address ptUSDe09Apr2026 = 0x67e84bA0196738A59EE58df848A2c16ED2A6A6F3;
+  address creditToken = 0x1f9831626CE85909794eEaA5C35BF34DB3eB52d8;
 
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address oracleAdapter = 0x21650E416dC6C89486B2E654c86cC2c36c597b58;
@@ -87,6 +88,7 @@ contract CreateMarketDeploy is Script {
   address ptUSDe09Apr2026USDTOracle = 0x784554Ac9fd7474488aEF89618F9bB549400f748;
   address ptUSDe09Apr2026USD1Oracle = 0x9A7B029b2Fb0fF2CbA4b8d5C0753862fbD027a63;
   address ptUSDe09Apr2026UOracle = 0x9bb8A4190EE7568Dc3E68A95e8b0afA692B478d0;
+  address creditBroker = 0x2A6704D56BDedF4c7564C9534D7fa8D8D204D578;
 
   address irm = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
   address alphaIrm = 0x5F9f9173B405C6CEAfa7f98d09e4B8447e9797E6;
@@ -104,6 +106,7 @@ contract CreateMarketDeploy is Script {
   uint256 lltv915 = 915 * 1e15;
   uint256 lltv945 = 945 * 1e15;
   uint256 lltv965 = 965 * 1e15;
+  uint256 lltv100 = 1e18;
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");

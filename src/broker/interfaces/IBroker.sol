@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.28;
+pragma solidity 0.8.34;
 
 import { Id, MarketParams, IMoolah } from "moolah/interfaces/IMoolah.sol";
 
@@ -91,7 +91,14 @@ interface IBroker is IBrokerBase {
     uint256 end,
     uint256 apr,
     uint256 principalRepaid,
-    bool fullyRepaid
+    /// @dev the amount of principal repaid in this repayment
+    uint256 repayPrincipal,
+    /// @dev the amount of interest repaid in this repayment
+    uint256 repayInterest,
+    /// @dev the penalty paid in this repayment
+    uint256 repayPenalty,
+    /// @dev the total interest repaid after this repayment
+    uint256 totalInterestRepaid
   );
   event FixedLoanPositionRemoved(address indexed user, uint256 posId);
   event MaxFixedLoanPositionsUpdated(uint256 oldMax, uint256 newMax);
