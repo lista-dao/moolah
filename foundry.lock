@@ -1,4 +1,10 @@
 {
+  "lib/forge-std": {
+    "branch": {
+      "name": "v1.14.0",
+      "rev": "1801b0541f4fda118a10798fd3486bb7051c5dd6"
+    }
+  },
   "lib/murky": {
     "tag": {
       "name": "v0.1.0",
