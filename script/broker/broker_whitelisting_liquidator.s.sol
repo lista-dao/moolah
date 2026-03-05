@@ -10,7 +10,7 @@ interface IBroker {
 contract BrokerWhitelistLiquidatorScript is Script {
   address brokerLiquidator = 0x3AA647a1e902833b61E503DbBFbc58992daa4868;
 
-  address[] brokers = [0xf7c4701e90867f33745F73d5edF2143f0DE03f9d];
+  address[] brokers = [0xFA25B61ac2c31E82DDE626EE2704700646a2C6E3, 0xa26488154D61f8977153915510564ce47a5072dD];
 
   function run() public {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
