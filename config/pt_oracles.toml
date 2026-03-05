@@ -1,0 +1,19 @@
+[bsc]
+enendpoint_url = "${BSC_RPC_URL}"
+
+[bsc.address]
+ptCollateral = [
+  "${ptSlisBNBx25JUN2026}",
+]
+
+ptLoan = [
+  "${WBNB}",
+]
+
+ptOracle = [
+  "${ptSlisBNBx25JUN2026BaseOracle}",
+]
+
+multiOracle = "${MULTI_ORACLE}"
+
+admin = "${ADMIN}"

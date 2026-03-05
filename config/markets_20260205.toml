@@ -1,0 +1,24 @@
+[bsc]
+enendpoint_url = "${BSC_RPC_URL}"
+
+[bsc.address]
+loan = [
+    "${WBNB}",
+]
+
+collateral = [
+    "${ptSlisBNBx25JUN2026}",
+]
+
+oracle = [
+  "${ptSlisBNBx25JUN2026WBNBOracle}",
+]
+
+irm = [
+    "${IRM}",
+]
+
+[bsc.uint]
+lltv = [
+    "${LLTV_965}",
+]

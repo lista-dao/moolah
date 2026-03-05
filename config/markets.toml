@@ -42,28 +42,6 @@ irm = [
     "${IRM}"
 ]
 
-ptCollateral = [
-  "${ptUSDe07May2026}",
-  "${ptUSDe07May2026}",
-  "${ptUSDe07May2026}"
-]
-
-ptLoan = [
-  "${USD1}",
-  "${USDT}",
-  "${U}"
-]
-
-ptOracle = [
-  "${ptUSDe07May2026BaseOracle}",
-  "${ptUSDe07May2026BaseOracle}",
-  "${ptUSDe07May2026BaseOracle}"
-]
-
-multiOracle = "${MULTI_ORACLE}"
-
-admin = "${ADMIN}"
-
 [bsc.uint]
 lltv = [
     "${LLTV_965}",
