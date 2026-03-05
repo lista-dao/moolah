@@ -8,9 +8,9 @@ interface IAccessControl {
 }
 
 contract RenounceRolesScript is Script {
-  address[] brokers = [0xf7c4701e90867f33745F73d5edF2143f0DE03f9d];
+  address[] brokers = [0xFA25B61ac2c31E82DDE626EE2704700646a2C6E3, 0xa26488154D61f8977153915510564ce47a5072dD];
 
-  address brokerInterestRelayer = 0x35720fcA79F33E3817479E0c6abFaD38ea1a9DaC;
+  address[] replayers = [0x9348923C2f0AD218A8736Ab28cfAe7D93027E73f, 0x2A119f506ce71cF427D5ae88540fAec580840587];
 
   bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
   bytes32 public constant MANAGER = keccak256("MANAGER");
@@ -30,10 +30,13 @@ contract RenounceRolesScript is Script {
     }
 
     // renounce roles from brokerInterestRelayer
-    IAccessControl(brokerInterestRelayer).renounceRole(DEFAULT_ADMIN_ROLE, deployer);
-    console.log("Renounced DEFAULT_ADMIN_ROLE from brokerInterestRelayer");
-    IAccessControl(brokerInterestRelayer).renounceRole(MANAGER, deployer);
-    console.log("Renounced MANAGER role from brokerInterestRelayer");
+    for (uint256 i = 0; i < replayers.length; i++) {
+      address brokerInterestRelayer = replayers[i];
+      IAccessControl(brokerInterestRelayer).renounceRole(DEFAULT_ADMIN_ROLE, deployer);
+      console.log("Renounced DEFAULT_ADMIN_ROLE from brokerInterestRelayer");
+      IAccessControl(brokerInterestRelayer).renounceRole(MANAGER, deployer);
+      console.log("Renounced MANAGER role from brokerInterestRelayer");
+    }
 
     vm.stopBroadcast();
   }
