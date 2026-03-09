@@ -1,4 +1,4 @@
-pragma solidity 0.8.28;
+pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
 import { Config } from "forge-std/Config.sol";
