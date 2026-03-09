@@ -76,6 +76,6 @@ contract CreateMarketWithConfigTestDeploy is Script, Config {
       vm.setEnv(lltvNames[i], vm.toString(lltvs[i]));
     }
 
-    _loadConfig("./config/markets_20260309.toml", true);
+    _loadConfig("./config/markets_20260309_02.toml", true);
   }
 }
