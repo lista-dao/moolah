@@ -51,14 +51,11 @@ contract PositionMigrator is
   /// @dev CDP collateral address for BNB; ceToken address representing BNB collateral in CDP
   address public constant cdpBnbCollateral = 0x563282106A5B0538f8673c787B3A16D3Cc1DbF1a;
 
-  /// @dev CDP slisBNB strategy address
-  address public constant cdpStrategy = 0x6F28FeC449dbd2056b76ac666350Af8773E03873;
-
   /// @dev Whitelist of accounts allowed to call migratePosition
   EnumerableSet.AddressSet private whitelist;
 
-  /// @dev Whether a collateral token is supported for migration
-  mapping(address => bool) public collaterals;
+  /// @dev Supported CDP collateral tokens for migration
+  EnumerableSet.AddressSet private collaterals;
 
   modifier onlyWhitelisted() {
     require(whitelist.contains(msg.sender), "not whitelisted");
@@ -115,13 +112,13 @@ contract PositionMigrator is
     for (uint256 i = 0; i < supportedCollaterals.length; i++) {
       address coll = supportedCollaterals[i];
       require(coll != address(0), "zero address");
-      collaterals[coll] = true;
+      require(collaterals.add(coll), "collateral already added");
 
       emit UpdateSupportedCollateral(coll, true);
     }
 
     // add Bnb collateral by default
-    collaterals[cdpBnbCollateral] = true;
+    require(collaterals.add(cdpBnbCollateral), "collateral already added");
     emit UpdateSupportedCollateral(cdpBnbCollateral, true);
   }
 
@@ -135,7 +132,7 @@ contract PositionMigrator is
     bool isBnb
   ) external nonReentrant onlyWhitelisted returns (uint256) {
     address collAddr = isBnb ? cdpBnbCollateral : marketParams.collateralToken;
-    require(collaterals[collAddr], "unsupported collateral");
+    require(collaterals.contains(collAddr), "unsupported collateral");
 
     // if CDP collateral is BNB, the target collateral in Moolah must be slisBNB
     if (isBnb) {
@@ -146,9 +143,6 @@ contract PositionMigrator is
     INTERACTION.drip(collAddr); // accrue interest to get the updated debt amount
     uint256 cdpDebt = INTERACTION.borrowed(collAddr, msg.sender);
     uint256 collateralAmount = INTERACTION.free(collAddr, msg.sender) + INTERACTION.locked(collAddr, msg.sender);
-    if (isBnb) {
-      //      collateralAmount = IBnbProviderCdp(bnbProvider).estimateInToken(cdpStrategy, collateralAmount);
-    }
 
     // pack data for flash loan callback
     bytes memory data = abi.encode(
@@ -180,7 +174,7 @@ contract PositionMigrator is
 
     MarketParams memory params = data.marketParams;
     require(params.loanToken == LISUSD, "invalid loan token");
-    require(collaterals[params.collateralToken], "unsupported collateral token");
+    require(collaterals.contains(params.collateralToken), "unsupported collateral token");
 
     // 2. pay back CDP debt using the flash loaned lisUSD
     LISUSD.safeApprove(address(INTERACTION), data.debt);
@@ -215,9 +209,8 @@ contract PositionMigrator is
       params.collateralToken.safeApprove(address(MOOLAH), 0);
     } else {
       require(provider == slisBnbProviderLending, "invalid moolah provider");
-      uint256 supplyAmt = data.isBnb ? releasedSlisBnb : data.collateralAmount;
-      params.collateralToken.safeApprove(provider, supplyAmt);
-      ISlisBnbProvider(provider).supplyCollateral(params, supplyAmt, data.onBehalf, "");
+      params.collateralToken.safeApprove(provider, releasedSlisBnb);
+      ISlisBnbProvider(provider).supplyCollateral(params, releasedSlisBnb, data.onBehalf, "");
       params.collateralToken.safeApprove(provider, 0);
     }
 
@@ -247,9 +240,18 @@ contract PositionMigrator is
     }
   }
 
+  /**
+   * @dev Adds or removes a collateral token from the supported collaterals list.
+   * @param collAddr The address of the collateral token to add or remove.
+   * @param supported A boolean indicating whether to add (true) or remove (false) the collateral token from the supported list.
+   */
   function setSupportedCollateral(address collAddr, bool supported) external onlyRole(MANAGER) {
     require(collAddr != address(0), "zero address");
-    collaterals[collAddr] = supported;
+    if (supported) {
+      require(collaterals.add(collAddr), "collateral already added");
+    } else {
+      require(collaterals.remove(collAddr), "collateral not in list");
+    }
     emit UpdateSupportedCollateral(collAddr, supported);
   }
 
@@ -258,6 +260,22 @@ contract PositionMigrator is
    */
   function isWhitelisted(address account) external view returns (bool) {
     return whitelist.contains(account);
+  }
+
+  /**
+   * @dev Returns the list of supported collateral tokens for migration.
+   */
+  function getCollaterals() external view returns (address[] memory) {
+    return collaterals.values();
+  }
+
+  /**
+   * @dev Checks if a collateral token is supported for migration.
+   * @param collAddr The address of the collateral token to check.
+   * @return A boolean indicating whether the collateral token is supported for migration.
+   */
+  function isCollateralSupported(address collAddr) external view returns (bool) {
+    return collaterals.contains(collAddr);
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}

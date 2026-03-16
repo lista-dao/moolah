@@ -128,8 +128,8 @@ contract PositionMigratorTest is Test {
     assertEq(migrator.slisBnbProviderCDP(), 0xfD31e1C5e5571f8E7FE318f80888C1e6da97819b);
     assertEq(migrator.slisBnbProviderLending(), 0x33f7A980a246f9B8FEA2254E3065576E127D4D5f);
 
-    assertTrue(migrator.collaterals(slisBnb));
-    assertTrue(migrator.collaterals(btcb));
+    assertTrue(migrator.isCollateralSupported(slisBnb));
+    assertTrue(migrator.isCollateralSupported(btcb));
 
     assertTrue(migrator.isWhitelisted(user_bnb));
     assertTrue(migrator.isWhitelisted(user_slisBnb));
