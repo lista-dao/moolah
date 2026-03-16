@@ -10,9 +10,22 @@ import { IBuyBack } from "moolah/interfaces/IBuyBack.sol";
 import { IListaAutoBuyBack } from "moolah/interfaces/IListaAutoBuyBack.sol";
 import { IPublicLiquidator } from "liquidator/IPublicLiquidator.sol";
 import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
+import { IBroker } from "../broker/interfaces/IBroker.sol";
+import { IBrokerLiquidator } from "../liquidator/IBrokerLiquidator.sol";
+import { IRateCalculator } from "../broker/interfaces/IRateCalculator.sol";
 
 contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   using MarketParamsLib for MarketParams;
+
+  struct FixedTermMarketParams {
+    address broker;
+    address loanToken;
+    address collateralToken;
+    address irm;
+    uint256 lltv;
+    uint256 ratePerSecond;
+    uint256 maxRatePerSecond;
+  }
 
   IMoolah public immutable moolah;
   ILiquidator public immutable liquidator;
@@ -24,9 +37,15 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   address public immutable sliBNB;
   address public immutable BNBProvider;
   address public immutable slisBNBProvider;
+  IRateCalculator public immutable rateCalculator;
+  IBrokerLiquidator public immutable brokerLiquidator;
 
   bytes32 public constant OPERATOR = keccak256("OPERATOR");
+  bytes32 public constant PAUSER = keccak256("PAUSER");
+  bytes32 public constant BOT = keccak256("BOT");
 
+  event BrokerMarketDeployed(FixedTermMarketParams fixedTermMarketParams, Id marketId, address broker);
+  event CommonMarketDeployed(MarketParams marketParams, Id marketId);
   /**
    * @dev constructor to set immutable variables
    * @param _moolah The address of the Moolah contract
@@ -39,6 +58,8 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
    * @param _sliBNB The address of the sliBNB token
    * @param _BNBProvider The address of the BNB provider
    * @param _slisBNBProvider The address of the slisBNB provider
+   * @param _rateCalculator The address of the rate calculator contract
+   * @param _brokerLiquidator The address of the broker liquidator contract
    */
   constructor(
     address _moolah,
@@ -50,7 +71,9 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     address _WBNB,
     address _sliBNB,
     address _BNBProvider,
-    address _slisBNBProvider
+    address _slisBNBProvider,
+    address _rateCalculator,
+    address _brokerLiquidator
   ) {
     // sanity check for constructor arguments
     require(_moolah != address(0), "ZeroAddress");
@@ -63,6 +86,8 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     require(_sliBNB != address(0), "ZeroAddress");
     require(_BNBProvider != address(0), "ZeroAddress");
     require(_slisBNBProvider != address(0), "ZeroAddress");
+    require(_rateCalculator != address(0), "ZeroAddress");
+    require(_brokerLiquidator != address(0), "ZeroAddress");
     // set immutable variables
     moolah = IMoolah(_moolah);
     liquidator = ILiquidator(_liquidator);
@@ -74,6 +99,8 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     sliBNB = _sliBNB;
     BNBProvider = _BNBProvider;
     slisBNBProvider = _slisBNBProvider;
+    rateCalculator = IRateCalculator(_rateCalculator);
+    brokerLiquidator = IBrokerLiquidator(_brokerLiquidator);
 
     _disableInitializers();
   }
@@ -84,7 +111,8 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
    * @param operator The address of the operator role
    */
   function initialize(address admin, address operator) public initializer {
-    require(admin != address(0) && operator != address(0), "ZeroAddress");
+    require(admin != address(0), "ZeroAddress");
+    require(operator != address(0), "ZeroAddress");
     __AccessControl_init();
 
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
@@ -141,6 +169,30 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     bool liquidatorSmartProvider
   ) external onlyRole(OPERATOR) {
     _createMarket(param, liquidatorWhitelist, supplyWhitelist, liquidatorMarketWhitelist, liquidatorSmartProvider);
+  }
+
+  /**
+   * @dev Creates new fixed term markets with the given parameters and configures the related contracts
+   * @param params An array of FixedTermMarketParams for the markets to be created
+   */
+  function batchCreateFixedTermMarkets(
+    FixedTermMarketParams[] calldata params
+  ) external onlyRole(OPERATOR) returns (Id[] memory) {
+    require(params.length > 0, "empty market params");
+
+    Id[] memory ids = new Id[](params.length);
+    for (uint256 i = 0; i < params.length; i++) {
+      ids[i] = _createFixedTermMarket(params[i]);
+    }
+    return ids;
+  }
+
+  /**
+   * @dev Creates a new fixed term market with the given parameters and configures the related contracts
+   * @param param The FixedTermMarketParams for the market to be created
+   */
+  function createFixedTermMarket(FixedTermMarketParams calldata param) external onlyRole(OPERATOR) returns (Id) {
+    return _createFixedTermMarket(param);
   }
 
   function _createMarket(
@@ -209,6 +261,63 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     if (liquidatorSmartProvider) {
       _configSmartProvider(id, param.oracle, param.collateralToken);
     }
+
+    emit CommonMarketDeployed(param, id);
+  }
+
+  function _createFixedTermMarket(FixedTermMarketParams memory param) private returns (Id id) {
+    IBroker broker = IBroker(param.broker);
+    require(param.broker != address(0), "Zero broker address");
+
+    // moolah create market
+    MarketParams memory marketParam = MarketParams({
+      loanToken: param.loanToken,
+      collateralToken: param.collateralToken,
+      oracle: param.broker,
+      irm: param.irm,
+      lltv: param.lltv
+    });
+    moolah.createMarket(marketParam);
+    Id id = marketParam.id();
+
+    // moolah set liquidation whitelist
+    Id[] memory ids = new Id[](1);
+    ids[0] = id;
+    address[][] memory whitelist = new address[][](1);
+    whitelist[0] = new address[](1);
+    whitelist[0][0] = param.broker;
+    moolah.batchToggleLiquidationWhitelist(ids, whitelist, true);
+
+    // broker set market id
+    broker.setMarketId(id);
+
+    // broker set liquidator whitelist
+    broker.toggleLiquidationWhitelist(address(brokerLiquidator), true);
+
+    // set slisBNBProvider for sliBNB markets
+    if (param.collateralToken == sliBNB) {
+      moolah.setProvider(id, slisBNBProvider, true);
+    }
+
+    // moolah set broker
+    moolah.setMarketBroker(id, param.broker, true);
+
+    // rate calculator register broker
+    rateCalculator.registerBroker(param.broker, param.ratePerSecond, param.maxRatePerSecond);
+
+    // broker liquidator set token whitelist
+    if (!brokerLiquidator.tokenWhitelist(param.loanToken)) {
+      brokerLiquidator.setTokenWhitelist(param.loanToken, true);
+    }
+    if (!brokerLiquidator.tokenWhitelist(param.collateralToken)) {
+      brokerLiquidator.setTokenWhitelist(param.collateralToken, true);
+    }
+
+    // broker liquidator set market whitelist
+    brokerLiquidator.setMarketToBroker(Id.unwrap(id), param.broker, true);
+
+    emit BrokerMarketDeployed(param, id, param.broker);
+    return id;
   }
 
   function _configSmartProvider(Id id, address provider, address collateral) private {

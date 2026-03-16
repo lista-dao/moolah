@@ -18,6 +18,9 @@ import { ERC20Mock } from "moolah/mocks/ERC20Mock.sol";
 import { MockProvider } from "./mocks/MockProvider.sol";
 import { OracleMock } from "moolah/mocks/OracleMock.sol";
 import { MockSmartProvider } from "./mocks/MockSmartProvider.sol";
+import { RateCalculator, RateConfig } from "../../src/broker/RateCalculator.sol";
+import { BrokerLiquidator } from "../../src/liquidator/BrokerLiquidator.sol";
+import { LendingBroker } from "../../src/broker/LendingBroker.sol";
 
 contract MarketFactoryTest is Test {
   using MarketParamsLib for MarketParams;
@@ -35,6 +38,8 @@ contract MarketFactoryTest is Test {
   ERC20Mock WBNB;
   ERC20Mock slisBNB;
   OracleMock oracle;
+  RateCalculator rateCalculator;
+  BrokerLiquidator brokerLiquidator;
 
   address admin;
   address manager;
@@ -67,6 +72,20 @@ contract MarketFactoryTest is Test {
     );
     irm = InterestRateModel(address(irmProxy));
 
+    RateCalculator rateCalculatorImpl = new RateCalculator();
+    ERC1967Proxy rateCalculatorProxy = new ERC1967Proxy(
+      address(rateCalculatorImpl),
+      abi.encodeWithSelector(rateCalculatorImpl.initialize.selector, admin, manager, bot)
+    );
+    rateCalculator = RateCalculator(address(rateCalculatorProxy));
+
+    BrokerLiquidator brokerLiquidatorImpl = new BrokerLiquidator(address(moolah));
+    ERC1967Proxy brokerLiquidatorProxy = new ERC1967Proxy(
+      address(brokerLiquidatorImpl),
+      abi.encodeWithSelector(brokerLiquidatorImpl.initialize.selector, admin, manager, bot)
+    );
+    brokerLiquidator = BrokerLiquidator(address(brokerLiquidatorProxy));
+
     liquidator = new MockLiquidator();
     publicLiquidator = new MockLiquidator();
     listaRevenueDistributor = new MockListaRevenueDistributor();
@@ -90,7 +109,9 @@ contract MarketFactoryTest is Test {
       address(WBNB),
       address(slisBNB),
       address(bnbProvider),
-      address(slisBNBProvider)
+      address(slisBNBProvider),
+      address(rateCalculator),
+      address(brokerLiquidator)
     );
     ERC1967Proxy marketFactoryProxy = new ERC1967Proxy(
       address(marketFactoryImpl),
@@ -106,6 +127,8 @@ contract MarketFactoryTest is Test {
     vm.startPrank(admin);
     moolah.grantRole(moolah.OPERATOR(), address(marketFactory));
     moolah.grantRole(moolah.MANAGER(), address(marketFactory));
+    rateCalculator.grantRole(rateCalculator.MANAGER(), address(marketFactory));
+    brokerLiquidator.grantRole(brokerLiquidator.MANAGER(), address(marketFactory));
     vm.stopPrank();
   }
 
@@ -426,5 +449,66 @@ contract MarketFactoryTest is Test {
       address(slisBNBProvider),
       "Provider mismatch for BNB market"
     );
+  }
+
+  function testCreateFixedTermMarket() public {
+    address relayer = makeAddr("relayer");
+    uint256 ratePerSecond = 1000000000195993755570992534;
+    uint256 maxRatePerSecond = 1000000008319516284844716199;
+    ERC20Mock loanToken = new ERC20Mock();
+    ERC20Mock collateralToken = new ERC20Mock();
+    LendingBroker broker = newLendingBroker(relayer);
+
+    MarketFactory.FixedTermMarketParams memory params = MarketFactory.FixedTermMarketParams({
+      broker: address(broker),
+      loanToken: address(loanToken),
+      collateralToken: address(collateralToken),
+      irm: address(irm),
+      lltv: lltv80,
+      ratePerSecond: ratePerSecond,
+      maxRatePerSecond: maxRatePerSecond
+    });
+    oracle.setPrice(address(loanToken), 1e8);
+    oracle.setPrice(address(collateralToken), 1e8);
+
+    vm.startPrank(admin);
+    broker.grantRole(broker.MANAGER(), address(marketFactory));
+    vm.stopPrank();
+
+    vm.startPrank(operator);
+    Id id = marketFactory.createFixedTermMarket(params);
+    vm.stopPrank();
+
+    assertEq(Id.unwrap(id), Id.unwrap(broker.MARKET_ID()), "Market ID mismatch between broker and market factory");
+    assertEq(moolah.brokers(id), address(broker), "Broker not set for market");
+    assertTrue(moolah.isLiquidationWhitelist(id, address(broker)), "Broker should be in liquidation whitelist");
+    assertEq(
+      broker.getLiquidationWhitelist()[0],
+      address(brokerLiquidator),
+      "Liquidation whitelist mismatch for broker"
+    );
+    assertEq(
+      brokerLiquidator.brokerToMarketId(address(broker)),
+      Id.unwrap(id),
+      "Market ID mismatch in broker liquidator"
+    );
+  }
+
+  function newLendingBroker(address replayer) private returns (LendingBroker) {
+    LendingBroker lendingBrokerImpl = new LendingBroker(address(moolah), replayer, address(oracle));
+    ERC1967Proxy lendingBrokerProxy = new ERC1967Proxy(
+      address(lendingBrokerImpl),
+      abi.encodeWithSelector(
+        lendingBrokerImpl.initialize.selector,
+        admin,
+        manager,
+        bot,
+        pauser,
+        address(rateCalculator),
+        100
+      )
+    );
+
+    return LendingBroker(address(lendingBrokerProxy));
   }
 }

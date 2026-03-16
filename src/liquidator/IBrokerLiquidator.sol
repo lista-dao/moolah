@@ -49,4 +49,6 @@ interface IBrokerLiquidator {
   function marketIdToBroker(bytes32 id) external view returns (address);
 
   function brokerToMarketId(address broker) external view returns (bytes32);
+
+  function tokenWhitelist(address token) external view returns (bool);
 }
