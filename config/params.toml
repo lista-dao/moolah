@@ -95,6 +95,7 @@ oracles = [
   "0x3350fC3c54CE501083a60707823833e67168bb94",
   "0xCA5929B8fF8B1a4B9B8d77DFc5340977BFa425B3",
   "0x306b7122adb734bD3976f6Fb7dC5E8fEf57528D7",
+  "0x1Fa26015286D1270343d7526C60bd57aB6bE8b54",
 ]
 
 ### IRMs
@@ -231,6 +232,7 @@ oracleNames = [
   "sUSDeUBroker",
   "sUSDeUSD1Broker",
   "sUSDeUSDTBroker",
+  "slisBNBWBNBBroker",
 ]
 
 irmNames = [
