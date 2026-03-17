@@ -9,7 +9,7 @@ interface IAccessControl {
 
 contract RenounceRolesScript is Script {
   address[] brokers = [0x1Fa26015286D1270343d7526C60bd57aB6bE8b54];
-  address[] replayers;
+  address[] replayers = [0xF2D18e9201d1fE752e3115c029F0f5Ef2Ec2bdbe];
 
   bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
   bytes32 public constant MANAGER = keccak256("MANAGER");
