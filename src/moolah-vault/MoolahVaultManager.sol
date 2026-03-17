@@ -33,7 +33,7 @@ contract MoolahVaultManager is UUPSUpgradeable, AccessControlEnumerableUpgradeab
 
   event WhitelistUpdated(address indexed vault, bool status);
   event ReceiverUpdated(address indexed newReceiver);
-  event MarketRemovedFromVault(address indexed vault, Id indexed marketId);
+  event MarketRemovedFromVault(address indexed vault, Id indexed marketId, uint256 supplyAmount, uint256 supplyShares);
   event WithdrawnFromMoolah(Id indexed marketId, uint256 amount, uint256 shares);
   event TokenWithdrawn(address indexed token, uint256 amount);
   event MaxSupplyValueUpdated(uint256 newMaxSupplyValue);
@@ -81,12 +81,18 @@ contract MoolahVaultManager is UUPSUpgradeable, AccessControlEnumerableUpgradeab
     require(vaultWhitelist[vault], "Vault not whitelisted");
     // query market params and expected supply assets
     MarketParams memory marketParams = MOOLAH.idToMarketParams(id);
-    uint256 supplyAssets = MOOLAH.expectedSupplyAssets(marketParams, vault);
+    uint256 vaultSupplyAssets = MOOLAH.expectedSupplyAssets(marketParams, vault);
+    uint256 availableAssets = MOOLAH.expectedTotalSupplyAssets(marketParams) -
+      MOOLAH.expectedTotalBorrowAssets(marketParams);
+    uint256 supplyAssets = vaultSupplyAssets > availableAssets ? vaultSupplyAssets - availableAssets : 0;
     require(getValue(marketParams, supplyAssets) <= maxSupplyValue, "Exceed max supply value");
+    uint256 actualSupplyAssets;
+    uint256 actualSupplyShares;
     if (supplyAssets > 0) {
       // supply loan token to moolah
       IERC20(marketParams.loanToken).safeIncreaseAllowance(address(MOOLAH), supplyAssets + 1);
-      MOOLAH.supply(marketParams, supplyAssets + 1, 0, address(this), "");
+      (actualSupplyAssets, actualSupplyShares) = MOOLAH.supply(marketParams, supplyAssets + 1, 0, address(this), "");
+      IERC20(marketParams.loanToken).forceApprove(address(MOOLAH), 0);
     }
 
     // reallocate all assets to another markets
@@ -101,7 +107,7 @@ contract MoolahVaultManager is UUPSUpgradeable, AccessControlEnumerableUpgradeab
         supplyIdx = i;
         continue;
       }
-      if (_getRemainCap(IMoolahVault(vault), marketId) >= supplyAssets && allocations[1].assets == 0) {
+      if (_getRemainCap(IMoolahVault(vault), marketId) >= vaultSupplyAssets && allocations[1].assets == 0) {
         allocations[1] = MarketAllocation({
           marketParams: MOOLAH.idToMarketParams(marketId),
           assets: type(uint256).max
@@ -111,7 +117,7 @@ contract MoolahVaultManager is UUPSUpgradeable, AccessControlEnumerableUpgradeab
       j++;
     }
     require(supplyIdx != type(uint256).max, "Not in supply queue");
-    if (supplyAssets > 0) {
+    if (vaultSupplyAssets > 0) {
       require(allocations[1].assets > 0, "No market has enough cap");
       IMoolahVault(vault).reallocate(allocations);
     }
@@ -135,24 +141,17 @@ contract MoolahVaultManager is UUPSUpgradeable, AccessControlEnumerableUpgradeab
     // remove from supply queue
     IMoolahVault(vault).setSupplyQueue(newSupplyQueue);
 
-    emit MarketRemovedFromVault(vault, id);
+    emit MarketRemovedFromVault(vault, id, actualSupplyAssets, actualSupplyShares);
   }
 
   /// @dev Withdraws all supplied assets of a market from Moolah to this contract.
-  function withdrawFromMoolah(Id id) external onlyRole(BOT) {
+  function withdrawFromMoolah(Id id, uint256 assets, uint256 shares) external onlyRole(BOT) {
     // query market params and expected supply assets
-    Position memory position = MOOLAH.position(id, address(this));
-    require(position.supplyShares > 0, "No supplyShares on moolah");
+    require(assets > 0 || shares > 0, "zero assets and shares");
 
     MarketParams memory marketParams = MOOLAH.idToMarketParams(id);
     // withdraw loan token from moolah
-    (uint256 assets, uint256 shares) = MOOLAH.withdraw(
-      marketParams,
-      0,
-      position.supplyShares,
-      address(this),
-      address(this)
-    );
+    (uint256 assets, uint256 shares) = MOOLAH.withdraw(marketParams, assets, shares, address(this), address(this));
     emit WithdrawnFromMoolah(id, assets, shares);
   }
 
@@ -175,6 +174,7 @@ contract MoolahVaultManager is UUPSUpgradeable, AccessControlEnumerableUpgradeab
   function setReceiver(address _receiver) external onlyRole(MANAGER) {
     require(_receiver != address(0), "ZeroAddress");
     require(_receiver != receiver, "Already set");
+    require(_receiver != address(this), "Receiver cannot be this contract");
     receiver = _receiver;
 
     emit ReceiverUpdated(_receiver);

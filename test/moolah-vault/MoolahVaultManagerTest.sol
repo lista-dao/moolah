@@ -220,7 +220,7 @@ contract MoolahVaultManagerTest is Test {
 
     // withdraw from moolah to vault manager
     vm.startPrank(bot);
-    vaultManager.withdrawFromMoolah(marketParams1.id());
+    vaultManager.withdrawFromMoolah(marketParams1.id(), 100 ether, 0);
     vm.stopPrank();
 
     // check the withdrawn loan token balance in vault manager
@@ -270,6 +270,8 @@ contract MoolahVaultManagerTest is Test {
     ERC20Mock loanToken = ERC20Mock(marketParams1.loanToken);
     loanToken.setBalance(address(this), 1000 ether);
     loanToken.setBalance(address(vaultManager), 1000 ether);
+    ERC20Mock collateralToken = ERC20Mock(marketParams1.collateralToken);
+    collateralToken.setBalance(address(this), 1000 ether);
 
     test_setMarket();
     address[] memory vaults = new address[](1);
@@ -282,6 +284,10 @@ contract MoolahVaultManagerTest is Test {
     loanToken.approve(address(vault), type(uint256).max);
     vault.deposit(100 ether, address(this));
     assertEq(vault.totalAssets(), 100 ether, "vault should have 600 assets");
+
+    collateralToken.approve(address(moolah), type(uint256).max);
+    moolah.supplyCollateral(marketParams1, 1000 ether, address(this), "");
+    moolah.borrow(marketParams1, 100 ether, 0, address(this), address(this));
 
     vm.startPrank(manager);
     vaultManager.setMaxSupplyValue(99 * 1e8);
@@ -313,7 +319,7 @@ contract MoolahVaultManagerTest is Test {
         vaultManager.BOT()
       )
     );
-    vaultManager.withdrawFromMoolah(marketParams1.id());
+    vaultManager.withdrawFromMoolah(marketParams1.id(), 0, 0);
   }
 
   function test_revertRemoveMarketFromVaultNotBot() public {
