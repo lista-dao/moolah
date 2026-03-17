@@ -1,0 +1,49 @@
+[bsc]
+enendpoint_url = "${BSC_RPC_URL}"
+
+[bsc.address]
+loan = [
+    "${U}",
+    "${USD1}",
+    "${USDT}",
+    "${U}",
+    "${USD1}",
+    "${USDT}",
+]
+
+collateral = [
+    "${USDe}",
+    "${USDe}",
+    "${USDe}",
+    "${sUSDe}",
+    "${sUSDe}",
+    "${sUSDe}",
+]
+
+oracle = [
+  "${USDeUBroker}",
+  "${USDeUSD1Broker}",
+  "${USDeUSDTBroker}",
+  "${sUSDeUBroker}",
+  "${sUSDeUSD1Broker}",
+  "${sUSDeUSDTBroker}",
+]
+
+irm = [
+    "${ALPHA_IRM}",
+    "${ALPHA_IRM}",
+    "${ALPHA_IRM}",
+    "${ALPHA_IRM}",
+    "${ALPHA_IRM}",
+    "${ALPHA_IRM}",
+]
+
+[bsc.uint]
+lltv = [
+    "${LLTV_915}",
+    "${LLTV_915}",
+    "${LLTV_915}",
+    "${LLTV_915}",
+    "${LLTV_915}",
+    "${LLTV_915}",
+]
