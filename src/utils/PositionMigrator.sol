@@ -177,10 +177,13 @@ contract PositionMigrator is
     require(collaterals.contains(params.collateralToken), "unsupported collateral token");
 
     // 2. pay back CDP debt using the flash loaned lisUSD
+    uint256 repaid = LISUSD.balanceOf(address(this));
     LISUSD.safeApprove(address(INTERACTION), data.debt);
     address collAddr = data.isBnb ? cdpBnbCollateral : params.collateralToken;
     INTERACTION.paybackFor(collAddr, data.debt, data.onBehalf);
     LISUSD.safeApprove(address(INTERACTION), 0);
+    repaid = repaid - LISUSD.balanceOf(address(this));
+    require(repaid <= data.debt, "overpaid CDP debt");
 
     uint256 releasedSlisBnb = IERC20(SLISBNB).balanceOf(address(this));
 
@@ -215,7 +218,7 @@ contract PositionMigrator is
     }
 
     // 5. borrow from Moolah, receive lisUSD in this contract
-    MOOLAH.borrow(params, data.debt, 0, data.onBehalf, address(this));
+    MOOLAH.borrow(params, repaid, 0, data.onBehalf, address(this));
 
     // 6. approve Moolah to pull the borrowed amount for flash loan repayment
     LISUSD.safeApprove(address(MOOLAH), assets);
@@ -224,19 +227,20 @@ contract PositionMigrator is
   /**
    * @dev Updates the whitelist status of multiple accounts.
    * @param accounts The addresses of the accounts to update.
-   * @param statuses The corresponding whitelist statuses for the accounts (true for whitelisted, false for not whitelisted).
+   * @param enable A boolean indicating whether to add (true) or remove (false) the accounts from the whitelist.
    */
-  function updateWhitelist(address[] memory accounts, bool[] memory statuses) external onlyRole(MANAGER) {
-    require(accounts.length == statuses.length, "length mismatch");
+  function updateWhitelist(address[] memory accounts, bool enable) external onlyRole(MANAGER) {
+    require(accounts.length > 0, "no accounts provided");
+
     for (uint256 i = 0; i < accounts.length; i++) {
       address account = accounts[i];
       require(account != address(0), "zero address");
-      if (statuses[i]) {
+      if (enable) {
         require(whitelist.add(account), "account already whitelisted");
       } else {
         require(whitelist.remove(account), "account not in whitelist");
       }
-      emit UpdateWhitelist(account, statuses[i]);
+      emit UpdateWhitelist(account, enable);
     }
   }
 

@@ -63,10 +63,7 @@ contract PositionMigratorTest is Test {
     address[] memory whitelist = new address[](2);
     whitelist[0] = user_bnb;
     whitelist[1] = user_slisBnb;
-    bool[] memory status = new bool[](2);
-    status[0] = true;
-    status[1] = true;
-    migrator.updateWhitelist(whitelist, status);
+    migrator.updateWhitelist(whitelist, true);
     vm.stopPrank();
 
     upgrade_Interaction();
@@ -141,6 +138,9 @@ contract PositionMigratorTest is Test {
   function test_migratePosition_slisBnb() public {
     vm.startPrank(user_slisBnb);
 
+    // refresh moolah interest
+    migrator.MOOLAH().accrueInterest(slisBnb_marketParams);
+
     (uint256 beforeCollateral, uint256 beforeBorrowShares) = getPosititon(user_slisBnb, slisBnb_marketId);
     uint256 beforeLisUSD = IERC20(lisUSD).balanceOf(user_slisBnb);
     uint256 beforeCdpCollateral = getCdpCollateralAmount(user_slisBnb, slisBnb);
@@ -170,7 +170,21 @@ contract PositionMigratorTest is Test {
 
     // check market total borrow asset to ensure the borrow shares are correctly calculated
     uint256 afterMarketAsset = getMarketAsset(slisBnb_marketId);
-    // assertEq(afterMarketAsset, beforeMarketAsset + cdpDebt, "Market total borrow asset should increase by the migrated debt amount");
+
+    // check market total borrow asset
+    assertApproxEqAbs(
+      afterMarketAsset,
+      beforeMarketAsset + cdpDebt,
+      101,
+      "Market total borrow asset should increase by the migrated debt amount"
+    );
+
+    // check authorization
+    assertTrue(migrator.MOOLAH().isAuthorized(user_slisBnb, address(migrator)), "Migrator should be authorized");
+
+    // revokee migrator authorization
+    migrator.MOOLAH().setAuthorization(address(migrator), false);
+    assertFalse(migrator.MOOLAH().isAuthorized(user_slisBnb, address(migrator)), "Migrator should not be authorized");
   }
 
   // CDP BNB collateral will migrate to slisBNB/lisUSD market
