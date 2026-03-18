@@ -87,6 +87,9 @@ contract PositionMigrator is
     uint256 debt;
     /// @dev whether the CDP collateral is BNB, which requires special handling for migration
     bool isBnb;
+    /// @dev the minimum amount of slisBNB expected to receive when migrating BNB collateral
+    /// @dev used to protect against slippage in the release and supply process; only applicable when isBnb is true
+    uint256 minSlisBnb;
   }
 
   constructor() {
@@ -126,10 +129,12 @@ contract PositionMigrator is
    * @dev Migrates a position from CDP to Moolah.
    * @param marketParams The market parameters of the Moolah position to migrate to.
    * @param isBnb Whether the CDP collateral is BNB, which requires special handling for migration.
+   * @param minSlisBnb The minimum amount of slisBNB expected to receive when migrating BNB collateral; for slippage protection; only applicable when isBnb is true
    */
   function migratePosition(
     MarketParams calldata marketParams,
-    bool isBnb
+    bool isBnb,
+    uint256 minSlisBnb
   ) external nonReentrant onlyWhitelisted returns (uint256) {
     address collAddr = isBnb ? cdpBnbCollateral : marketParams.collateralToken;
     require(collaterals.contains(collAddr), "unsupported collateral");
@@ -151,7 +156,8 @@ contract PositionMigrator is
         onBehalf: msg.sender,
         collateralAmount: collateralAmount,
         debt: cdpDebt,
-        isBnb: isBnb
+        isBnb: isBnb,
+        minSlisBnb: minSlisBnb
       })
     );
 
@@ -203,6 +209,9 @@ contract PositionMigrator is
     }
 
     releasedSlisBnb = IERC20(SLISBNB).balanceOf(address(this)) - releasedSlisBnb;
+    if (data.isBnb) {
+      require(releasedSlisBnb >= data.minSlisBnb, "slippage too high");
+    }
 
     // 4. supply collateral
     address provider = MOOLAH.providers(params.id(), params.collateralToken);

@@ -5,7 +5,7 @@ import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { IERC20 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 
-import { PositionMigrator } from "../../src/utils/PositionMigrator.sol";
+import { PositionMigrator, IBnbProviderCdp } from "../../src/utils/PositionMigrator.sol";
 import { IMoolah, MarketParams, Id, Position, Market } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 
@@ -147,10 +147,10 @@ contract PositionMigratorTest is Test {
     uint beforeMarketAsset = getMarketAsset(slisBnb_marketId);
 
     vm.expectRevert("unauthorized");
-    migrator.migratePosition(slisBnb_marketParams, false);
+    migrator.migratePosition(slisBnb_marketParams, false, 0);
 
     migrator.MOOLAH().setAuthorization(address(migrator), true);
-    uint cdpDebt = migrator.migratePosition(slisBnb_marketParams, false);
+    uint cdpDebt = migrator.migratePosition(slisBnb_marketParams, false, 0);
 
     // CDP postion should be cleared
     assertEq(getCdpDebt(user_slisBnb, slisBnb), 0, "CDP debt should be cleared after migration");
@@ -196,11 +196,14 @@ contract PositionMigratorTest is Test {
     uint256 beforeCdpCollateral = getCdpCollateralAmount(user_bnb, migrator.cdpBnbCollateral());
     uint beforeMarketAsset = getMarketAsset(slisBnb_marketId);
 
+    address strategy = 0x6F28FeC449dbd2056b76ac666350Af8773E03873;
+    uint minSlisBnb = IBnbProviderCdp(migrator.bnbProvider()).estimateInToken(strategy, beforeCdpCollateral);
+
     vm.expectRevert("unauthorized");
-    migrator.migratePosition(slisBnb_marketParams, true);
+    migrator.migratePosition(slisBnb_marketParams, true, minSlisBnb);
 
     migrator.MOOLAH().setAuthorization(address(migrator), true);
-    migrator.migratePosition(slisBnb_marketParams, true);
+    migrator.migratePosition(slisBnb_marketParams, true, minSlisBnb);
 
     // CDP postion should be cleared
     assertEq(getCdpDebt(user_bnb, migrator.cdpBnbCollateral()), 0, "CDP debt should be cleared after migration");
