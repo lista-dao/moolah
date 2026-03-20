@@ -8,11 +8,13 @@ contract DeployLendingBrokerImpl is Script {
   address moolah;
   address interestRelayer;
   address oracle;
+  address wbnb;
 
   function setUp() public {
     moolah = vm.envAddress("MOOLAH");
     interestRelayer = vm.envAddress("INTEREST_RELAYER");
     oracle = vm.envAddress("ORACLE");
+    wbnb = vm.envOr("WBNB", address(0));
   }
 
   function run() public {
@@ -22,7 +24,7 @@ contract DeployLendingBrokerImpl is Script {
     vm.startBroadcast(deployerPrivateKey);
 
     // Deploy LendingBroker implementation
-    LendingBroker impl = new LendingBroker(moolah, interestRelayer, oracle);
+    LendingBroker impl = new LendingBroker(moolah, interestRelayer, oracle, wbnb);
     console.log("LendingBroker implementation: ", address(impl));
 
     vm.stopBroadcast();
