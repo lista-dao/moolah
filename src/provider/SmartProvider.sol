@@ -579,7 +579,7 @@ contract SmartProvider is
 
   /// @dev Sets the slisBNBxMinter address.
   function setSlisBNBxMinter(address _slisBNBxMinter) external onlyRole(MANAGER) {
-    require(_slisBNBxMinter != address(0), "zero address provided");
+    require(_slisBNBxMinter != slisBNBxMinter, "same minter");
     slisBNBxMinter = _slisBNBxMinter;
 
     emit SlisBNBxMinterChanged(_slisBNBxMinter);
