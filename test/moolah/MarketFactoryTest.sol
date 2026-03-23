@@ -115,7 +115,7 @@ contract MarketFactoryTest is Test {
     );
     ERC1967Proxy marketFactoryProxy = new ERC1967Proxy(
       address(marketFactoryImpl),
-      abi.encodeWithSelector(marketFactoryImpl.initialize.selector, admin, operator)
+      abi.encodeWithSelector(marketFactoryImpl.initialize.selector, admin, operator, pauser)
     );
     marketFactory = MarketFactory(address(marketFactoryProxy));
 

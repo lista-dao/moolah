@@ -2,6 +2,7 @@
 pragma solidity 0.8.34;
 import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { MarketParams, Id, IMoolah } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { ILiquidator } from "liquidator/ILiquidator.sol";
@@ -14,7 +15,7 @@ import { IBroker } from "../broker/interfaces/IBroker.sol";
 import { IBrokerLiquidator } from "../liquidator/IBrokerLiquidator.sol";
 import { IRateCalculator } from "../broker/interfaces/IRateCalculator.sol";
 
-contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
+contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, PausableUpgradeable {
   using MarketParamsLib for MarketParams;
 
   struct FixedTermMarketParams {
@@ -42,7 +43,6 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
 
   bytes32 public constant OPERATOR = keccak256("OPERATOR");
   bytes32 public constant PAUSER = keccak256("PAUSER");
-  bytes32 public constant BOT = keccak256("BOT");
 
   event BrokerMarketDeployed(FixedTermMarketParams fixedTermMarketParams, Id marketId, address broker);
   event CommonMarketDeployed(MarketParams marketParams, Id marketId);
@@ -110,13 +110,15 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
    * @param admin The address of the admin role
    * @param operator The address of the operator role
    */
-  function initialize(address admin, address operator) public initializer {
+  function initialize(address admin, address operator, address pauser) public initializer {
     require(admin != address(0), "ZeroAddress");
     require(operator != address(0), "ZeroAddress");
+    require(pauser != address(0), "ZeroAddress");
     __AccessControl_init();
 
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
     _grantRole(OPERATOR, operator);
+    _grantRole(PAUSER, pauser);
   }
 
   /**
@@ -134,6 +136,7 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     bool[] calldata liquidatorMarketWhitelist,
     bool[] calldata liquidatorSmartProviders
   ) external onlyRole(OPERATOR) {
+    require(params.length > 0, "empty market params");
     require(
       params.length == liquidatorWhitelist.length &&
         params.length == supplyWhitelist.length &&
@@ -201,12 +204,8 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     address[] memory supplyWhitelist,
     bool liquidatorMarketWhitelist,
     bool liquidatorSmartProvider
-  ) private {
+  ) private whenNotPaused {
     Id id = param.id();
-    MarketParams memory p = moolah.idToMarketParams(id);
-    if (p.loanToken != address(0)) {
-      revert("Market already exists");
-    }
     // moolah create market
     moolah.createMarket(param);
     // moolah set liquidation whitelist
@@ -265,7 +264,7 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     emit CommonMarketDeployed(param, id);
   }
 
-  function _createFixedTermMarket(FixedTermMarketParams memory param) private returns (Id id) {
+  function _createFixedTermMarket(FixedTermMarketParams memory param) private whenNotPaused returns (Id) {
     IBroker broker = IBroker(param.broker);
     require(param.broker != address(0), "Zero broker address");
 
@@ -345,6 +344,20 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
     if (!liquidator.tokenWhitelist(token1)) {
       liquidator.setTokenWhitelist(token1, true);
     }
+  }
+
+  /**
+   * @dev pause contract
+   */
+  function pause() external onlyRole(PAUSER) {
+    _pause();
+  }
+
+  /**
+   * @dev unpause contract
+   */
+  function unpause() external onlyRole(OPERATOR) {
+    _unpause();
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
