@@ -147,6 +147,7 @@ contract PositionMigrator is
     // refresh CDP debt
     INTERACTION.drip(collAddr); // accrue interest to get the updated debt amount
     uint256 cdpDebt = INTERACTION.borrowed(collAddr, msg.sender);
+    require(cdpDebt > 0, "no debt to migrate");
     uint256 collateralAmount = INTERACTION.free(collAddr, msg.sender) + INTERACTION.locked(collAddr, msg.sender);
 
     // pack data for flash loan callback
