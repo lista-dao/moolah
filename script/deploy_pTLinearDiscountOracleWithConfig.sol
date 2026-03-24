@@ -80,6 +80,6 @@ contract PTLinearDiscountOracleWithConfigDeploy is Script, Config {
       vm.setEnv(walletNames[i], vm.toString(wallets[i]));
     }
 
-    _loadConfig("./config/pt_oracles_20260205.toml", true);
+    _loadConfig("./config/pt_oracles_20260320.toml", true);
   }
 }
