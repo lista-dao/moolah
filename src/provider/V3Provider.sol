@@ -115,6 +115,11 @@ contract V3Provider is
   /// @dev slisBNBxMinter address
   address public slisBNBxMinter;
 
+  /// @dev Maximum allowed absolute tick deviation between slot0 and TWAP.
+  ///      When non-zero, rebalance() reverts if |spotTick - twapTick| exceeds this value.
+  ///      Default 0 = no guard (backwards compatible).
+  uint24 public maxTickDeviation;
+
   /// @dev Virtual address used by the resilient oracle to price native BNB.
   address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
@@ -124,6 +129,7 @@ contract V3Provider is
   /* ───────────────────────────── events ───────────────────────────── */
 
   event SlisBNBxMinterChanged(address indexed minter);
+  event MaxTickDeviationChanged(uint24 maxTickDeviation);
 
   event Deposit(
     address indexed onBehalf,
@@ -495,6 +501,14 @@ contract V3Provider is
   ) external onlyRole(BOT) nonReentrant {
     require(_tickLower < _tickUpper, "invalid tick range");
 
+    // Guard: prevent rebalance when spot diverges too far from TWAP.
+    if (maxTickDeviation > 0) {
+      (, int24 spotTick, , , , , ) = IUniswapV3Pool(POOL).slot0();
+      int24 twapTick = getTwapTick();
+      int24 delta = spotTick > twapTick ? spotTick - twapTick : twapTick - spotTick;
+      require(uint24(delta) <= maxTickDeviation, "twap deviation too high");
+    }
+
     int24 oldTickLower = tickLower;
     int24 oldTickUpper = tickUpper;
 
@@ -675,9 +689,11 @@ contract V3Provider is
    *
    * @dev    Token composition is derived from the TWAP tick (not slot0) so a single-block
    *         AMM price manipulation cannot inflate the reported collateral value.
+   *         The maxTickDeviation guard on rebalance() prevents rebalancing while spot
+   *         diverges far from TWAP, which would cause a phantom share-price discontinuity.
    *         pool.observe() reverts when the pool lacks TWAP_PERIOD seconds of history,
    *         which in turn reverts peek() — intentionally blocking borrows until the market
-   *         has seasoned. Do NOT add a slot0 fallback here.
+   *         has seasoned.
    */
   function peek(address token) external view override returns (uint256) {
     if (token != address(this)) {
@@ -797,6 +813,13 @@ contract V3Provider is
   function setSlisBNBxMinter(address _slisBNBxMinter) external onlyRole(MANAGER) {
     slisBNBxMinter = _slisBNBxMinter;
     emit SlisBNBxMinterChanged(_slisBNBxMinter);
+  }
+
+  /// @notice Set the maximum allowed tick deviation between slot0 and TWAP for rebalance().
+  ///         Pass 0 to disable the guard.
+  function setMaxTickDeviation(uint24 _maxTickDeviation) external onlyRole(MANAGER) {
+    maxTickDeviation = _maxTickDeviation;
+    emit MaxTickDeviationChanged(_maxTickDeviation);
   }
 
   /* ─────────────────────────── internals ──────────────────────────── */

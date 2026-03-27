@@ -1541,4 +1541,155 @@ contract V3ProviderTest is Test {
     assertEq(IERC20(USDC).balanceOf(liquidator), out0);
     assertEq(liquidator.balance, out1); // WBNB unwrapped to BNB
   }
+
+  /* ───── peek() discontinuity when rebalance happens while TWAP lags ───── */
+
+  /// @notice Demonstrates that rebalancing while spot has diverged far from TWAP
+  ///         causes a peek() discontinuity — the oracle-reported share price jumps
+  ///         even though no real value was created or destroyed.
+  ///
+  ///         Scenario:
+  ///         1. User deposits into an in-range position.
+  ///         2. A large swap pushes spot price far below tickLower (position → 100% USDC).
+  ///         3. TWAP still reflects the old price (lagging behind spot).
+  ///         4. peek() is called before and after rebalance — the share price jumps because
+  ///            the TWAP tick lands in a completely different region of the new range vs the old range.
+  ///
+  ///         Before rebalance:
+  ///           old range [tickLower, tickUpper], TWAP tick < old tickLower
+  ///           → _getTotalAmountsAt(twap) = 100% token0
+  ///           → peek = total0 × price0 / supply
+  ///
+  ///         After rebalance (new range centered below TWAP):
+  ///           new range is ABOVE the current spot tick but BELOW the TWAP tick
+  ///           → _getTotalAmountsAt(twap) evaluates position as if price is above new tickUpper
+  ///           → 100% token1 (WBNB) at TWAP-implied amounts — different composition and value
+  ///
+  ///         This is the TWAP-stale-window risk: the oracle's view of token0/token1 split
+  ///         doesn't match reality, and rebalancing changes which "wrong view" is computed.
+  function test_peek_discontinuity_on_rebalance_with_stale_twap() public {
+    _mockOraclePrices();
+
+    // 1. User deposits and borrows against collateral.
+    _deposit(user, 10_000 ether, 30 ether);
+    uint256 shares = _collateral(user);
+    assertGt(shares, 0);
+
+    // Record peek() at the healthy state.
+    uint256 peekHealthy = provider.peek(address(provider));
+    assertGt(peekHealthy, 0, "peek should be non-zero after deposit");
+
+    // 2. Push spot price far below tickLower.
+    //    TWAP (30-min average) barely moves — it still reflects the old price range.
+    _pushPriceBelowRange();
+
+    (, int24 spotTickAfterSwap, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    int24 twapTickAfterSwap = provider.getTwapTick();
+
+    // Confirm TWAP is still well above spot — the stale window.
+    assertLt(spotTickAfterSwap, provider.tickLower(), "spot should be below old tickLower");
+    assertGt(twapTickAfterSwap, spotTickAfterSwap + 200, "TWAP should lag significantly behind spot");
+
+    // 3. peek() before rebalance — TWAP evaluates old range.
+    uint256 peekBeforeRebalance = provider.peek(address(provider));
+
+    // 4. Rebalance: create new range centered around the new spot tick.
+    //    Choose a range that is entirely BELOW the TWAP tick so that
+    //    _getTotalAmountsAt(twapSqrtPrice) sees the new range as "price above tickUpper"
+    //    → interprets the position as 100% token1 (WBNB).
+    //
+    //    Before rebalance, TWAP was below old tickLower → 100% token0 (USDC).
+    //    After rebalance, TWAP is above new tickUpper → 100% token1 (WBNB).
+    //    Same liquidity, but peek() reports a completely different token composition.
+    // Place new range ABOVE spot (so only token0/USDC is needed to mint,
+    // matching the 100%-USDC holdings) but BELOW the TWAP tick (so peek()
+    // evaluates the new position as "price above tickUpper" → 100% token1).
+    int24 newLower = spotTickAfterSwap + 100;
+    int24 newUpper = spotTickAfterSwap + 500;
+
+    // Ensure new range is entirely below the TWAP tick.
+    assertLt(newUpper, twapTickAfterSwap, "new tickUpper should be below TWAP tick");
+    // Ensure new range is entirely above the spot tick.
+    assertGt(newLower, spotTickAfterSwap, "new tickLower should be above spot tick");
+
+    // Collect total amounts for slippage params.
+    (uint256 t0, uint256 t1) = provider.getTotalAmounts();
+
+    vm.prank(bot);
+    provider.rebalance(newLower, newUpper, 0, 0, t0, t1);
+
+    // 5. peek() after rebalance — TWAP evaluates NEW range.
+    uint256 peekAfterRebalance = provider.peek(address(provider));
+
+    // The share price SHOULD be approximately the same (no real value change),
+    // but due to TWAP staleness it can jump significantly.
+    uint256 priceDelta;
+    if (peekAfterRebalance > peekBeforeRebalance) {
+      priceDelta = peekAfterRebalance - peekBeforeRebalance;
+    } else {
+      priceDelta = peekBeforeRebalance - peekAfterRebalance;
+    }
+    uint256 pctChange = (priceDelta * 1e18) / peekBeforeRebalance;
+
+    // Log for visibility.
+    emit log_named_uint("peek before rebalance (8 dec)", peekBeforeRebalance);
+    emit log_named_uint("peek after  rebalance (8 dec)", peekAfterRebalance);
+    emit log_named_uint("change %  (18 dec = 100%)", pctChange);
+    emit log_named_int("spot  tick after swap", spotTickAfterSwap);
+    emit log_named_int("TWAP  tick after swap", twapTickAfterSwap);
+    emit log_named_int("new tickLower", newLower);
+    emit log_named_int("new tickUpper", newUpper);
+
+    // Without maxTickDeviation guard, the rebalance succeeds and causes a large
+    // peek() discontinuity. This proves the TWAP-stale-window risk is real.
+    assertGt(pctChange, 0.01e18, "peek() should show a >1% discontinuity due to stale TWAP");
+  }
+
+  /// @notice With maxTickDeviation set, the same rebalance is blocked — preventing
+  ///         the peek() discontinuity from ever occurring.
+  function test_peek_discontinuity_blocked_by_maxTickDeviation() public {
+    _mockOraclePrices();
+    _deposit(user, 10_000 ether, 30 ether);
+
+    // Set the guard — only allow rebalance when spot ≈ TWAP.
+    vm.prank(manager);
+    provider.setMaxTickDeviation(100);
+
+    _pushPriceBelowRange();
+
+    (, int24 spotTickAfterSwap, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    int24 newLower = spotTickAfterSwap + 100;
+    int24 newUpper = spotTickAfterSwap + 500;
+    (uint256 t0, uint256 t1) = provider.getTotalAmounts();
+
+    vm.prank(bot);
+    vm.expectRevert("twap deviation too high");
+    provider.rebalance(newLower, newUpper, 0, 0, t0, t1);
+  }
+
+  /* ───── rebalance TWAP deviation guard ───── */
+
+  function test_rebalance_succeeds_when_twap_deviation_within_limit() public {
+    _deposit(user, 10_000 ether, 30 ether);
+
+    // Set a generous deviation limit — slot0 and TWAP should be close after deposit.
+    vm.prank(manager);
+    provider.setMaxTickDeviation(5000);
+
+    (, int24 spotTick, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    int24 twapTick = provider.getTwapTick();
+    int24 delta = twapTick > spotTick ? twapTick - spotTick : spotTick - twapTick;
+    assertLt(uint24(delta), 5000, "deviation should be within limit");
+
+    // Rebalance to a slightly shifted range — should succeed.
+    int24 newLower = provider.tickLower() - 100;
+    int24 newUpper = provider.tickUpper() - 100;
+    (uint256 t0, uint256 t1) = provider.getTotalAmounts();
+
+    vm.prank(bot);
+    provider.rebalance(newLower, newUpper, 0, 0, t0, t1);
+
+    assertEq(provider.tickLower(), newLower, "tickLower should be updated");
+    assertEq(provider.tickUpper(), newUpper, "tickUpper should be updated");
+  }
 }
