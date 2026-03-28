@@ -5,7 +5,7 @@ import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { IERC20 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 
-import { PositionMigrator, IBnbProviderCdp } from "../../src/utils/PositionMigrator.sol";
+import { PositionMigrator, IBnbProviderCdp, ISlisBnbProviderCdp, IInteraction } from "../../src/utils/PositionMigrator.sol";
 import { IMoolah, MarketParams, Id, Position, Market } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 
@@ -48,9 +48,10 @@ contract PositionMigratorTest is Test {
   function setUp() public {
     vm.createSelectFork(vm.envString("BSC_RPC"), 85721000);
 
-    address[] memory collaterals = new address[](2);
-    collaterals[0] = slisBnb;
-    collaterals[1] = btcb;
+    // slisBnb and cdpBnbCollateral are added by initialize() automatically;
+    // only pass additional collaterals (BTCB, etc.) here.
+    address[] memory collaterals = new address[](1);
+    collaterals[0] = btcb;
 
     PositionMigrator impl = new PositionMigrator();
     ERC1967Proxy proxy = new ERC1967Proxy(
@@ -76,6 +77,8 @@ contract PositionMigratorTest is Test {
       abi.encodeWithSelector(Interaction.migrator.selector),
       abi.encode(address(migrator))
     );
+
+    vm.stopPrank();
   }
 
   function upgrade_Interaction() public {
@@ -125,8 +128,9 @@ contract PositionMigratorTest is Test {
     assertEq(migrator.slisBnbProviderCDP(), 0xfD31e1C5e5571f8E7FE318f80888C1e6da97819b);
     assertEq(migrator.slisBnbProviderLending(), 0x33f7A980a246f9B8FEA2254E3065576E127D4D5f);
 
-    assertTrue(migrator.isCollateralSupported(slisBnb));
-    assertTrue(migrator.isCollateralSupported(btcb));
+    assertTrue(migrator.isCollateralSupported(slisBnb), "slisBNB should be auto-added");
+    assertTrue(migrator.isCollateralSupported(migrator.cdpBnbCollateral()), "cdpBnbCollateral should be auto-added");
+    assertTrue(migrator.isCollateralSupported(btcb), "btcb should be added via init param");
 
     assertTrue(migrator.isWhitelisted(user_bnb));
     assertTrue(migrator.isWhitelisted(user_slisBnb));
@@ -216,5 +220,48 @@ contract PositionMigratorTest is Test {
     // user's lisUSD balance should be the same after migration since the migrated position is fully collateralized
     uint256 afterLisUSD = IERC20(lisUSD).balanceOf(user_bnb);
     assertEq(afterLisUSD, beforeLisUSD, "User's lisUSD balance should not change after migration");
+  }
+
+  function test_counter_releaseFor_freeAndLocked_reverts() public {
+    address interaction = address(migrator.INTERACTION());
+    address cdpProvider = migrator.slisBnbProviderCDP();
+
+    uint256 lockedAmount = migrator.INTERACTION().locked(slisBnb, user_slisBnb);
+    require(lockedAmount > 0, "test setup: user must have locked collateral");
+
+    uint256 freeAmount = lockedAmount / 10;
+
+    // Passing locked + free to releaseFor() triggers _burnLp with an amount
+    // larger than userLp[account], causing SafeMath / checked-arithmetic to revert.
+    vm.prank(interaction);
+    vm.expectRevert(); // arithmetic underflow inside _burnLp
+    ISlisBnbProviderCdp(cdpProvider).releaseFor(user_slisBnb, lockedAmount + freeAmount);
+  }
+
+  /// @dev Fix verification: with collateralAmount = locked() only, migratePosition
+  ///      succeeds even when the user also holds free (unlocked) collateral.
+  function test_migratePosition_slisBnb_withFreeCollateral() public {
+    uint256 lockedAmount = migrator.INTERACTION().locked(slisBnb, user_slisBnb);
+    require(lockedAmount > 0, "test setup: user must have locked collateral");
+
+    // Inject a non-zero free balance via mock so we exercise the exact condition
+    // that previously caused the underflow.
+    uint256 freeAmount = lockedAmount / 10;
+    vm.mockCall(
+      address(migrator.INTERACTION()),
+      abi.encodeWithSelector(IInteraction.free.selector, slisBnb, user_slisBnb),
+      abi.encode(freeAmount)
+    );
+
+    vm.startPrank(user_slisBnb);
+    migrator.MOOLAH().accrueInterest(slisBnb_marketParams);
+    migrator.MOOLAH().setAuthorization(address(migrator), true);
+
+    // Fixed code uses only locked(), so releaseFor receives exactly the LP-backed
+    // amount and the transaction succeeds.
+    migrator.migratePosition(slisBnb_marketParams, false, 0);
+
+    assertEq(getCdpDebt(user_slisBnb, slisBnb), 0, "CDP debt must be cleared");
+    vm.stopPrank();
   }
 }

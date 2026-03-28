@@ -121,8 +121,12 @@ contract PositionMigrator is
     }
 
     // add Bnb collateral by default
-    require(collaterals.add(cdpBnbCollateral), "collateral already added");
+    require(collaterals.add(cdpBnbCollateral), "Bnb already added");
     emit UpdateSupportedCollateral(cdpBnbCollateral, true);
+
+    // add slisBNB collateral by default
+    require(collaterals.add(SLISBNB), "slisBNB already added");
+    emit UpdateSupportedCollateral(SLISBNB, true);
   }
 
   /**
@@ -130,6 +134,25 @@ contract PositionMigrator is
    * @param marketParams The market parameters of the Moolah position to migrate to.
    * @param isBnb Whether the CDP collateral is BNB, which requires special handling for migration.
    * @param minSlisBnb The minimum amount of slisBNB expected to receive when migrating BNB collateral; for slippage protection; only applicable when isBnb is true
+   *
+   * @notice If the caller already has a position in the target Moolah market, the migrated
+   *         collateral and debt are ADDED to the existing position. The combined position's
+   *         LTV will be a weighted average of the two.
+   *
+   *         Immediate liquidation after migration is not possible because the target Moolah
+   *         slisBNB/lisUSD market has an LLTV of 85%, which is higher than both CDP LLTVs
+   *         (slisBNB: 80%, BNB: 83.33%). Any position healthy in the CDP is therefore
+   *         healthy after migration. BTCB/lisUSD and wBETH/lisUSD markets will also be
+   *         created for migration.
+   *
+   *         Migrating during an active CDP liquidation auction: if a user's CDP position
+   *         is being liquidated and the user migrates while the auction is ongoing, the
+   *         migration operates on the reduced position (collateral partially seized by the
+   *         auction). When the auction later concludes, any leftover collateral is returned
+   *         to the user's gem balance in the Vat via vat.flux. This collateral is not
+   *         migrated, but the user can withdraw it from the CDP system later. No funds are
+   *         lost, but users should be aware that migrating during an active auction may
+   *         leave collateral behind in the CDP system.
    */
   function migratePosition(
     MarketParams calldata marketParams,
@@ -148,7 +171,7 @@ contract PositionMigrator is
     INTERACTION.drip(collAddr); // accrue interest to get the updated debt amount
     uint256 cdpDebt = INTERACTION.borrowed(collAddr, msg.sender);
     require(cdpDebt > 0, "no debt to migrate");
-    uint256 collateralAmount = INTERACTION.free(collAddr, msg.sender) + INTERACTION.locked(collAddr, msg.sender);
+    uint256 collateralAmount = INTERACTION.locked(collAddr, msg.sender);
 
     // pack data for flash loan callback
     bytes memory data = abi.encode(
@@ -215,6 +238,10 @@ contract PositionMigrator is
     }
 
     // 4. supply collateral
+    // Note: slisBNBProvider must be configured for all slisBNB Moolah markets, ensuring
+    // the isBnb flow always takes the provider branch (which correctly uses releasedSlisBnb).
+    // The no-provider branch uses collateralAmount, which is only correct for non-BNB
+    // collaterals (BTCB, wBETH) where no conversion occurs.
     address provider = MOOLAH.providers(params.id(), params.collateralToken);
     if (provider == address(0)) {
       params.collateralToken.safeApprove(address(MOOLAH), data.collateralAmount);
