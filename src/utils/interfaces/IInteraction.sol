@@ -8,7 +8,7 @@ interface IInteraction {
 
   function paybackFor(address token, uint256 lisUSDAmount, address borrower) external returns (int256);
 
-  function withdrawFor(address borrower, address token, uint256 collateralAmount) external returns (int256);
+  function withdrawFor(address borrower, address token, uint256 collateralAmount) external returns (uint256);
 
   function free(address token, address usr) external view returns (uint256);
 
