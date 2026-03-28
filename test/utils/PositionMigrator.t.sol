@@ -48,9 +48,10 @@ contract PositionMigratorTest is Test {
   function setUp() public {
     vm.createSelectFork(vm.envString("BSC_RPC"), 85721000);
 
-    address[] memory collaterals = new address[](2);
-    collaterals[0] = slisBnb;
-    collaterals[1] = btcb;
+    // slisBnb and cdpBnbCollateral are added by initialize() automatically;
+    // only pass additional collaterals (BTCB, etc.) here.
+    address[] memory collaterals = new address[](1);
+    collaterals[0] = btcb;
 
     PositionMigrator impl = new PositionMigrator();
     ERC1967Proxy proxy = new ERC1967Proxy(
@@ -127,8 +128,9 @@ contract PositionMigratorTest is Test {
     assertEq(migrator.slisBnbProviderCDP(), 0xfD31e1C5e5571f8E7FE318f80888C1e6da97819b);
     assertEq(migrator.slisBnbProviderLending(), 0x33f7A980a246f9B8FEA2254E3065576E127D4D5f);
 
-    assertTrue(migrator.isCollateralSupported(slisBnb));
-    assertTrue(migrator.isCollateralSupported(btcb));
+    assertTrue(migrator.isCollateralSupported(slisBnb), "slisBNB should be auto-added");
+    assertTrue(migrator.isCollateralSupported(migrator.cdpBnbCollateral()), "cdpBnbCollateral should be auto-added");
+    assertTrue(migrator.isCollateralSupported(btcb), "btcb should be added via init param");
 
     assertTrue(migrator.isWhitelisted(user_bnb));
     assertTrue(migrator.isWhitelisted(user_slisBnb));

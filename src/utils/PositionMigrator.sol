@@ -121,8 +121,12 @@ contract PositionMigrator is
     }
 
     // add Bnb collateral by default
-    require(collaterals.add(cdpBnbCollateral), "collateral already added");
+    require(collaterals.add(cdpBnbCollateral), "Bnb already added");
     emit UpdateSupportedCollateral(cdpBnbCollateral, true);
+
+    // add slisBNB collateral by default
+    require(collaterals.add(SLISBNB), "slisBNB already added");
+    emit UpdateSupportedCollateral(SLISBNB, true);
   }
 
   /**
