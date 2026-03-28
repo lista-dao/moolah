@@ -130,6 +130,16 @@ contract PositionMigrator is
    * @param marketParams The market parameters of the Moolah position to migrate to.
    * @param isBnb Whether the CDP collateral is BNB, which requires special handling for migration.
    * @param minSlisBnb The minimum amount of slisBNB expected to receive when migrating BNB collateral; for slippage protection; only applicable when isBnb is true
+   *
+   * @notice If the caller already has a position in the target Moolah market, the migrated
+   *         collateral and debt are ADDED to the existing position. The combined position's
+   *         LTV will be a weighted average of the two.
+   *
+   *         Immediate liquidation after migration is not possible because the target Moolah
+   *         slisBNB/lisUSD market has an LLTV of 85%, which is higher than both CDP LLTVs
+   *         (slisBNB: 80%, BNB: 83.33%). Any position healthy in the CDP is therefore
+   *         healthy after migration. BTCB/lisUSD and wBETH/lisUSD markets will also be
+   *         created for migration.
    */
   function migratePosition(
     MarketParams calldata marketParams,
