@@ -225,6 +225,10 @@ contract PositionMigrator is
     }
 
     // 4. supply collateral
+    // Note: slisBNBProvider must be configured for all slisBNB Moolah markets, ensuring
+    // the isBnb flow always takes the provider branch (which correctly uses releasedSlisBnb).
+    // The no-provider branch uses collateralAmount, which is only correct for non-BNB
+    // collaterals (BTCB, wBETH) where no conversion occurs.
     address provider = MOOLAH.providers(params.id(), params.collateralToken);
     if (provider == address(0)) {
       params.collateralToken.safeApprove(address(MOOLAH), data.collateralAmount);
