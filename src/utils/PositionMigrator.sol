@@ -140,6 +140,15 @@ contract PositionMigrator is
    *         (slisBNB: 80%, BNB: 83.33%). Any position healthy in the CDP is therefore
    *         healthy after migration. BTCB/lisUSD and wBETH/lisUSD markets will also be
    *         created for migration.
+   *
+   *         Migrating during an active CDP liquidation auction: if a user's CDP position
+   *         is being liquidated and the user migrates while the auction is ongoing, the
+   *         migration operates on the reduced position (collateral partially seized by the
+   *         auction). When the auction later concludes, any leftover collateral is returned
+   *         to the user's gem balance in the Vat via vat.flux. This collateral is not
+   *         migrated, but the user can withdraw it from the CDP system later. No funds are
+   *         lost, but users should be aware that migrating during an active auction may
+   *         leave collateral behind in the CDP system.
    */
   function migratePosition(
     MarketParams calldata marketParams,
