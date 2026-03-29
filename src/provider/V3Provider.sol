@@ -8,17 +8,17 @@ import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import { TickMath } from "@uniswap/v3-core/contracts/libraries/TickMath.sol";
-import { SqrtPriceMath } from "@uniswap/v3-core/contracts/libraries/SqrtPriceMath.sol";
-import { LiquidityAmounts } from "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
+import { TickMath } from "../dex/v3/core/libraries/TickMath.sol";
+import { SqrtPriceMath } from "../dex/v3/core/libraries/SqrtPriceMath.sol";
+import { LiquidityAmounts } from "../dex/v3/periphery/libraries/LiquidityAmounts.sol";
 
 import { IMoolah, MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { IOracle, TokenConfig } from "moolah/interfaces/IOracle.sol";
 
-import { INonfungiblePositionManager } from "./interfaces/INonfungiblePositionManager.sol";
-import { IUniswapV3Factory } from "./interfaces/IUniswapV3Factory.sol";
-import { IUniswapV3Pool } from "./interfaces/IUniswapV3Pool.sol";
+import { INonfungiblePositionManager } from "../dex/v3/periphery/interfaces/INonfungiblePositionManager.sol";
+import { IListaV3Factory } from "../dex/v3/core/interfaces/IListaV3Factory.sol";
+import { IListaV3Pool } from "../dex/v3/core/interfaces/IListaV3Pool.sol";
 import { IWBNB } from "./interfaces/IWBNB.sol";
 import { IV3Provider } from "./interfaces/IV3Provider.sol";
 import { ISlisBNBxMinter } from "../utils/interfaces/ISlisBNBx.sol";
@@ -168,7 +168,7 @@ contract V3Provider is
     require(_fee > 0, "zero fee");
     require(_twapPeriod > 0, "zero twap period");
 
-    address _pool = IUniswapV3Factory(INonfungiblePositionManager(_positionManager).factory()).getPool(
+    address _pool = IListaV3Factory(INonfungiblePositionManager(_positionManager).factory()).getPool(
       _token0,
       _token1,
       _fee
@@ -296,7 +296,7 @@ contract V3Provider is
     // This catches one-sided deposits in the wrong direction (e.g. token0-only when price
     // is above tickUpper) before any tokens are pulled from the caller.
     {
-      (uint160 sqrtPriceX96, , , , , , ) = IUniswapV3Pool(POOL).slot0();
+      (uint160 sqrtPriceX96, , , , , , ) = IListaV3Pool(POOL).slot0();
       require(
         LiquidityAmounts.getLiquidityForAmounts(
           sqrtPriceX96,
@@ -503,7 +503,7 @@ contract V3Provider is
 
     // Guard: prevent rebalance when spot diverges too far from TWAP.
     if (maxTickDeviation > 0) {
-      (, int24 spotTick, , , , , ) = IUniswapV3Pool(POOL).slot0();
+      (, int24 spotTick, , , , , ) = IListaV3Pool(POOL).slot0();
       int24 twapTick = getTwapTick();
       int24 delta = spotTick > twapTick ? spotTick - twapTick : twapTick - spotTick;
       require(uint24(delta) <= maxTickDeviation, "twap deviation too high");
@@ -604,7 +604,7 @@ contract V3Provider is
    *         peek() uses the TWAP price to resist manipulation; see _getTotalAmountsAt.
    */
   function getTotalAmounts() public view returns (uint256 total0, uint256 total1) {
-    (uint160 sqrtPriceX96, , , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (uint160 sqrtPriceX96, , , , , , ) = IListaV3Pool(POOL).slot0();
     return _getTotalAmountsAt(sqrtPriceX96);
   }
 
@@ -630,7 +630,7 @@ contract V3Provider is
     uint128 totalLiquidity = _getPositionLiquidity();
     uint128 liquidityToRemove = uint128((uint256(totalLiquidity) * shares) / supply);
 
-    (uint160 sqrtPriceX96, , , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (uint160 sqrtPriceX96, , , , , , ) = IListaV3Pool(POOL).slot0();
     (amount0, amount1) = _getAmountsForLiquidity(
       sqrtPriceX96,
       TickMath.getSqrtRatioAtTick(tickLower),
@@ -659,7 +659,7 @@ contract V3Provider is
     uint256 amount0Desired,
     uint256 amount1Desired
   ) external view returns (uint128 liquidity, uint256 amount0, uint256 amount1) {
-    (uint160 sqrtPriceX96, , , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (uint160 sqrtPriceX96, , , , , , ) = IListaV3Pool(POOL).slot0();
     uint160 sqrtRatioLower = TickMath.getSqrtRatioAtTick(tickLower);
     uint160 sqrtRatioUpper = TickMath.getSqrtRatioAtTick(tickUpper);
 
@@ -745,7 +745,7 @@ contract V3Provider is
     secondsAgos[0] = TWAP_PERIOD;
     secondsAgos[1] = 0;
 
-    (int56[] memory tickCumulatives, ) = IUniswapV3Pool(POOL).observe(secondsAgos);
+    (int56[] memory tickCumulatives, ) = IListaV3Pool(POOL).observe(secondsAgos);
 
     int56 delta = tickCumulatives[1] - tickCumulatives[0];
     twapTick = int24(delta / int56(uint56(TWAP_PERIOD)));
