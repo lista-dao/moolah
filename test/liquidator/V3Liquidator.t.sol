@@ -8,7 +8,7 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import { V3Provider } from "../../src/provider/V3Provider.sol";
 import { V3Liquidator } from "../../src/liquidator/V3Liquidator.sol";
-import { IUniswapV3Pool } from "../../src/provider/interfaces/IUniswapV3Pool.sol";
+import { IListaV3Pool } from "../../src/dex/v3/core/interfaces/IListaV3Pool.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
 import { IMoolah, MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
@@ -67,7 +67,7 @@ contract V3LiquidatorTest is Test {
     moolah = Moolah(MOOLAH_PROXY);
 
     // Deploy V3Provider.
-    (, int24 currentTick, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 currentTick, , , , , ) = IListaV3Pool(POOL).slot0();
     V3Provider implP = new V3Provider(MOOLAH_PROXY, NPM, USDC, WBNB, FEE, TWAP_PERIOD);
     provider = V3Provider(
       payable(

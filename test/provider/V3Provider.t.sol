@@ -7,7 +7,7 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import { V3Provider } from "../../src/provider/V3Provider.sol";
-import { IUniswapV3Pool } from "../../src/provider/interfaces/IUniswapV3Pool.sol";
+import { IListaV3Pool } from "../../src/dex/v3/core/interfaces/IListaV3Pool.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
 import { IMoolah, MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
@@ -25,14 +25,14 @@ contract PoolSwapper {
   ///         zeroForOne = false → token1 in, token0 out (price moves up)
   function swapExactIn(address pool, bool zeroForOne, uint256 amountIn) external {
     uint160 limit = zeroForOne ? MIN_SQRT_RATIO + 1 : MAX_SQRT_RATIO - 1;
-    IUniswapV3Pool(pool).swap(address(this), zeroForOne, int256(amountIn), limit, abi.encode(pool));
+    IListaV3Pool(pool).swap(address(this), zeroForOne, int256(amountIn), limit, abi.encode(pool));
   }
 
   /// @dev PancakeSwap V3 swap callback — pay whatever the pool pulled.
   function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) external {
     address pool = abi.decode(data, (address));
-    if (amount0Delta > 0) IERC20(IUniswapV3Pool(pool).token0()).transfer(msg.sender, uint256(amount0Delta));
-    if (amount1Delta > 0) IERC20(IUniswapV3Pool(pool).token1()).transfer(msg.sender, uint256(amount1Delta));
+    if (amount0Delta > 0) IERC20(IListaV3Pool(pool).token0()).transfer(msg.sender, uint256(amount0Delta));
+    if (amount1Delta > 0) IERC20(IListaV3Pool(pool).token1()).transfer(msg.sender, uint256(amount1Delta));
   }
 }
 
@@ -85,7 +85,7 @@ contract V3ProviderTest is Test {
     moolah = Moolah(MOOLAH_PROXY);
 
     // Derive initial tick range from the live pool.
-    (, int24 currentTick, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 currentTick, , , , , ) = IListaV3Pool(POOL).slot0();
     int24 tickLower = currentTick - 500;
     int24 tickUpper = currentTick + 500;
 
@@ -288,7 +288,7 @@ contract V3ProviderTest is Test {
   function test_rebalance_onlyBot() public {
     _deposit(user, 1_000 ether, 3 ether);
 
-    (, int24 currentTick, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 currentTick, , , , , ) = IListaV3Pool(POOL).slot0();
     int24 newLower = currentTick - 1000;
     int24 newUpper = currentTick + 1000;
 
@@ -313,7 +313,7 @@ contract V3ProviderTest is Test {
 
     (uint256 total0Before, uint256 total1Before) = provider.getTotalAmounts();
 
-    (, int24 currentTick, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 currentTick, , , , , ) = IListaV3Pool(POOL).slot0();
     (uint256 total0, uint256 total1) = provider.getTotalAmounts();
     uint256 min0 = (total0 * 999) / 1000;
     uint256 min1 = (total1 * 999) / 1000;
@@ -343,7 +343,7 @@ contract V3ProviderTest is Test {
 
   function test_getTwapTick_nearCurrentTick() public view {
     int24 twapTick = provider.getTwapTick();
-    (, int24 currentTick, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 currentTick, , , , , ) = IListaV3Pool(POOL).slot0();
 
     // TWAP tick should be within a reasonable distance of the current tick.
     int256 diff = int256(currentTick) - int256(twapTick);
@@ -377,14 +377,14 @@ contract V3ProviderTest is Test {
     // return tick cumulatives consistent with the current slot0 tick.  Without this,
     // the 7-day warp shifts the TWAP window from real BSC history to pure extrapolation,
     // producing a spurious ~0.3% price delta that has nothing to do with fee compounding.
-    (, int24 currentTick, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 currentTick, , , , , ) = IListaV3Pool(POOL).slot0();
     int56[] memory tickCumulatives = new int56[](2);
     tickCumulatives[0] = 0;
     tickCumulatives[1] = int56(currentTick) * int56(uint56(TWAP_PERIOD));
     uint160[] memory secondsPerLiq = new uint160[](2);
     vm.mockCall(
       POOL,
-      abi.encodeWithSelector(IUniswapV3Pool.observe.selector),
+      abi.encodeWithSelector(bytes4(keccak256("observe(uint32[])"))),
       abi.encode(tickCumulatives, secondsPerLiq)
     );
 
@@ -522,7 +522,7 @@ contract V3ProviderTest is Test {
     // Price is inside the tick range: preview predicts both tokens, withdraw returns both.
     (uint256 shares, , ) = _deposit(user, 10_000 ether, 30 ether);
 
-    (, int24 currentTick, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 currentTick, , , , , ) = IListaV3Pool(POOL).slot0();
     assertGt(currentTick, provider.tickLower(), "price should be above tickLower");
     assertLt(currentTick, provider.tickUpper(), "price should be below tickUpper");
 
@@ -819,7 +819,7 @@ contract V3ProviderTest is Test {
     // Push price below tickLower — position should convert entirely to USDC (token0).
     _pushPriceBelowRange();
 
-    (, int24 tickAfterSwap, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 tickAfterSwap, , , , , ) = IListaV3Pool(POOL).slot0();
     assertLt(tickAfterSwap, provider.tickLower(), "tick should be below tickLower after swap");
 
     (uint256 total0, uint256 total1) = provider.getTotalAmounts();
@@ -840,7 +840,7 @@ contract V3ProviderTest is Test {
 
     // Rebalance to a range entirely ABOVE the current (very low) tick so that
     // the entire range is below current price → only token0 (USDC) is needed to mint.
-    (, int24 newTick, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 newTick, , , , , ) = IListaV3Pool(POOL).slot0();
     int24 newLower = newTick + 100;
     int24 newUpper = newTick + 600;
 
@@ -879,7 +879,7 @@ contract V3ProviderTest is Test {
     // Push price above tickUpper — position should convert entirely to WBNB (token1).
     _pushPriceAboveRange();
 
-    (, int24 tickAfterSwap, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 tickAfterSwap, , , , , ) = IListaV3Pool(POOL).slot0();
     assertGt(tickAfterSwap, provider.tickUpper(), "tick should be above tickUpper after swap");
 
     (uint256 total0, uint256 total1) = provider.getTotalAmounts();
@@ -900,7 +900,7 @@ contract V3ProviderTest is Test {
 
     // Rebalance to a range entirely BELOW the current (very high) tick so that
     // the entire range is above current price → only token1 (WBNB) is needed to mint.
-    (, int24 newTick, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 newTick, , , , , ) = IListaV3Pool(POOL).slot0();
     int24 newLower = newTick - 600;
     int24 newUpper = newTick - 100;
 
@@ -931,7 +931,7 @@ contract V3ProviderTest is Test {
     (uint256 total0, ) = provider.getTotalAmounts();
     assertGt(total0, 0, "should hold USDC before rebalance");
 
-    (, int24 newTick, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 newTick, , , , , ) = IListaV3Pool(POOL).slot0();
 
     // minAmount0 = total0 (exact), minAmount1 = 0 (position has no WBNB).
     // amount0Desired = total0, amount1Desired = 0 (reinvest all USDC, no WBNB available).
@@ -947,7 +947,7 @@ contract V3ProviderTest is Test {
 
     (uint256 total0, ) = provider.getTotalAmounts();
 
-    (, int24 newTick, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 newTick, , , , , ) = IListaV3Pool(POOL).slot0();
 
     // minAmount0 one unit above actual → should revert with NPM slippage check.
     // amount0Desired = total0 (correct available), minAmount0 = total0 + 1 (too tight).
@@ -965,7 +965,7 @@ contract V3ProviderTest is Test {
     (, uint256 total1) = provider.getTotalAmounts();
     assertGt(total1, 0, "should hold WBNB before rebalance");
 
-    (, int24 newTick, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 newTick, , , , , ) = IListaV3Pool(POOL).slot0();
 
     // minAmount0 = 0 (no USDC), minAmount1 = total1 (exact).
     // amount0Desired = 0, amount1Desired = total1 (reinvest all WBNB).
@@ -981,7 +981,7 @@ contract V3ProviderTest is Test {
 
     (, uint256 total1) = provider.getTotalAmounts();
 
-    (, int24 newTick, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 newTick, , , , , ) = IListaV3Pool(POOL).slot0();
 
     // minAmount1 one unit above actual → should revert with NPM slippage check.
     // amount1Desired = total1 (correct available), minAmount1 = total1 + 1 (too tight).
@@ -1583,7 +1583,7 @@ contract V3ProviderTest is Test {
     //    TWAP (30-min average) barely moves — it still reflects the old price range.
     _pushPriceBelowRange();
 
-    (, int24 spotTickAfterSwap, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 spotTickAfterSwap, , , , , ) = IListaV3Pool(POOL).slot0();
     int24 twapTickAfterSwap = provider.getTwapTick();
 
     // Confirm TWAP is still well above spot — the stale window.
@@ -1657,7 +1657,7 @@ contract V3ProviderTest is Test {
 
     _pushPriceBelowRange();
 
-    (, int24 spotTickAfterSwap, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 spotTickAfterSwap, , , , , ) = IListaV3Pool(POOL).slot0();
     int24 newLower = spotTickAfterSwap + 100;
     int24 newUpper = spotTickAfterSwap + 500;
     (uint256 t0, uint256 t1) = provider.getTotalAmounts();
@@ -1676,7 +1676,7 @@ contract V3ProviderTest is Test {
     vm.prank(manager);
     provider.setMaxTickDeviation(5000);
 
-    (, int24 spotTick, , , , , ) = IUniswapV3Pool(POOL).slot0();
+    (, int24 spotTick, , , , , ) = IListaV3Pool(POOL).slot0();
     int24 twapTick = provider.getTwapTick();
     int24 delta = twapTick > spotTick ? twapTick - spotTick : spotTick - twapTick;
     assertLt(uint24(delta), 5000, "deviation should be within limit");
