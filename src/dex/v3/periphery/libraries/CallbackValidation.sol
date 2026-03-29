@@ -2,6 +2,7 @@
 pragma solidity 0.8.34;
 
 import "../../core/interfaces/IListaV3Pool.sol";
+import "../../core/interfaces/IListaV3Factory.sol";
 import "./PoolAddress.sol";
 
 /// @notice Provides validation for callbacks from Lista V3 Pools
@@ -18,7 +19,15 @@ library CallbackValidation {
     address tokenB,
     uint24 fee
   ) internal view returns (IListaV3Pool pool) {
-    return verifyCallback(factory, PoolAddress.getPoolKey(tokenA, tokenB, fee));
+    return
+      verifyCallback(
+        factory,
+        PoolAddress.PoolKey({
+          token0: tokenA < tokenB ? tokenA : tokenB,
+          token1: tokenA < tokenB ? tokenB : tokenA,
+          fee: fee
+        })
+      );
   }
 
   /// @notice Returns the address of a valid Lista V3 Pool
@@ -29,7 +38,7 @@ library CallbackValidation {
     address factory,
     PoolAddress.PoolKey memory poolKey
   ) internal view returns (IListaV3Pool pool) {
-    pool = IListaV3Pool(PoolAddress.computeAddress(factory, poolKey));
+    pool = IListaV3Pool(IListaV3Factory(factory).getPool(poolKey.token0, poolKey.token1, poolKey.fee));
     require(msg.sender == address(pool));
   }
 }

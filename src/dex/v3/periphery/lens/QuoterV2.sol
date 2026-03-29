@@ -30,7 +30,8 @@ contract QuoterV2 is IQuoterV2, IListaV3SwapCallback, PeripheryImmutableState {
   constructor(address _factory, address _WETH9) PeripheryImmutableState(_factory, _WETH9) {}
 
   function getPool(address tokenA, address tokenB, uint24 fee) private view returns (IListaV3Pool) {
-    return IListaV3Pool(PoolAddress.computeAddress(factory, PoolAddress.getPoolKey(tokenA, tokenB, fee)));
+    return
+      IListaV3Pool(PoolAddress.computeAddress(factory, PoolAddress.getPoolKey(tokenA, tokenB, fee), poolInitCodeHash));
   }
 
   /// @inheritdoc IListaV3SwapCallback
