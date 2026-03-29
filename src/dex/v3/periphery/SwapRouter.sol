@@ -41,7 +41,8 @@ contract SwapRouter is
 
   /// @dev Returns the pool for the given token pair and fee. The pool contract may or may not exist.
   function getPool(address tokenA, address tokenB, uint24 fee) private view returns (IListaV3Pool) {
-    return IListaV3Pool(PoolAddress.computeAddress(factory, PoolAddress.getPoolKey(tokenA, tokenB, fee)));
+    return
+      IListaV3Pool(PoolAddress.computeAddress(factory, PoolAddress.getPoolKey(tokenA, tokenB, fee), poolInitCodeHash));
   }
 
   struct SwapCallbackData {

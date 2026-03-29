@@ -53,7 +53,7 @@ abstract contract LiquidityManagement is IListaV3MintCallback, PeripheryImmutabl
       fee: params.fee
     });
 
-    pool = IListaV3Pool(PoolAddress.computeAddress(factory, poolKey));
+    pool = IListaV3Pool(PoolAddress.computeAddress(factory, poolKey, poolInitCodeHash));
 
     // compute the liquidity amount
     {

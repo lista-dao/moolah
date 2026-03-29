@@ -3,8 +3,6 @@ pragma solidity 0.8.34;
 
 import { IListaV3PoolImmutables, IListaV3PoolState, IListaV3PoolActions, IListaV3PoolDerivedState, IListaV3PoolOwnerActions, IListaV3Pool } from "./interfaces/IListaV3Pool.sol";
 
-import { NoDelegateCall } from "./NoDelegateCall.sol";
-
 import { SafeCast } from "./libraries/SafeCast.sol";
 import { Tick } from "./libraries/Tick.sol";
 import { TickBitmap } from "./libraries/TickBitmap.sol";
@@ -25,7 +23,7 @@ import { IListaV3MintCallback } from "./interfaces/callback/IListaV3MintCallback
 import { IListaV3SwapCallback } from "./interfaces/callback/IListaV3SwapCallback.sol";
 import { IListaV3FlashCallback } from "./interfaces/callback/IListaV3FlashCallback.sol";
 
-contract ListaV3Pool is IListaV3Pool, NoDelegateCall {
+contract ListaV3Pool is IListaV3Pool {
   using SafeCast for uint256;
   using SafeCast for int256;
   using Tick for mapping(int24 => Tick.Info);
@@ -160,7 +158,6 @@ contract ListaV3Pool is IListaV3Pool, NoDelegateCall {
     external
     view
     override
-    noDelegateCall
     returns (int56 tickCumulativeInside, uint160 secondsPerLiquidityInsideX128, uint32 secondsInside)
   {
     checkTicks(tickLower, tickUpper);
@@ -235,7 +232,6 @@ contract ListaV3Pool is IListaV3Pool, NoDelegateCall {
     external
     view
     override
-    noDelegateCall
     returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativeX128s)
   {
     return
@@ -250,7 +246,7 @@ contract ListaV3Pool is IListaV3Pool, NoDelegateCall {
   }
 
   /// @inheritdoc IListaV3PoolActions
-  function increaseObservationCardinalityNext(uint16 observationCardinalityNext) external override lock noDelegateCall {
+  function increaseObservationCardinalityNext(uint16 observationCardinalityNext) external override lock {
     uint16 observationCardinalityNextOld = slot0.observationCardinalityNext; // for the event
     uint16 observationCardinalityNextNew = observations.grow(observationCardinalityNextOld, observationCardinalityNext);
     slot0.observationCardinalityNext = observationCardinalityNextNew;
@@ -297,7 +293,7 @@ contract ListaV3Pool is IListaV3Pool, NoDelegateCall {
   /// @return amount1 the amount of token1 owed to the pool, negative if the pool should pay the recipient
   function _modifyPosition(
     ModifyPositionParams memory params
-  ) private noDelegateCall returns (Position.Info storage position, int256 amount0, int256 amount1) {
+  ) private returns (Position.Info storage position, int256 amount0, int256 amount1) {
     checkTicks(params.tickLower, params.tickUpper);
 
     Slot0 memory _slot0 = slot0; // SLOAD for gas optimization
@@ -439,7 +435,7 @@ contract ListaV3Pool is IListaV3Pool, NoDelegateCall {
   }
 
   /// @inheritdoc IListaV3PoolActions
-  /// @dev noDelegateCall is applied indirectly via _modifyPosition
+  /// @dev  is applied indirectly via _modifyPosition
   function mint(
     address recipient,
     int24 tickLower,
@@ -500,7 +496,7 @@ contract ListaV3Pool is IListaV3Pool, NoDelegateCall {
   }
 
   /// @inheritdoc IListaV3PoolActions
-  /// @dev noDelegateCall is applied indirectly via _modifyPosition
+  /// @dev  is applied indirectly via _modifyPosition
   function burn(
     int24 tickLower,
     int24 tickUpper,
@@ -587,7 +583,7 @@ contract ListaV3Pool is IListaV3Pool, NoDelegateCall {
     int256 amountSpecified,
     uint160 sqrtPriceLimitX96,
     bytes calldata data
-  ) external override noDelegateCall returns (int256 amount0, int256 amount1) {
+  ) external override returns (int256 amount0, int256 amount1) {
     if (amountSpecified == 0) revert AS();
 
     Slot0 memory slot0Start = slot0;
@@ -798,12 +794,7 @@ contract ListaV3Pool is IListaV3Pool, NoDelegateCall {
   }
 
   /// @inheritdoc IListaV3PoolActions
-  function flash(
-    address recipient,
-    uint256 amount0,
-    uint256 amount1,
-    bytes calldata data
-  ) external override lock noDelegateCall {
+  function flash(address recipient, uint256 amount0, uint256 amount1, bytes calldata data) external override lock {
     uint128 _liquidity = liquidity;
     if (_liquidity <= 0) revert L();
 

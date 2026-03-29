@@ -6,6 +6,9 @@ import "../core/interfaces/IListaV3Pool.sol";
 import "../core/libraries/FixedPoint128.sol";
 import "../core/libraries/FullMath.sol";
 
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+
 import "./interfaces/INonfungiblePositionManager.sol";
 import "./interfaces/INonfungibleTokenPositionDescriptor.sol";
 import "./libraries/PositionKey.sol";
@@ -28,7 +31,9 @@ contract NonfungiblePositionManager is
   PoolInitializer,
   LiquidityManagement,
   PeripheryValidation,
-  SelfPermit
+  SelfPermit,
+  Initializable,
+  UUPSUpgradeable
 {
   // details about the lista position
   struct Position {
@@ -66,14 +71,48 @@ contract NonfungiblePositionManager is
   uint80 private _nextPoolId = 1;
 
   /// @dev The address of the token descriptor contract, which handles generating token URIs for position tokens
-  address private immutable _tokenDescriptor;
+  address private _tokenDescriptor;
 
-  constructor(
+  /// @dev Owner for upgrade authorization
+  address public admin;
+
+  /// @custom:oz-upgrades-unsafe-allow constructor
+  constructor()
+    ERC721Permit("Lista V3 Positions NFT-V1", "LISTA-V3-POS", "1")
+    PeripheryImmutableState(address(0), address(0))
+  {
+    _disableInitializers();
+  }
+
+  function initialize(
     address _factory,
     address _WETH9,
-    address _tokenDescriptor_
-  ) ERC721Permit("Lista V3 Positions NFT-V1", "UNI-V3-POS", "1") PeripheryImmutableState(_factory, _WETH9) {
+    address _tokenDescriptor_,
+    address _admin,
+    bytes32 _poolInitCodeHash
+  ) external initializer {
+    require(_factory != address(0) && _WETH9 != address(0) && _admin != address(0), "zero address");
+    factory = _factory;
+    WETH9 = _WETH9;
+    poolInitCodeHash = _poolInitCodeHash;
     _tokenDescriptor = _tokenDescriptor_;
+    admin = _admin;
+    _nextId = 1;
+    _nextPoolId = 1;
+  }
+
+  /// @dev Override name/symbol to return constants — avoids reliance on ERC721 storage
+  ///      which is set by the constructor (runs on implementation, not proxy).
+  function name() public pure override(ERC721, IERC721Metadata) returns (string memory) {
+    return "Lista V3 Positions NFT-V1";
+  }
+
+  function symbol() public pure override(ERC721, IERC721Metadata) returns (string memory) {
+    return "LISTA-V3-POS";
+  }
+
+  function _authorizeUpgrade(address) internal override {
+    require(msg.sender == admin, "not admin");
   }
 
   /// @inheritdoc INonfungiblePositionManager
@@ -268,7 +307,7 @@ contract NonfungiblePositionManager is
     require(positionLiquidity >= params.liquidity);
 
     PoolAddress.PoolKey memory poolKey = _poolIdToPoolKey[position.poolId];
-    IListaV3Pool pool = IListaV3Pool(PoolAddress.computeAddress(factory, poolKey));
+    IListaV3Pool pool = IListaV3Pool(PoolAddress.computeAddress(factory, poolKey, poolInitCodeHash));
     (amount0, amount1) = pool.burn(position.tickLower, position.tickUpper, params.liquidity);
 
     require(amount0 >= params.amount0Min && amount1 >= params.amount1Min, "Price slippage check");
@@ -316,7 +355,7 @@ contract NonfungiblePositionManager is
 
     PoolAddress.PoolKey memory poolKey = _poolIdToPoolKey[position.poolId];
 
-    IListaV3Pool pool = IListaV3Pool(PoolAddress.computeAddress(factory, poolKey));
+    IListaV3Pool pool = IListaV3Pool(PoolAddress.computeAddress(factory, poolKey, poolInitCodeHash));
 
     (uint128 tokensOwed0, uint128 tokensOwed1) = (position.tokensOwed0, position.tokensOwed1);
 
