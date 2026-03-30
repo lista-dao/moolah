@@ -9,6 +9,9 @@ import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgrade
 import { Id, IMoolah, MarketParams } from "../moolah/interfaces/IMoolah.sol";
 import { IMoolahFlashLoanCallback } from "../moolah/interfaces/IMoolahCallbacks.sol";
 import { MarketParamsLib } from "../moolah/libraries/MarketParamsLib.sol";
+import { MoolahBalancesLib } from "../moolah/libraries/periphery/MoolahBalancesLib.sol";
+import { SharesMathLib } from "../moolah/libraries/SharesMathLib.sol";
+import { UtilsLib } from "../moolah/libraries/UtilsLib.sol";
 import { IBroker } from "../broker/interfaces/IBroker.sol";
 import { IPositionManager } from "./interfaces/IPositionManager.sol";
 import { IERC20Provider, INativeProvider } from "../moolah/interfaces/IProvider.sol";
@@ -22,6 +25,8 @@ contract PositionManager is
 {
   using SafeERC20 for IERC20;
   using MarketParamsLib for MarketParams;
+  using MoolahBalancesLib for IMoolah;
+  using SharesMathLib for uint256;
 
   IMoolah public immutable MOOLAH;
   /// @dev Address of the WBNB token. Used to detect native-token providers (BNBProvider).
@@ -34,6 +39,7 @@ contract PositionManager is
     MarketParams outMarket;
     MarketParams inMarket;
     uint256 collateralAmount;
+    uint256 borrowShares; // non-zero when repaying by shares (full migration)
     uint256 termId;
     address user; // captured from msg.sender in migrate(); never use msg.sender in callback
   }
@@ -73,20 +79,28 @@ contract PositionManager is
     MarketParams calldata inMarket,
     uint256 collateralAmount,
     uint256 borrowAmount,
+    uint256 borrowShares,
     uint256 termId
   ) external override {
-    require(borrowAmount > 0, "zero-borrow-amount");
     require(collateralAmount > 0, "zero-collateral-amount");
+    require(UtilsLib.exactlyOneZero(borrowAmount, borrowShares), "exactly-one-of-borrowAmount-or-borrowShares");
     require(MOOLAH.isAuthorized(msg.sender, address(this)), "not-authorized");
     require(outMarket.loanToken == inMarket.loanToken, "loan-token-mismatch");
     require(outMarket.collateralToken == inMarket.collateralToken, "collateral-token-mismatch");
     require(inMarket.lltv >= outMarket.lltv, "in-market-lltv-too-low");
+
+    // When repaying by shares, convert borrowShares to the expected asset amount for the flash loan.
+    if (borrowAmount == 0) {
+      (, , uint256 totalBorrowAssets, uint256 totalBorrowShares) = MOOLAH.expectedMarketBalances(outMarket);
+      borrowAmount = borrowShares.toAssetsUp(totalBorrowAssets, totalBorrowShares);
+    }
 
     bytes memory data = abi.encode(
       MigrateParams({
         outMarket: outMarket,
         inMarket: inMarket,
         collateralAmount: collateralAmount,
+        borrowShares: borrowShares,
         termId: termId,
         user: msg.sender
       })
@@ -94,6 +108,7 @@ contract PositionManager is
 
     // Initiates the flash loan; execution continues in onMoolahFlashLoan.
     MOOLAH.flashLoan(outMarket.loanToken, borrowAmount, data);
+    IERC20(outMarket.loanToken).forceApprove(address(MOOLAH), 0);
   }
 
   /// @inheritdoc IMoolahFlashLoanCallback
@@ -103,9 +118,13 @@ contract PositionManager is
 
     MigrateParams memory p = abi.decode(data, (MigrateParams));
 
-    // Step 1: Repay user's variable-rate debt in outMarket using the flash-loaned tokens.
+    // Step 1: Repay user's variable-rate debt in outMarket.
+    //         When borrowShares > 0, repay by shares for exact full migration;
+    //         when borrowShares == 0, assets is used (partial migration).
+    //         Moolah requires exactlyOneZero(assets, shares).
     IERC20(p.outMarket.loanToken).safeIncreaseAllowance(address(MOOLAH), assets);
-    MOOLAH.repay(p.outMarket, assets, 0, p.user, "");
+    (uint256 assetsRepaid, ) = MOOLAH.repay(p.outMarket, p.borrowShares > 0 ? 0 : assets, p.borrowShares, p.user, "");
+    require(assetsRepaid <= assets, "insufficient-flash-loan");
 
     // outMarket.collateralToken == inMarket.collateralToken (enforced in migrate), so isNative is shared.
     bool isNative = p.outMarket.collateralToken == WBNB;
@@ -148,10 +167,12 @@ contract PositionManager is
     }
 
     // Step 4: Borrow fixed-term via inMarket's LendingBroker on behalf of user.
+    //         Borrow only assetsRepaid (not the full flash loan amount) so the user's new
+    //         fixed-term debt matches exactly what was repaid from the variable-rate market.
     //         Tokens are sent here (receiver = address(this)) for flash loan repayment.
     address broker = MOOLAH.brokers(p.inMarket.id());
     require(broker != address(0), "no-broker-for-market");
-    IBroker(broker).borrow(assets, p.termId, p.user, address(this));
+    IBroker(broker).borrow(assetsRepaid, p.termId, p.user, address(this));
 
     // Step 5: Approve Moolah to pull back the flash-loaned amount.
     //         Moolah calls safeTransferFrom(this, moolah, assets) after this callback returns.
