@@ -218,11 +218,10 @@ contract LendingBroker is
    * @param onBehalf The address of the user whose position to repay
    */
   function repay(uint256 amount, address onBehalf) external payable override marketIdSet whenNotPaused nonReentrant {
-    bool isNative = LOAN_TOKEN == WBNB && MOOLAH.providers(MARKET_ID, WBNB) != address(0);
-    require(msg.value == 0 || isNative, "broker/native-not-supported");
+    bool isNative = msg.value > 0;
     address user = msg.sender;
     if (isNative) {
-      require(msg.value > 0, "broker/zero-amount");
+      require(LOAN_TOKEN == WBNB, "broker/native-not-supported");
       amount = msg.value;
       IWBNB(WBNB).deposit{ value: amount }();
     } else {
@@ -303,11 +302,10 @@ contract LendingBroker is
     uint256 posId,
     address onBehalf
   ) external payable override marketIdSet whenNotPaused nonReentrant {
-    bool isNative = LOAN_TOKEN == WBNB && MOOLAH.providers(MARKET_ID, WBNB) != address(0);
-    require(msg.value == 0 || isNative, "broker/native-not-supported");
+    bool isNative = msg.value > 0;
     address user = msg.sender;
     if (isNative) {
-      require(msg.value > 0, "broker/zero-amount");
+      require(LOAN_TOKEN == WBNB, "broker/native-not-supported");
       amount = msg.value;
       IWBNB(WBNB).deposit{ value: amount }();
     } else {

@@ -483,15 +483,15 @@ contract PositionManagerTest is Test {
   function test_migrate_revertsIfNotAuthorized() public {
     vm.prank(user);
     vm.expectRevert("not-authorized");
-    positionManager.migrateCommonMarketToFixedTermMarket(outMarket, inMarket, COLLATERAL, BORROW_AMOUNT, TERM_ID);
+    positionManager.migrateCommonMarketToFixedTermMarket(outMarket, inMarket, COLLATERAL, BORROW_AMOUNT, 0, TERM_ID);
   }
 
-  /// @notice Reverts when borrowAmount is zero.
-  function test_migrate_revertsOnZeroBorrowAmount() public {
+  /// @notice Reverts when both borrowAmount and borrowShares are zero.
+  function test_migrate_revertsOnZeroBorrowAmountAndShares() public {
     vm.startPrank(user);
     moolah.setAuthorization(address(positionManager), true);
-    vm.expectRevert("zero-borrow-amount");
-    positionManager.migrateCommonMarketToFixedTermMarket(outMarket, inMarket, COLLATERAL, 0, TERM_ID);
+    vm.expectRevert("exactly-one-of-borrowAmount-or-borrowShares");
+    positionManager.migrateCommonMarketToFixedTermMarket(outMarket, inMarket, COLLATERAL, 0, 0, TERM_ID);
     vm.stopPrank();
   }
 
@@ -500,7 +500,7 @@ contract PositionManagerTest is Test {
     vm.startPrank(user);
     moolah.setAuthorization(address(positionManager), true);
     vm.expectRevert("zero-collateral-amount");
-    positionManager.migrateCommonMarketToFixedTermMarket(outMarket, inMarket, 0, BORROW_AMOUNT, TERM_ID);
+    positionManager.migrateCommonMarketToFixedTermMarket(outMarket, inMarket, 0, BORROW_AMOUNT, 0, TERM_ID);
     vm.stopPrank();
   }
 
@@ -510,7 +510,7 @@ contract PositionManagerTest is Test {
     vm.startPrank(user);
     moolah.setAuthorization(address(positionManager), true);
     vm.expectRevert("no-broker-for-market");
-    positionManager.migrateCommonMarketToFixedTermMarket(outMarket, outMarket, COLLATERAL, BORROW_AMOUNT, TERM_ID);
+    positionManager.migrateCommonMarketToFixedTermMarket(outMarket, outMarket, COLLATERAL, BORROW_AMOUNT, 0, TERM_ID);
     vm.stopPrank();
   }
 
@@ -527,7 +527,7 @@ contract PositionManagerTest is Test {
 
     // ── Execute migration ─────────────────────────────────────────────────────
     vm.prank(user);
-    positionManager.migrateCommonMarketToFixedTermMarket(outMarket, inMarket, COLLATERAL, BORROW_AMOUNT, TERM_ID);
+    positionManager.migrateCommonMarketToFixedTermMarket(outMarket, inMarket, COLLATERAL, BORROW_AMOUNT, 0, TERM_ID);
 
     // ── Assertions ────────────────────────────────────────────────────────────
 
@@ -569,6 +569,7 @@ contract PositionManagerTest is Test {
       inMarket,
       partialCollateral,
       partialBorrow,
+      0,
       TERM_ID
     );
 
@@ -587,18 +588,118 @@ contract PositionManagerTest is Test {
     assertEq(positions[0].principal, partialBorrow, "fixed position principal should be half");
   }
 
+  /// @notice Full migration using borrowShares: exact debt repayment by shares.
+  function test_migrate_fullMigrationByShares() public {
+    // ── Snapshot before ───────────────────────────────────────────────────────
+    Position memory outPosBefore = moolah.position(outId, user);
+    uint256 userBorrowShares = outPosBefore.borrowShares;
+    assertGt(userBorrowShares, 0, "user should have borrow in outMarket before");
+
+    // ── Authorize PositionManager ─────────────────────────────────────────────
+    vm.prank(user);
+    moolah.setAuthorization(address(positionManager), true);
+
+    // ── Execute migration by shares ───────────────────────────────────────────
+    vm.prank(user);
+    positionManager.migrateCommonMarketToFixedTermMarket(outMarket, inMarket, COLLATERAL, 0, userBorrowShares, TERM_ID);
+
+    // ── Assertions ────────────────────────────────────────────────────────────
+
+    // outMarket: collateral withdrawn and debt fully repaid
+    Position memory outPosAfter = moolah.position(outId, user);
+    assertEq(outPosAfter.collateral, 0, "outMarket collateral should be 0 after migration");
+    assertEq(outPosAfter.borrowShares, 0, "outMarket borrow should be 0 after migration");
+
+    // inMarket: collateral deposited
+    Position memory inPosAfter = moolah.position(inId, user);
+    assertEq(inPosAfter.collateral, COLLATERAL, "inMarket collateral should equal migrated amount");
+
+    // inBroker: fixed position created for user
+    FixedLoanPosition[] memory positions = inBroker.userFixedPositions(user);
+    assertEq(positions.length, 1, "user should have 1 fixed position in inBroker");
+    assertEq(positions[0].principal, BORROW_AMOUNT, "fixed position principal mismatch");
+
+    // PositionManager should hold no tokens after migration
+    assertEq(loanToken.balanceOf(address(positionManager)), 0, "positionManager should hold no loan tokens");
+    assertEq(
+      collateralToken.balanceOf(address(positionManager)),
+      0,
+      "positionManager should hold no collateral tokens"
+    );
+  }
+
+  /// @notice Full migration using borrowShares with SlisBNBProvider.
+  function test_migrate_withSlisBNBProviderByShares() public {
+    Position memory outPosBefore = moolah.position(outIdSlis, user);
+    uint256 userBorrowShares = outPosBefore.borrowShares;
+
+    vm.prank(user);
+    moolah.setAuthorization(address(positionManager), true);
+
+    vm.prank(user);
+    positionManager.migrateCommonMarketToFixedTermMarket(
+      outMarketSlis,
+      inMarketSlis,
+      COLLATERAL,
+      0,
+      userBorrowShares,
+      TERM_ID
+    );
+
+    Position memory outPosAfter = moolah.position(outIdSlis, user);
+    assertEq(outPosAfter.collateral, 0, "outMarketSlis collateral should be 0");
+    assertEq(outPosAfter.borrowShares, 0, "outMarketSlis borrow shares should be 0");
+
+    Position memory inPosAfter = moolah.position(inIdSlis, user);
+    assertEq(inPosAfter.collateral, COLLATERAL, "inMarketSlis collateral should equal migrated amount");
+
+    FixedLoanPosition[] memory positions = inBrokerSlis.userFixedPositions(user);
+    assertEq(positions.length, 1, "user should have 1 fixed position");
+    assertEq(positions[0].principal, BORROW_AMOUNT, "fixed position principal mismatch");
+  }
+
+  /// @notice Full migration using borrowShares with BNBProvider.
+  function test_migrate_withBNBProviderByShares() public {
+    Position memory outPosBefore = moolah.position(outIdNative, user);
+    uint256 userBorrowShares = outPosBefore.borrowShares;
+
+    vm.prank(user);
+    moolah.setAuthorization(address(positionManagerNative), true);
+
+    vm.prank(user);
+    positionManagerNative.migrateCommonMarketToFixedTermMarket(
+      outMarketNative,
+      inMarketNative,
+      COLLATERAL,
+      0,
+      userBorrowShares,
+      TERM_ID
+    );
+
+    Position memory outPosAfter = moolah.position(outIdNative, user);
+    assertEq(outPosAfter.collateral, 0, "outMarketNative collateral should be 0");
+    assertEq(outPosAfter.borrowShares, 0, "outMarketNative borrow shares should be 0");
+
+    Position memory inPosAfter = moolah.position(inIdNative, user);
+    assertEq(inPosAfter.collateral, COLLATERAL, "inMarketNative collateral should equal migrated amount");
+
+    FixedLoanPosition[] memory positions = inBrokerNative.userFixedPositions(user);
+    assertEq(positions.length, 1, "user should have 1 fixed position");
+    assertEq(positions[0].principal, BORROW_AMOUNT, "fixed position principal mismatch");
+  }
+
   /// @notice After migration, PositionManager's authorization can be revoked without issue.
   function test_migrate_deauthorize() public {
     vm.startPrank(user);
     moolah.setAuthorization(address(positionManager), true);
-    positionManager.migrateCommonMarketToFixedTermMarket(outMarket, inMarket, COLLATERAL, BORROW_AMOUNT, TERM_ID);
+    positionManager.migrateCommonMarketToFixedTermMarket(outMarket, inMarket, COLLATERAL, BORROW_AMOUNT, 0, TERM_ID);
     moolah.setAuthorization(address(positionManager), false);
     vm.stopPrank();
 
     // Subsequent migration attempt reverts as expected
     vm.prank(user);
     vm.expectRevert("not-authorized");
-    positionManager.migrateCommonMarketToFixedTermMarket(outMarket, inMarket, COLLATERAL, BORROW_AMOUNT, TERM_ID);
+    positionManager.migrateCommonMarketToFixedTermMarket(outMarket, inMarket, COLLATERAL, BORROW_AMOUNT, 0, TERM_ID);
   }
 
   /// @notice onMoolahFlashLoan reverts if called by anyone other than Moolah.
@@ -608,6 +709,7 @@ contract PositionManagerTest is Test {
         outMarket: outMarket,
         inMarket: inMarket,
         collateralAmount: COLLATERAL,
+        borrowShares: 0,
         termId: TERM_ID,
         user: user
       })
@@ -633,6 +735,7 @@ contract PositionManagerTest is Test {
       inMarketSlis,
       COLLATERAL,
       BORROW_AMOUNT,
+      0,
       TERM_ID
     );
 
@@ -670,6 +773,7 @@ contract PositionManagerTest is Test {
       inMarketNative,
       COLLATERAL,
       BORROW_AMOUNT,
+      0,
       TERM_ID
     );
 
