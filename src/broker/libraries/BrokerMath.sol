@@ -542,10 +542,12 @@ library BrokerMath {
       // update repaid principal amount
       principalToDeduct -= repayPrincipalAmt;
       p.principalRepaid += repayPrincipalAmt;
-      // reset repaid interest to zero (all accrued interest has been cleared)
-      p.interestRepaid = 0;
-      // reset repaid time to now
-      p.lastRepaidTime = block.timestamp;
+      // only reset interest tracking when all accrued interest has been fully paid,
+      // otherwise unpaid interest would be erased during partial liquidations
+      if (repayInterestAmt >= accruedInterest) {
+        p.interestRepaid = 0;
+        p.lastRepaidTime = block.timestamp;
+      }
     }
 
     return (interestToDeduct, principalToDeduct, p);
