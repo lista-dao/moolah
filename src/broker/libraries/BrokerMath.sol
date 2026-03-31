@@ -547,6 +547,14 @@ library BrokerMath {
       if (repayInterestAmt >= accruedInterest) {
         p.interestRepaid = 0;
         p.lastRepaidTime = block.timestamp;
+      } else {
+        // After principal reduction, getAccruedInterestForFixedPosition recalculates
+        // on the smaller remaining principal, which may be less than interestRepaid.
+        // Cap interestRepaid to prevent underflow in getTotalDebt and other callers.
+        uint256 newAccrued = getAccruedInterestForFixedPosition(p);
+        if (p.interestRepaid > newAccrued) {
+          p.interestRepaid = newAccrued;
+        }
       }
     }
 

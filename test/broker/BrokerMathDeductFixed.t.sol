@@ -3,7 +3,7 @@ pragma solidity ^0.8.34;
 
 import "forge-std/Test.sol";
 import { BrokerMath, RATE_SCALE } from "../../src/broker/libraries/BrokerMath.sol";
-import { FixedLoanPosition } from "../../src/broker/interfaces/IBroker.sol";
+import { FixedLoanPosition, DynamicLoanPosition } from "../../src/broker/interfaces/IBroker.sol";
 
 /// @title Tests for BrokerMath.deductFixedPositionDebt
 /// @notice Validates the fix: partial liquidation must NOT erase unpaid interest
@@ -145,8 +145,8 @@ contract BrokerMathDeductFixedTest is Test {
 
     // Principal fully repaid
     assertEq(updated.principalRepaid, 100 ether, "full principal repaid");
-    // Interest state preserved (not zeroed)
-    assertEq(updated.interestRepaid, interestBudget, "interestRepaid preserved");
+    // interestRepaid capped to recalculated accrued (0 when remaining principal=0)
+    assertEq(updated.interestRepaid, 0, "interestRepaid capped to 0");
     assertEq(updated.lastRepaidTime, startTs, "lastRepaidTime not reset");
 
     // This position has principal == principalRepaid, so it would be
@@ -266,8 +266,72 @@ contract BrokerMathDeductFixedTest is Test {
       BrokerMath.deductFixedPositionDebt(interestBudget, 50 ether, pos);
 
     // 1 wei unpaid → must NOT reset
-    assertEq(updated.interestRepaid, interestBudget, "interestRepaid = budget");
+    // interestRepaid may be capped to recalculated accrued on reduced principal
+    uint256 newAccrued = BrokerMath.getAccruedInterestForFixedPosition(updated);
+    assertGe(newAccrued, updated.interestRepaid, "no underflow risk");
     assertEq(updated.lastRepaidTime, startTs, "no reset at 1 wei short");
+  }
+
+  // ====================================================================
+  //  CRITICAL: large principal + small interest must not cause underflow
+  // ====================================================================
+
+  /// @notice When most principal is repaid but only a little interest is paid,
+  ///         getAccruedInterestForFixedPosition recalculates on reduced principal
+  ///         and may return less than interestRepaid. interestRepaid must be capped.
+  function test_largePrincipalSmallInterest_noUnderflow() public {
+    FixedLoanPosition memory pos = _makePosition(100 ether);
+    skip(DURATION);
+
+    uint256 accruedInterest = BrokerMath.getAccruedInterestForFixedPosition(pos);
+    // ~10 ether accrued
+
+    // Partial liquidation: pay 3 interest + 90 principal (most of it)
+    uint256 interestBudget = accruedInterest * 3 / 10; // ~3 ether
+    uint256 principalBudget = 90 ether;
+
+    (, , FixedLoanPosition memory updated) =
+      BrokerMath.deductFixedPositionDebt(interestBudget, principalBudget, pos);
+
+    // After: remaining principal = 10, recalculated accrued ≈ 1 ether
+    // interestRepaid must be capped so it doesn't exceed recalculated accrued
+    uint256 newAccrued = BrokerMath.getAccruedInterestForFixedPosition(updated);
+    assertGe(newAccrued, updated.interestRepaid, "interestRepaid must not exceed recalculated accrued");
+
+    // getTotalDebt must not revert (the actual critical check)
+    FixedLoanPosition[] memory positions = new FixedLoanPosition[](1);
+    positions[0] = updated;
+    DynamicLoanPosition memory emptyDyn;
+    // This would underflow and revert without the cap fix
+    uint256 totalDebt = BrokerMath.getTotalDebt(positions, emptyDyn, RATE_SCALE);
+    assertGt(totalDebt, 0, "total debt should be positive");
+  }
+
+  /// @notice Full principal repaid + partial interest: same underflow risk.
+  ///         interestRepaid must be capped to prevent underflow in getTotalDebt.
+  function test_fullPrincipalPartialInterest_noUnderflow() public {
+    FixedLoanPosition memory pos = _makePosition(100 ether);
+    skip(DURATION);
+
+    uint256 accruedInterest = BrokerMath.getAccruedInterestForFixedPosition(pos);
+    uint256 interestBudget = accruedInterest / 4;
+
+    (, , FixedLoanPosition memory updated) =
+      BrokerMath.deductFixedPositionDebt(interestBudget, 100 ether, pos);
+
+    // remaining principal = 0, accrued recalculates to 0
+    uint256 newAccrued = BrokerMath.getAccruedInterestForFixedPosition(updated);
+    assertEq(newAccrued, 0, "accrued should be 0 with no remaining principal");
+    // interestRepaid must be capped to 0 (not left at interestBudget)
+    assertEq(updated.interestRepaid, 0, "interestRepaid capped to 0");
+
+    // getTotalDebt must not revert
+    FixedLoanPosition[] memory positions = new FixedLoanPosition[](1);
+    positions[0] = updated;
+    DynamicLoanPosition memory emptyDyn;
+    uint256 totalDebt = BrokerMath.getTotalDebt(positions, emptyDyn, RATE_SCALE);
+    // Only remaining principal (0) contributes
+    assertEq(totalDebt, 0, "total debt should be 0 for fully repaid position");
   }
 
   // ====================================================================
