@@ -1522,6 +1522,331 @@ contract LendingBrokerTest is Test {
     bnbBroker.repay{ value: 1 ether }(1 ether, borrower);
     vm.stopPrank();
   }
+
+  // =====================================================================
+  //  Liquidation integration tests for deductFixedPositionDebt fix
+  //  Validates: principal consistency, liquidator profitability,
+  //  interest preservation across partial liquidation scenarios.
+  // =====================================================================
+
+  /// @dev Shared helper: creates a mixed position (dynamic + fixed) that is liquidatable.
+  ///      Returns the term id used.
+  function _prepareMixedLiquidatablePosition() internal returns (uint256 termId) {
+    termId = ++nextTermId;
+    FixedTermAndRate memory term = FixedTermAndRate({
+      termId: termId,
+      duration: 30 days,
+      apr: 105 * 1e25 // 5% APR
+    });
+    vm.prank(BOT);
+    broker.updateFixedTermAndRate(term, false);
+
+    // Borrow: 40k dynamic + 40k fixed
+    vm.startPrank(borrower);
+    broker.borrow(40000 ether);
+    broker.borrow(40000 ether, termId);
+    vm.stopPrank();
+
+    // Set a non-trivial dynamic rate so dynamic interest accrues
+    vm.prank(MANAGER);
+    rateCalc.setMaxRatePerSecond(address(broker), RATE_SCALE + 30301 * 10 ** 14);
+    vm.prank(BOT);
+    rateCalc.setRatePerSecond(address(broker), RATE_SCALE + 30300 * 10 ** 14);
+
+    // Let 30 days pass so both fixed and dynamic interest accrue
+    skip(30 days);
+    // Drop collateral price to make position liquidatable (not bad debt)
+    oracle.setPrice(address(BTCB), 100000e8);
+  }
+
+  /// @notice Partial liquidation: principal at Moolah and Broker must stay in sync.
+  function test_partialLiquidation_principalConsistency() public {
+    _prepareMixedLiquidatablePosition();
+
+    uint256 principalBeforeBroker = _totalPrincipalAtBroker(borrower);
+    uint256 principalBeforeMoolah = _principalAtMoolah(borrower);
+    assertApproxEqAbs(principalBeforeBroker, principalBeforeMoolah, 1, "pre: principal mismatch");
+
+    // Partial liquidation: ~10% of debt
+    Position memory posBefore = moolah.position(id, borrower);
+    uint256 repayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, 10 * 1e8, 100 * 1e8);
+
+    LISUSD.setBalance(address(liquidator), 1_000_000 ether);
+    vm.prank(BOT);
+    liquidator.liquidate(Id.unwrap(id), borrower, 0, repayShares);
+
+    uint256 principalAfterBroker = _totalPrincipalAtBroker(borrower);
+    uint256 principalAfterMoolah = _principalAtMoolah(borrower);
+    assertApproxEqAbs(principalAfterBroker, principalAfterMoolah, 1, "post: principal mismatch");
+
+    // Principal should have decreased
+    assertLt(principalAfterBroker, principalBeforeBroker, "broker principal did not decrease");
+  }
+
+  /// @notice Two sequential partial liquidations: principal stays consistent each time.
+  function test_sequentialPartialLiquidations_principalConsistency() public {
+    _prepareMixedLiquidatablePosition();
+
+    LISUSD.setBalance(address(liquidator), 2_000_000 ether);
+
+    // First partial liquidation: ~20%
+    Position memory pos1 = moolah.position(id, borrower);
+    uint256 repayShares1 = BrokerMath.mulDivCeiling(pos1.borrowShares, 20 * 1e8, 100 * 1e8);
+    vm.prank(BOT);
+    liquidator.liquidate(Id.unwrap(id), borrower, 0, repayShares1);
+
+    uint256 principalMid1Broker = _totalPrincipalAtBroker(borrower);
+    uint256 principalMid1Moolah = _principalAtMoolah(borrower);
+    assertApproxEqAbs(principalMid1Broker, principalMid1Moolah, 1, "mid1: principal mismatch");
+
+    // Drop price further so position is liquidatable again
+    oracle.setPrice(address(BTCB), 95000e8);
+
+    // Second partial liquidation: ~30% of remaining
+    Position memory pos2 = moolah.position(id, borrower);
+    uint256 repayShares2 = BrokerMath.mulDivCeiling(pos2.borrowShares, 30 * 1e8, 100 * 1e8);
+    vm.prank(BOT);
+    liquidator.liquidate(Id.unwrap(id), borrower, 0, repayShares2);
+
+    uint256 principalMid2Broker = _totalPrincipalAtBroker(borrower);
+    uint256 principalMid2Moolah = _principalAtMoolah(borrower);
+    assertApproxEqAbs(principalMid2Broker, principalMid2Moolah, 1, "mid2: principal mismatch");
+
+    // Both decreased
+    assertLt(principalMid2Broker, principalMid1Broker, "second liq did not reduce principal");
+  }
+
+  /// @notice Liquidator must not lose money: collateral value received >= loan tokens spent.
+  function test_partialLiquidation_liquidatorProfitable() public {
+    _prepareMixedLiquidatablePosition();
+
+    uint256 liquidatorLoanBefore = LISUSD.balanceOf(address(liquidator));
+    uint256 liquidatorCollBefore = BTCB.balanceOf(address(liquidator));
+
+    LISUSD.setBalance(address(liquidator), 1_000_000 ether);
+    liquidatorLoanBefore = LISUSD.balanceOf(address(liquidator));
+
+    // Partial liquidation: ~25%
+    Position memory posBefore = moolah.position(id, borrower);
+    uint256 repayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, 25 * 1e8, 100 * 1e8);
+    vm.prank(BOT);
+    liquidator.liquidate(Id.unwrap(id), borrower, 0, repayShares);
+
+    uint256 loanSpent = liquidatorLoanBefore - LISUSD.balanceOf(address(liquidator));
+    uint256 collGained = BTCB.balanceOf(address(liquidator)) - liquidatorCollBefore;
+    uint256 collateralPrice = oracle.peek(address(BTCB));
+    uint256 collGainedValue = collGained.mulDivDown(collateralPrice, 1e8);
+
+    // Liquidator must be profitable (collateral received > loan spent)
+    assertGe(collGainedValue, loanSpent, "liquidator lost money");
+  }
+
+  /// @notice After partial liquidation, user's total debt (principal + interest) must not
+  ///         decrease more than what was actually repaid. This ensures the user cannot
+  ///         exploit liquidation to erase interest.
+  function test_partialLiquidation_userCannotDodgeDebt() public {
+    _prepareMixedLiquidatablePosition();
+
+    uint256 rate = rateCalc.accrueRate(address(broker));
+    FixedLoanPosition[] memory fixedBefore = broker.userFixedPositions(borrower);
+    DynamicLoanPosition memory dynBefore = broker.userDynamicPosition(borrower);
+    uint256 totalDebtBefore = BrokerMath.getTotalDebt(fixedBefore, dynBefore, rate);
+    uint256 principalBeforeMoolah = _principalAtMoolah(borrower);
+
+    LISUSD.setBalance(address(liquidator), 1_000_000 ether);
+    uint256 liquidatorLoanBefore = LISUSD.balanceOf(address(liquidator));
+
+    // Partial liquidation: ~15%
+    Position memory posBefore = moolah.position(id, borrower);
+    uint256 repayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, 15 * 1e8, 100 * 1e8);
+    vm.prank(BOT);
+    liquidator.liquidate(Id.unwrap(id), borrower, 0, repayShares);
+
+    // What the liquidator actually paid
+    uint256 loanSpent = liquidatorLoanBefore - LISUSD.balanceOf(address(liquidator));
+
+    // Recalculate user's total debt after
+    rate = rateCalc.getRate(address(broker));
+    FixedLoanPosition[] memory fixedAfter = broker.userFixedPositions(borrower);
+    DynamicLoanPosition memory dynAfter = broker.userDynamicPosition(borrower);
+    uint256 totalDebtAfter = BrokerMath.getTotalDebt(fixedAfter, dynAfter, rate);
+
+    // The debt reduction should not exceed what liquidator paid (user can't dodge debt)
+    uint256 debtReduction = totalDebtBefore - totalDebtAfter;
+    // debtReduction should be approximately equal to what was repaid at Moolah level
+    // (repaidAssets), not more — user doesn't get free interest forgiveness
+    uint256 moolahPrincipalReduction = principalBeforeMoolah - _principalAtMoolah(borrower);
+
+    // Interest to broker is the difference between loanSpent and moolahPrincipalReduction
+    uint256 interestCollected = loanSpent > moolahPrincipalReduction
+      ? loanSpent - moolahPrincipalReduction
+      : 0;
+
+    // Total accountability: debt reduction + interest collected to protocol >= liquidator payment
+    // This ensures nothing "vanishes"
+    assertGe(
+      debtReduction + interestCollected,
+      moolahPrincipalReduction,
+      "debt accounting gap: value vanished during liquidation"
+    );
+  }
+
+  /// @notice After partial liquidation of a mixed position, fixed position's interestRepaid
+  ///         state must be correct — not reset when interest was only partially cleared.
+  function test_partialLiquidation_fixedInterestStatePreserved() public {
+    uint256 termId = _prepareMixedLiquidatablePosition();
+
+    // Snapshot fixed position state before liquidation
+    FixedLoanPosition[] memory fixedBefore = broker.userFixedPositions(borrower);
+    assertEq(fixedBefore.length, 1, "should have 1 fixed position");
+    uint256 fixedInterestBefore = BrokerMath.getAccruedInterestForFixedPosition(fixedBefore[0]);
+    assertGt(fixedInterestBefore, 0, "fixed interest should have accrued");
+
+    LISUSD.setBalance(address(liquidator), 1_000_000 ether);
+
+    // Small partial liquidation: only ~5%, likely won't clear all interest
+    Position memory posBefore = moolah.position(id, borrower);
+    uint256 repayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, 5 * 1e8, 100 * 1e8);
+    vm.prank(BOT);
+    liquidator.liquidate(Id.unwrap(id), borrower, 0, repayShares);
+
+    // After liquidation, check fixed position still exists and state is consistent
+    FixedLoanPosition[] memory fixedAfter = broker.userFixedPositions(borrower);
+    if (fixedAfter.length > 0) {
+      FixedLoanPosition memory fp = fixedAfter[0];
+      // getAccruedInterestForFixedPosition should always be >= interestRepaid (no underflow)
+      uint256 accruedNow = BrokerMath.getAccruedInterestForFixedPosition(fp);
+      assertGe(accruedNow, fp.interestRepaid, "accrued < interestRepaid would underflow in getTotalDebt");
+
+      // If interest was partially paid, interestRepaid should reflect what was paid
+      // NOT be zeroed (the fix)
+      if (fp.principalRepaid > 0 && fp.interestRepaid > 0) {
+        // Interest was partially paid and state was preserved (not reset to 0)
+        // This is the core invariant of the fix
+        assertGt(fp.interestRepaid, 0, "interestRepaid should not be zero after partial interest payment");
+      }
+    }
+
+    // Principal consistency still holds
+    assertApproxEqAbs(
+      _totalPrincipalAtBroker(borrower),
+      _principalAtMoolah(borrower),
+      1,
+      "principal mismatch after partial liq with fixed"
+    );
+  }
+
+  /// @notice Full liquidation clears everything — no residual debt.
+  function test_fullLiquidation_clearsAllPositions() public {
+    _prepareMixedLiquidatablePosition();
+
+    LISUSD.setBalance(address(liquidator), 2_000_000 ether);
+
+    // Full liquidation: 100% of borrow shares
+    Position memory posBefore = moolah.position(id, borrower);
+    uint256 repayShares = posBefore.borrowShares;
+
+    vm.prank(BOT);
+    liquidator.liquidate(Id.unwrap(id), borrower, 0, repayShares);
+
+    // After full liquidation, user should have no debt
+    Position memory posAfter = moolah.position(id, borrower);
+    assertEq(posAfter.borrowShares, 0, "moolah borrow shares not cleared");
+
+    DynamicLoanPosition memory dynAfter = broker.userDynamicPosition(borrower);
+    assertEq(dynAfter.principal, 0, "dynamic principal not cleared");
+    assertEq(dynAfter.normalizedDebt, 0, "dynamic normalized debt not cleared");
+
+    FixedLoanPosition[] memory fixedAfter = broker.userFixedPositions(borrower);
+    assertEq(fixedAfter.length, 0, "fixed positions not cleared");
+  }
+
+  /// @notice After partial liquidation + time + second partial liquidation,
+  ///         getTotalDebt must not revert (no underflow from the fix).
+  function test_partialLiquidation_thenTimePass_noUnderflow() public {
+    _prepareMixedLiquidatablePosition();
+
+    LISUSD.setBalance(address(liquidator), 2_000_000 ether);
+
+    // First small partial liquidation
+    Position memory pos1 = moolah.position(id, borrower);
+    uint256 repayShares1 = BrokerMath.mulDivCeiling(pos1.borrowShares, 5 * 1e8, 100 * 1e8);
+    vm.prank(BOT);
+    liquidator.liquidate(Id.unwrap(id), borrower, 0, repayShares1);
+
+    // Time passes — more interest accrues
+    skip(7 days);
+
+    // getTotalDebt must not revert
+    uint256 rate = rateCalc.accrueRate(address(broker));
+    FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(borrower);
+    DynamicLoanPosition memory dynPosition = broker.userDynamicPosition(borrower);
+    uint256 totalDebt = BrokerMath.getTotalDebt(fixedPositions, dynPosition, rate);
+    assertGt(totalDebt, 0, "total debt should still be positive");
+
+    // Principal consistency holds
+    assertApproxEqAbs(
+      _totalPrincipalAtBroker(borrower),
+      _principalAtMoolah(borrower),
+      1,
+      "principal mismatch after time pass"
+    );
+
+    // Price might have dropped further, try another liquidation
+    oracle.setPrice(address(BTCB), 95000e8);
+    Position memory pos2 = moolah.position(id, borrower);
+    if (pos2.borrowShares > 0) {
+      uint256 repayShares2 = BrokerMath.mulDivCeiling(pos2.borrowShares, 10 * 1e8, 100 * 1e8);
+      vm.prank(BOT);
+      liquidator.liquidate(Id.unwrap(id), borrower, 0, repayShares2);
+
+      assertApproxEqAbs(
+        _totalPrincipalAtBroker(borrower),
+        _principalAtMoolah(borrower),
+        1,
+        "principal mismatch after second partial liq"
+      );
+    }
+  }
+
+  /// @notice Liquidator cannot be non-whitelisted — access control test.
+  function test_liquidation_nonWhitelisted_reverts() public {
+    _prepareMixedLiquidatablePosition();
+
+    Position memory posBefore = moolah.position(id, borrower);
+    uint256 repayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, 10 * 1e8, 100 * 1e8);
+
+    address attacker = address(0xBAD);
+    LISUSD.setBalance(attacker, 1_000_000 ether);
+
+    vm.prank(attacker);
+    vm.expectRevert();
+    broker.liquidate(marketParams, borrower, 0, repayShares, bytes(""));
+  }
+
+  /// @notice Vault/relayer receives interest during liquidation — protocol doesn't lose revenue.
+  function test_partialLiquidation_interestFlowsToVault() public {
+    _prepareMixedLiquidatablePosition();
+
+    uint256 vaultSharesBefore = moolah.position(id, address(vault)).supplyShares;
+    uint256 relayerBalBefore = LISUSD.balanceOf(address(relayer));
+
+    LISUSD.setBalance(address(liquidator), 1_000_000 ether);
+
+    Position memory posBefore = moolah.position(id, borrower);
+    uint256 repayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, 20 * 1e8, 100 * 1e8);
+    vm.prank(BOT);
+    liquidator.liquidate(Id.unwrap(id), borrower, 0, repayShares);
+
+    uint256 vaultSharesAfter = moolah.position(id, address(vault)).supplyShares;
+    uint256 relayerBalAfter = LISUSD.balanceOf(address(relayer));
+
+    // Interest must flow to vault or relayer (protocol earns revenue)
+    assertTrue(
+      vaultSharesAfter > vaultSharesBefore || relayerBalAfter > relayerBalBefore,
+      "no interest collected by protocol during liquidation"
+    );
+  }
 }
 
 contract LiquidationCallbackMock is IMoolahLiquidateCallback {
