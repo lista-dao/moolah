@@ -108,6 +108,7 @@ interface IBroker is IBrokerBase {
   event BorrowPaused(bool paused);
   event AddedLiquidationWhitelist(address indexed account);
   event RemovedLiquidationWhitelist(address indexed account);
+  event EmergencyWithdrawn(address indexed sender, address indexed token, uint256 amount);
   event FixedPositionRefinanced(
     address indexed user,
     uint256 posId,
