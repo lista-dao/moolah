@@ -1486,6 +1486,68 @@ contract LendingBrokerTest is Test {
     broker.repay(minLoan / 2, borrower);
   }
 
+  // -----------------------------
+  // Emergency withdraw & receive
+  // -----------------------------
+
+  function test_receive_acceptsNativeBNB() public {
+    uint256 amount = 1 ether;
+    vm.deal(address(this), amount);
+    (bool success, ) = address(broker).call{ value: amount }("");
+    assertTrue(success, "receive failed");
+    assertEq(address(broker).balance, amount, "broker balance mismatch");
+  }
+
+  function test_emergencyWithdraw_ERC20_byManager() public {
+    uint256 amount = 500 ether;
+    LISUSD.setBalance(address(broker), amount);
+
+    uint256 managerBefore = LISUSD.balanceOf(MANAGER);
+    vm.prank(MANAGER);
+    broker.emergencyWithdraw(address(LISUSD), amount);
+
+    assertEq(LISUSD.balanceOf(address(broker)), 0, "broker should have 0 after withdraw");
+    assertEq(LISUSD.balanceOf(MANAGER) - managerBefore, amount, "manager should receive tokens");
+  }
+
+  function test_emergencyWithdraw_nativeBNB_byManager() public {
+    uint256 amount = 2 ether;
+    vm.deal(address(broker), amount);
+
+    uint256 managerBefore = MANAGER.balance;
+    vm.prank(MANAGER);
+    broker.emergencyWithdraw(address(0), amount);
+
+    assertEq(address(broker).balance, 0, "broker should have 0 BNB after withdraw");
+    assertEq(MANAGER.balance - managerBefore, amount, "manager should receive BNB");
+  }
+
+  function test_emergencyWithdraw_revertsForNonManager() public {
+    uint256 amount = 1 ether;
+    LISUSD.setBalance(address(broker), amount);
+
+    vm.expectRevert();
+    vm.prank(borrower);
+    broker.emergencyWithdraw(address(LISUSD), amount);
+  }
+
+  function test_emergencyWithdraw_revertsOnZeroAmount() public {
+    vm.expectRevert(bytes("broker/zero-amount"));
+    vm.prank(MANAGER);
+    broker.emergencyWithdraw(address(LISUSD), 0);
+  }
+
+  function test_emergencyWithdraw_emitsEvent() public {
+    uint256 amount = 100 ether;
+    LISUSD.setBalance(address(broker), amount);
+
+    vm.expectEmit(true, true, false, true);
+    emit IBroker.EmergencyWithdrawn(MANAGER, address(LISUSD), amount);
+
+    vm.prank(MANAGER);
+    broker.emergencyWithdraw(address(LISUSD), amount);
+  }
+
   function test_checkPositionsMeetsMinLoan_allowsFullRepay() public {
     vm.prank(MANAGER);
     moolah.setMinLoanValue(1e8);

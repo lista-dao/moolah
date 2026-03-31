@@ -1120,6 +1120,24 @@ contract LendingBroker is
     }
   }
 
+  /**
+   * @dev Emergency withdraw a specific amount of an asset from the contract
+   * @param token The token to withdraw, address(0) for native BNB
+   * @param amount The amount to withdraw
+   */
+  function emergencyWithdraw(address token, uint256 amount) external onlyRole(MANAGER) {
+    require(amount > 0, "broker/zero-amount");
+
+    if (token == address(0)) {
+      (bool success, ) = msg.sender.call{ value: amount }("");
+      require(success, "broker/transfer-failed");
+    } else {
+      IERC20(token).safeTransfer(msg.sender, amount);
+    }
+
+    emit EmergencyWithdrawn(msg.sender, token, amount);
+  }
+
   /// @dev only callable by the DEFAULT_ADMIN_ROLE (must be a TimeLock contract)
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 }
