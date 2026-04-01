@@ -8,7 +8,7 @@ import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { IBroker, IBrokerBase } from "../broker/interfaces/IBroker.sol";
 import { Id, MarketParams, IMoolah } from "moolah/interfaces/IMoolah.sol";
-import "./IBrokerLiquidator.sol";
+import { IBrokerLiquidator } from "./IBrokerLiquidator.sol";
 import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
 
 contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerLiquidator {
@@ -342,7 +342,6 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   }
 
   /// @dev sets the smart collateral providers.
-  /// @dev allows the contract to receive native BNB, e.g. when redeeming slisBNB/BNB LP.
   /// @param providers The array of smart collateral providers.
   /// @param status The status of the providers.
   function batchSetSmartProviders(address[] calldata providers, bool status) external onlyRole(MANAGER) {
