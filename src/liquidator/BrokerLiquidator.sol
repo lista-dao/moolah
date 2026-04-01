@@ -8,7 +8,8 @@ import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { IBroker, IBrokerBase } from "../broker/interfaces/IBroker.sol";
 import { Id, MarketParams, IMoolah } from "moolah/interfaces/IMoolah.sol";
-import "./IBrokerLiquidator.sol";
+import { IBrokerLiquidator } from "./IBrokerLiquidator.sol";
+import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
 
 contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerLiquidator {
   using MarketParamsLib for MarketParams;
@@ -33,6 +34,8 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   // then we will know broker is whitelisted or not
   // by checking broker address => marketIdToBroker[market id] == broker address
   mapping(address => bytes32) public brokerToMarketId;
+  // @dev smart collateral provider whitelist
+  mapping(address => bool) public smartProviders;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // manager role
@@ -41,6 +44,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   event MarketWhitelistChanged(bytes32 id, address broker, bool added);
   event PairWhitelistChanged(address pair, bool added);
   event SellToken(address pair, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin);
+  event SmartProvidersChanged(address provider, bool added);
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   /// @param moolah The address of the Moolah contract.
@@ -282,6 +286,33 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     }
 
     SafeTransferLib.safeApprove(arb.loanToken, msg.sender, repaidAssets);
+  }
+
+  /// @dev redeems smart collateral LP tokens.
+  /// @param smartProvider The address of the smart collateral provider.
+  /// @param lpAmount The amount of LP collateral tokens to redeem.
+  /// @param minToken0Amt The minimum amount of token0 to receive.
+  /// @param minToken1Amt The minimum amount of token1 to receive.
+  /// @return The amount of token0 and token1 redeemed.
+  function redeemSmartCollateral(
+    address smartProvider,
+    uint256 lpAmount,
+    uint256 minToken0Amt,
+    uint256 minToken1Amt
+  ) external onlyRole(BOT) returns (uint256, uint256) {
+    require(smartProviders[smartProvider], NotWhitelisted());
+    return ISmartProvider(smartProvider).redeemLpCollateral(lpAmount, minToken0Amt, minToken1Amt);
+  }
+
+  /// @dev sets the smart collateral providers.
+  /// @param providers The array of smart collateral providers.
+  /// @param status The status of the providers.
+  function batchSetSmartProviders(address[] calldata providers, bool status) external onlyRole(MANAGER) {
+    for (uint256 i = 0; i < providers.length; i++) {
+      address provider = providers[i];
+      smartProviders[provider] = status;
+      emit SmartProvidersChanged(provider, status);
+    }
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
