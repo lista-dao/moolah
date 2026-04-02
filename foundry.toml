@@ -18,6 +18,11 @@ extra_output = ["storageLayout"]
 # Enable the Solidity via-IR pipeline for better code size optimization
 via_ir = true
 
+[profile.ci]
+force = false
+build_info = false
+extra_output = []
+
 [rpc_endpoints]
 bsc_testnet = "${BSC_TESTNET_RPC_URL}"
 bsc = "${BSC_RPC_URL}"

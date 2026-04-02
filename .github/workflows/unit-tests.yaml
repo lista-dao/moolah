@@ -24,5 +24,6 @@ jobs:
       - name: Run unit tests
         run: forge test -vvv
         env:
+          FOUNDRY_PROFILE: ci
           ETH_RPC: ${{ secrets.ETH_RPC }}
           BSC_RPC: ${{ secrets.BSC_RPC }}
