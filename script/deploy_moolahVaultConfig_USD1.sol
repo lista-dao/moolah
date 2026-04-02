@@ -1,12 +1,13 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
+import { DeployBase } from "./DeployBase.sol";
 
 import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 
-contract MoolahVaultConfigDeploy is Script {
+contract MoolahVaultConfigDeploy is DeployBase {
   using MarketParamsLib for MarketParams;
   MoolahVault vault = MoolahVault(0xfa27f172e0b6ebcEF9c51ABf817E2cb142FbE627);
   uint256 fee = 10 * 1e16;
@@ -27,7 +28,7 @@ contract MoolahVaultConfigDeploy is Script {
   bytes32 public constant ALLOCATOR = keccak256("ALLOCATOR"); // manager role
 
   function run() public {
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+    uint256 deployerPrivateKey = _deployerKey();
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
