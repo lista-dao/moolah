@@ -1,12 +1,13 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
+import { DeployBase } from "./DeployBase.sol";
 
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import { MoolahVaultManager } from "moolah-vault/MoolahVaultManager.sol";
 
-contract MoolahVaultManagerConfigDeploy is Script {
+contract MoolahVaultManagerConfigDeploy is DeployBase {
   MoolahVaultManager vaultManager = MoolahVaultManager(0x0000000000000000000000000000000000000000);
 
   address[] vaults = [
@@ -31,7 +32,7 @@ contract MoolahVaultManagerConfigDeploy is Script {
   ];
 
   function run() public {
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+    uint256 deployerPrivateKey = _deployerKey();
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
