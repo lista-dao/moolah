@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-2.0-or-later
 pragma solidity 0.8.34;
 
 import { IListaV3PoolImmutables, IListaV3PoolState, IListaV3PoolActions, IListaV3PoolDerivedState, IListaV3PoolOwnerActions, IListaV3Pool } from "./interfaces/IListaV3Pool.sol";

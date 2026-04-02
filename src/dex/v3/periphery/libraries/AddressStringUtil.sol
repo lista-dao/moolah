@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-2.0-or-later
 // from https://github.com/Lista/solidity-lib/blob/master/contracts/libraries/AddressStringUtil.sol
 // modified for solidity 0.8
 
