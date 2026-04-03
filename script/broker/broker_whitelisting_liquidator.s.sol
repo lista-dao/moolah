@@ -2,18 +2,19 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
+import { DeployBase } from "../DeployBase.sol";
 
 interface IBroker {
   function toggleLiquidationWhitelist(address account, bool isAddition) external;
 }
 
-contract BrokerWhitelistLiquidatorScript is Script {
+contract BrokerWhitelistLiquidatorScript is DeployBase {
   address brokerLiquidator = 0x3AA647a1e902833b61E503DbBFbc58992daa4868;
 
   address[] brokers = [0x1Fa26015286D1270343d7526C60bd57aB6bE8b54];
 
   function run() public {
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+    uint256 deployerPrivateKey = _deployerKey();
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

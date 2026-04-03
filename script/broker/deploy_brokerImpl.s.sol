@@ -2,9 +2,10 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
+import { DeployBase } from "../DeployBase.sol";
 import { LendingBroker } from "../../src/broker/LendingBroker.sol";
 
-contract DeployLendingBrokerImpl is Script {
+contract DeployLendingBrokerImpl is DeployBase {
   // All 19 LendingBroker proxy addresses on BSC mainnet.
   address[] brokers = [
     0x6BAF9648cffB7C9c4cB7275000a27b9a7dBD59Bc,
@@ -27,9 +28,18 @@ contract DeployLendingBrokerImpl is Script {
     0x306b7122adb734bD3976f6Fb7dC5E8fEf57528D7,
     0x1Fa26015286D1270343d7526C60bd57aB6bE8b54
   ];
+  address moolah;
+  address interestRelayer;
+  address oracle;
+
+  function setUp() public {
+    moolah = vm.envAddress("MOOLAH");
+    interestRelayer = vm.envAddress("INTEREST_RELAYER");
+    oracle = vm.envAddress("ORACLE");
+  }
 
   function run() public {
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+    uint256 deployerPrivateKey = _deployerKey();
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 

@@ -1,10 +1,11 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
+import { DeployBase } from "../DeployBase.sol";
 
 import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 
-contract MoolahVaultTransferRoleDeploy is Script {
+contract MoolahVaultTransferRoleDeploy is DeployBase {
   MoolahVault vault = MoolahVault(0x1A9BeE2F5c85F6b4a0221fB1C733246AF5306Ae3);
   address admin = 0xa18ae79AEDA3e711E0CD64cfe1Cd06402d400D61; // timelock
   address manager = 0x375fdA2Bf66f4CE85EAB29AB6407dCd4a4C428BA; // timelock
@@ -18,7 +19,7 @@ contract MoolahVaultTransferRoleDeploy is Script {
   bytes32 public constant ALLOCATOR = keccak256("ALLOCATOR"); // manager role
 
   function run() public {
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+    uint256 deployerPrivateKey = _deployerKey();
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
