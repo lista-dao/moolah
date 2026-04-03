@@ -1484,59 +1484,93 @@ contract LendingBrokerTest is Test {
   }
 
   // =============================================
-  // setRelayer / setOracle tests
+  // setRelayer / setOracle tests (one-time, admin-only)
   // =============================================
 
+  /// @dev Deploy a fresh broker proxy with RELAYER/ORACLE unset (simulating V1->V2 upgrade)
+  function _deployBrokerWithEmptyRelayerOracle() internal returns (LendingBroker) {
+    LendingBroker bImpl = new LendingBroker(address(moolah));
+    // Use 6-param initialize (no relayer/oracle) by encoding only the original params
+    // and leaving RELAYER/ORACLE as address(0)
+    ERC1967Proxy bProxy = new ERC1967Proxy(
+      address(bImpl),
+      abi.encodeWithSelector(
+        LendingBroker.initialize.selector,
+        ADMIN,
+        MANAGER,
+        BOT,
+        PAUSER,
+        address(rateCalc),
+        10,
+        address(1), // placeholder relayer — will be overwritten below
+        address(1) // placeholder oracle — will be overwritten below
+      )
+    );
+    LendingBroker b = LendingBroker(payable(address(bProxy)));
+    // Simulate V1->V2 upgrade: storage RELAYER/ORACLE are zeroed out
+    vm.store(address(b), bytes32(uint256(18)), bytes32(0)); // RELAYER slot
+    vm.store(address(b), bytes32(uint256(19)), bytes32(0)); // ORACLE slot
+    return b;
+  }
+
   function test_setRelayer_success() public {
-    address newRelayer = makeAddr("newRelayer");
-    vm.prank(MANAGER);
-    broker.setRelayer(newRelayer);
-    assertEq(broker.RELAYER(), newRelayer);
+    LendingBroker b = _deployBrokerWithEmptyRelayerOracle();
+    assertEq(b.RELAYER(), address(0));
+
+    vm.prank(ADMIN);
+    b.setRelayer(address(relayer));
+    assertEq(b.RELAYER(), address(relayer));
   }
 
   function test_setRelayer_reverts_zeroAddress() public {
-    vm.prank(MANAGER);
+    LendingBroker b = _deployBrokerWithEmptyRelayerOracle();
+    vm.prank(ADMIN);
     vm.expectRevert(bytes("broker/zero-address-provided"));
-    broker.setRelayer(address(0));
+    b.setRelayer(address(0));
   }
 
-  function test_setRelayer_reverts_sameValue() public {
-    address currentRelayer = broker.RELAYER();
-    vm.prank(MANAGER);
-    vm.expectRevert(bytes("broker/same-value-provided"));
-    broker.setRelayer(currentRelayer);
-  }
-
-  function test_setRelayer_reverts_notManager() public {
-    vm.prank(borrower);
-    vm.expectRevert();
+  function test_setRelayer_reverts_alreadySet() public {
+    // broker from setUp already has RELAYER set via initialize
+    vm.prank(ADMIN);
+    vm.expectRevert(bytes("broker/already-set"));
     broker.setRelayer(makeAddr("newRelayer"));
   }
 
-  function test_setOracle_success() public {
-    address newOracle = makeAddr("newOracle");
+  function test_setRelayer_reverts_notAdmin() public {
+    LendingBroker b = _deployBrokerWithEmptyRelayerOracle();
     vm.prank(MANAGER);
-    broker.setOracle(newOracle);
-    assertEq(address(broker.ORACLE()), newOracle);
+    vm.expectRevert();
+    b.setRelayer(address(relayer));
+  }
+
+  function test_setOracle_success() public {
+    LendingBroker b = _deployBrokerWithEmptyRelayerOracle();
+    assertEq(address(b.ORACLE()), address(0));
+
+    vm.prank(ADMIN);
+    b.setOracle(address(oracle));
+    assertEq(address(b.ORACLE()), address(oracle));
   }
 
   function test_setOracle_reverts_zeroAddress() public {
-    vm.prank(MANAGER);
+    LendingBroker b = _deployBrokerWithEmptyRelayerOracle();
+    vm.prank(ADMIN);
     vm.expectRevert(bytes("broker/zero-address-provided"));
-    broker.setOracle(address(0));
+    b.setOracle(address(0));
   }
 
-  function test_setOracle_reverts_sameValue() public {
-    address currentOracle = address(broker.ORACLE());
-    vm.prank(MANAGER);
-    vm.expectRevert(bytes("broker/same-value-provided"));
-    broker.setOracle(currentOracle);
-  }
-
-  function test_setOracle_reverts_notManager() public {
-    vm.prank(borrower);
-    vm.expectRevert();
+  function test_setOracle_reverts_alreadySet() public {
+    // broker from setUp already has ORACLE set via initialize
+    vm.prank(ADMIN);
+    vm.expectRevert(bytes("broker/already-set"));
     broker.setOracle(makeAddr("newOracle"));
+  }
+
+  function test_setOracle_reverts_notAdmin() public {
+    LendingBroker b = _deployBrokerWithEmptyRelayerOracle();
+    vm.prank(MANAGER);
+    vm.expectRevert();
+    b.setOracle(address(oracle));
   }
 
   // =============================================

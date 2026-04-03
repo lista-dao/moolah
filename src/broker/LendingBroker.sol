@@ -1011,22 +1011,22 @@ contract LendingBroker is
   }
 
   /**
-   * @dev Set the relayer address
+   * @dev Set the relayer address (one-time migration from immutable to storage)
    * @param _relayer The address of the BrokerInterestRelayer contract
    */
-  function setRelayer(address _relayer) external onlyRole(MANAGER) {
+  function setRelayer(address _relayer) external onlyRole(DEFAULT_ADMIN_ROLE) {
     require(_relayer != address(0), "broker/zero-address-provided");
-    require(RELAYER != _relayer, "broker/same-value-provided");
+    require(RELAYER == address(0), "broker/already-set");
     RELAYER = _relayer;
   }
 
   /**
-   * @dev Set the oracle address
+   * @dev Set the oracle address (one-time migration from immutable to storage)
    * @param _oracle The address of the oracle
    */
-  function setOracle(address _oracle) external onlyRole(MANAGER) {
+  function setOracle(address _oracle) external onlyRole(DEFAULT_ADMIN_ROLE) {
     require(_oracle != address(0), "broker/zero-address-provided");
-    require(address(ORACLE) != _oracle, "broker/same-value-provided");
+    require(address(ORACLE) == address(0), "broker/already-set");
     ORACLE = IOracle(_oracle);
   }
 
