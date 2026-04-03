@@ -23,14 +23,14 @@ contract DeployXautUsdcVault is DeployBase {
     // Deploy XAUT Vault
     ERC1967Proxy xautProxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, XAUT, "Lista XAUT Vault", "Lista XAUT Vault")
+      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, XAUT, "Lista XAUT Vault", "lisXAUT")
     );
     console.log("XAUT Vault proxy: ", address(xautProxy));
 
     // Deploy USDC Vault
     ERC1967Proxy usdcProxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, USDC, "Lista USDC Vault", "Lista USDC Vault")
+      abi.encodeWithSelector(impl.initialize.selector, deployer, deployer, USDC, "Lista USDC Vault", "lisUSDC")
     );
     console.log("USDC Vault proxy: ", address(usdcProxy));
 
