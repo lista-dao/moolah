@@ -77,8 +77,6 @@ contract LendingBroker is
 
   // ------- Immutables -------
   IMoolah public immutable MOOLAH;
-  address public immutable RELAYER;
-  IOracle public immutable ORACLE;
   /// @dev Wrapped native token (e.g. WBNB). address(0) if native borrow/repay is not supported.
   address public immutable WBNB;
   uint256 public constant MAX_FIXED_TERM_APR = 13e26; // 1.3 * RATE_SCALE = 30% MAX APR
@@ -118,6 +116,10 @@ contract LendingBroker is
   /// @dev liquidation whitelist
   EnumerableSet.AddressSet private liquidationWhitelist;
 
+  // --- V2 storage (appended to preserve layout) ---
+  address public RELAYER;
+  IOracle public ORACLE;
+
   // ------- Modifiers -------
   modifier onlyMoolah() {
     if (msg.sender != address(MOOLAH)) revert NotMoolah();
@@ -137,19 +139,12 @@ contract LendingBroker is
   /**
    * @dev Constructor for the LendingBroker contract
    * @param moolah The address of the Moolah contract
-   * @param relayer The address of the BrokerInterestRelayer contract
-   * @param oracle The address of the oracle
    * @param wbnb The address of the wrapped native token (e.g. WBNB). Pass address(0) to disable native support.
    */
-  constructor(address moolah, address relayer, address oracle, address wbnb) {
-    // zero address assert
-    if (moolah == address(0) || relayer == address(0) || oracle == address(0)) revert ZeroAddressProvided();
-    // set addresses
+  constructor(address moolah, address wbnb) {
+    if (moolah == address(0)) revert ZeroAddressProvided();
     MOOLAH = IMoolah(moolah);
-    RELAYER = relayer;
-    ORACLE = IOracle(oracle);
     WBNB = wbnb;
-
     _disableInitializers();
   }
 
@@ -161,6 +156,8 @@ contract LendingBroker is
    * @param _pauser The address of the pauser
    * @param _rateCalculator The address of the rate calculator
    * @param _maxFixedLoanPositions The maximum number of fixed loan positions a user can have
+   * @param _relayer The address of the BrokerInterestRelayer contract
+   * @param _oracle The address of the oracle
    */
   function initialize(
     address _admin,
@@ -168,7 +165,9 @@ contract LendingBroker is
     address _bot,
     address _pauser,
     address _rateCalculator,
-    uint256 _maxFixedLoanPositions
+    uint256 _maxFixedLoanPositions,
+    address _relayer,
+    address _oracle
   ) public initializer {
     if (
       _admin == address(0) ||
@@ -176,7 +175,9 @@ contract LendingBroker is
       _bot == address(0) ||
       _pauser == address(0) ||
       _rateCalculator == address(0) ||
-      _maxFixedLoanPositions == 0
+      _maxFixedLoanPositions == 0 ||
+      _relayer == address(0) ||
+      _oracle == address(0)
     ) revert ZeroAddressProvided();
 
     __AccessControlEnumerable_init();
@@ -190,6 +191,8 @@ contract LendingBroker is
     // init state variables
     rateCalculator = _rateCalculator;
     maxFixedLoanPositions = _maxFixedLoanPositions;
+    RELAYER = _relayer;
+    ORACLE = IOracle(_oracle);
   }
 
   ///////////////////////////////////////
@@ -1116,6 +1119,26 @@ contract LendingBroker is
     if (borrowPaused == paused) revert SameValueProvided();
     borrowPaused = paused;
     emit BorrowPaused(paused);
+  }
+
+  /**
+   * @dev Set the relayer address
+   * @param _relayer The address of the BrokerInterestRelayer contract
+   */
+  function setRelayer(address _relayer) external onlyRole(MANAGER) {
+    require(_relayer != address(0), "broker/zero-address-provided");
+    require(RELAYER != _relayer, "broker/same-value-provided");
+    RELAYER = _relayer;
+  }
+
+  /**
+   * @dev Set the oracle address
+   * @param _oracle The address of the oracle
+   */
+  function setOracle(address _oracle) external onlyRole(MANAGER) {
+    require(_oracle != address(0), "broker/zero-address-provided");
+    require(address(ORACLE) != _oracle, "broker/same-value-provided");
+    ORACLE = IOracle(_oracle);
   }
 
   /**
