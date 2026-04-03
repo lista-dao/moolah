@@ -2,6 +2,7 @@ pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
 import { DeployBase } from "./DeployBase.sol";
+import { console } from "forge-std/console.sol";
 
 import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
