@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Core Rules
+
+- Always read files before editing them. Never attempt to edit a file you haven't read in the current session.
+- Before making changes, present a brief plan. Do not copy files unnecessarily or make excessive multi-file changes without confirmation.
+
 ## Commands
 
 ```bash
@@ -71,6 +76,14 @@ This is a BSC lending protocol. The main contract is **Moolah** (`src/moolah/Moo
 - multiOracle: `0xf3afD82A4071f272F403dC176916141f44E6c750`
 - Timelock (admin): `0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253`
 - Moolah market operator: `0xd7e38800201D6a42C408Bf79d8723740C4E7f631`
+
+## Solidity Workflow
+
+After any Solidity code change, run `forge build` before proceeding. If compilation fails, fix it immediately before making further changes. Set `--force false` (or omit `--force`) to use the incremental build cache — only use `forge build --force` when debugging cache-related issues.
+
+## Testing
+
+When writing or fixing Foundry tests, pay close attention to: tick spacing alignment, vm.prank consumption order, oracle mock setup, and minimum liquidity requirements. Run `forge test --match-test <testName>` after each test change.
 
 ## Fork Test Patterns
 
