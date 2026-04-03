@@ -26,7 +26,7 @@ contract BrokerLiquidatorTest is BaseTest {
       address(impl),
       abi.encodeWithSelector(impl.initialize.selector, OWNER, OWNER, BOT)
     );
-    brokerLiquidator = BrokerLiquidator(address(proxy));
+    brokerLiquidator = BrokerLiquidator(payable(address(proxy)));
 
     smartProvider = new MockSmartProvider(address(loanToken), address(collateralToken));
   }
