@@ -132,10 +132,20 @@ contract LendingBrokerTest is Test {
     rateCalc = RateCalculator(address(rcProxy));
 
     // Deploy LendingBroker proxy first (used as oracle by the market)
-    LendingBroker bImpl = new LendingBroker(address(moolah), address(relayer), address(oracle));
+    LendingBroker bImpl = new LendingBroker(address(moolah));
     ERC1967Proxy bProxy = new ERC1967Proxy(
       address(bImpl),
-      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
+      abi.encodeWithSelector(
+        LendingBroker.initialize.selector,
+        ADMIN,
+        MANAGER,
+        BOT,
+        PAUSER,
+        address(rateCalc),
+        10,
+        address(relayer),
+        address(oracle)
+      )
     );
     broker = LendingBroker(payable(address(bProxy)));
 
@@ -1175,10 +1185,20 @@ contract LendingBrokerTest is Test {
 
   function test_marketIdSet_guard_reverts() public {
     // Deploy a second broker without setting market id
-    LendingBroker bImpl2 = new LendingBroker(address(moolah), address(vault), address(oracle));
+    LendingBroker bImpl2 = new LendingBroker(address(moolah));
     ERC1967Proxy bProxy2 = new ERC1967Proxy(
       address(bImpl2),
-      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
+      abi.encodeWithSelector(
+        LendingBroker.initialize.selector,
+        ADMIN,
+        MANAGER,
+        BOT,
+        PAUSER,
+        address(rateCalc),
+        10,
+        address(relayer),
+        address(oracle)
+      )
     );
     LendingBroker broker2 = LendingBroker(payable(address(bProxy2)));
     vm.expectRevert(bytes("Broker/market-not-set"));
@@ -1193,10 +1213,20 @@ contract LendingBrokerTest is Test {
   }
 
   function test_liquidatorSetMarketWhitelist_whitelistsNewBroker() public {
-    LendingBroker bImpl2 = new LendingBroker(address(moolah), address(relayer), address(oracle));
+    LendingBroker bImpl2 = new LendingBroker(address(moolah));
     ERC1967Proxy bProxy2 = new ERC1967Proxy(
       address(bImpl2),
-      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
+      abi.encodeWithSelector(
+        LendingBroker.initialize.selector,
+        ADMIN,
+        MANAGER,
+        BOT,
+        PAUSER,
+        address(rateCalc),
+        10,
+        address(relayer),
+        address(oracle)
+      )
     );
     LendingBroker newBroker = LendingBroker(payable(address(bProxy2)));
 
@@ -1224,10 +1254,20 @@ contract LendingBrokerTest is Test {
   }
 
   function test_liquidatorBatchSetMarketWhitelist_whitelistsMultipleMarkets() public {
-    LendingBroker bImplA = new LendingBroker(address(moolah), address(relayer), address(oracle));
+    LendingBroker bImplA = new LendingBroker(address(moolah));
     ERC1967Proxy bProxyA = new ERC1967Proxy(
       address(bImplA),
-      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
+      abi.encodeWithSelector(
+        LendingBroker.initialize.selector,
+        ADMIN,
+        MANAGER,
+        BOT,
+        PAUSER,
+        address(rateCalc),
+        10,
+        address(relayer),
+        address(oracle)
+      )
     );
     LendingBroker brokerA = LendingBroker(payable(address(bProxyA)));
 
@@ -1243,10 +1283,20 @@ contract LendingBrokerTest is Test {
     vm.prank(MANAGER);
     brokerA.setMarketId(idA);
 
-    LendingBroker bImplB = new LendingBroker(address(moolah), address(relayer), address(oracle));
+    LendingBroker bImplB = new LendingBroker(address(moolah));
     ERC1967Proxy bProxyB = new ERC1967Proxy(
       address(bImplB),
-      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
+      abi.encodeWithSelector(
+        LendingBroker.initialize.selector,
+        ADMIN,
+        MANAGER,
+        BOT,
+        PAUSER,
+        address(rateCalc),
+        10,
+        address(relayer),
+        address(oracle)
+      )
     );
     LendingBroker brokerB = LendingBroker(payable(address(bProxyB)));
 
@@ -1431,6 +1481,62 @@ contract LendingBrokerTest is Test {
     DynamicLoanPosition memory pos = broker.userDynamicPosition(borrower);
     assertEq(pos.principal, 0);
     assertEq(pos.normalizedDebt, 0);
+  }
+
+  // =============================================
+  // setRelayer / setOracle tests
+  // =============================================
+
+  function test_setRelayer_success() public {
+    address newRelayer = makeAddr("newRelayer");
+    vm.prank(MANAGER);
+    broker.setRelayer(newRelayer);
+    assertEq(broker.RELAYER(), newRelayer);
+  }
+
+  function test_setRelayer_reverts_zeroAddress() public {
+    vm.prank(MANAGER);
+    vm.expectRevert(bytes("broker/zero-address-provided"));
+    broker.setRelayer(address(0));
+  }
+
+  function test_setRelayer_reverts_sameValue() public {
+    address currentRelayer = broker.RELAYER();
+    vm.prank(MANAGER);
+    vm.expectRevert(bytes("broker/same-value-provided"));
+    broker.setRelayer(currentRelayer);
+  }
+
+  function test_setRelayer_reverts_notManager() public {
+    vm.prank(borrower);
+    vm.expectRevert();
+    broker.setRelayer(makeAddr("newRelayer"));
+  }
+
+  function test_setOracle_success() public {
+    address newOracle = makeAddr("newOracle");
+    vm.prank(MANAGER);
+    broker.setOracle(newOracle);
+    assertEq(address(broker.ORACLE()), newOracle);
+  }
+
+  function test_setOracle_reverts_zeroAddress() public {
+    vm.prank(MANAGER);
+    vm.expectRevert(bytes("broker/zero-address-provided"));
+    broker.setOracle(address(0));
+  }
+
+  function test_setOracle_reverts_sameValue() public {
+    address currentOracle = address(broker.ORACLE());
+    vm.prank(MANAGER);
+    vm.expectRevert(bytes("broker/same-value-provided"));
+    broker.setOracle(currentOracle);
+  }
+
+  function test_setOracle_reverts_notManager() public {
+    vm.prank(borrower);
+    vm.expectRevert();
+    broker.setOracle(makeAddr("newOracle"));
   }
 
   // =============================================
