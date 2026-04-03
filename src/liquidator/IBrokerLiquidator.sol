@@ -29,6 +29,27 @@ interface IBrokerLiquidator {
 
   function liquidate(bytes32 id, address borrower, uint256 seizedAssets, uint256 repaidShares) external;
 
+  function liquidateSmartCollateral(
+    bytes32 id,
+    address borrower,
+    address smartProvider,
+    uint256 seizedAssets,
+    uint256 repaidShares,
+    bytes memory payload
+  ) external returns (uint256, uint256);
+
+  function flashLiquidateSmartCollateral(
+    bytes32 id,
+    address borrower,
+    address smartProvider,
+    uint256 seizedAssets,
+    address token0Pair,
+    address token1Pair,
+    bytes calldata swapToken0Data,
+    bytes calldata swapToken1Data,
+    bytes memory payload
+  ) external returns (uint256, uint256);
+
   function sellToken(
     address pair,
     address tokenIn,

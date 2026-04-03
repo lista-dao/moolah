@@ -546,10 +546,27 @@ library BrokerMath {
       // update repaid principal amount
       principalToDeduct -= repayPrincipalAmt;
       p.principalRepaid += repayPrincipalAmt;
-      // reset repaid interest to zero (all accrued interest has been cleared)
-      p.interestRepaid = 0;
-      // reset repaid time to now
-      p.lastRepaidTime = block.timestamp;
+
+      if (repayInterestAmt >= accruedInterest) {
+        // all accrued interest fully covered -> safe to reset tracking
+        p.interestRepaid = 0;
+        p.lastRepaidTime = block.timestamp;
+      } else {
+        // partial interest covered -> adjust interestRepaid to preserve outstanding
+        // After principalRepaid increased, getAccruedInterestForFixedPosition() recalculates
+        // with smaller (principal - principalRepaid), producing a lower total (newTotalAccrued).
+        // We set interestRepaid so that: newTotalAccrued - interestRepaid = unpaidInterest
+        uint256 unpaidInterest = accruedInterest - repayInterestAmt;
+        uint256 newTotalAccrued = getAccruedInterestForFixedPosition(p);
+        if (newTotalAccrued >= unpaidInterest) {
+          // exact: outstanding is perfectly preserved
+          p.interestRepaid = newTotalAccrued - unpaidInterest;
+        } else {
+          // edge case: most principal repaid, formula can't represent full outstanding
+          // preserve maximum possible: outstanding = newTotalAccrued (don't reset lastRepaidTime)
+          p.interestRepaid = 0;
+        }
+      }
     }
 
     return (interestToDeduct, principalToDeduct, p);

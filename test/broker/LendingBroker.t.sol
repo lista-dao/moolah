@@ -26,7 +26,9 @@ import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
 import { MathLib, WAD } from "moolah/libraries/MathLib.sol";
 import { UtilsLib } from "moolah/libraries/UtilsLib.sol";
 import { IMoolahLiquidateCallback } from "../../src/moolah/interfaces/IMoolahCallbacks.sol";
-import { BrokerLiquidator } from "../../src/liquidator/BrokerLiquidator.sol";
+import { BrokerLiquidator, IBrokerLiquidator } from "../../src/liquidator/BrokerLiquidator.sol";
+import { MockSmartProvider } from "../liquidator/mocks/MockSmartProvider.sol";
+import { ISmartProvider } from "../../src/provider/interfaces/IProvider.sol";
 import { ORACLE_PRICE_SCALE, LIQUIDATION_CURSOR, MAX_LIQUIDATION_INCENTIVE_FACTOR } from "moolah/libraries/ConstantsLib.sol";
 
 contract LendingBrokerTest is Test {
@@ -130,10 +132,20 @@ contract LendingBrokerTest is Test {
     rateCalc = RateCalculator(address(rcProxy));
 
     // Deploy LendingBroker proxy first (used as oracle by the market)
-    LendingBroker bImpl = new LendingBroker(address(moolah), address(relayer), address(oracle));
+    LendingBroker bImpl = new LendingBroker(address(moolah));
     ERC1967Proxy bProxy = new ERC1967Proxy(
       address(bImpl),
-      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
+      abi.encodeWithSelector(
+        LendingBroker.initialize.selector,
+        ADMIN,
+        MANAGER,
+        BOT,
+        PAUSER,
+        address(rateCalc),
+        10,
+        address(relayer),
+        address(oracle)
+      )
     );
     broker = LendingBroker(payable(address(bProxy)));
 
@@ -183,7 +195,7 @@ contract LendingBrokerTest is Test {
       address(mockLiqImpl),
       abi.encodeWithSelector(BrokerLiquidator.initialize.selector, ADMIN, MANAGER, BOT)
     );
-    liquidator = BrokerLiquidator(address(mockLiqProxy));
+    liquidator = BrokerLiquidator(payable(address(mockLiqProxy)));
 
     // whitelist lendingbroker as liquidator in moolah
     Id[] memory ids = new Id[](1);
@@ -1289,10 +1301,20 @@ contract LendingBrokerTest is Test {
 
   function test_marketIdSet_guard_reverts() public {
     // Deploy a second broker without setting market id
-    LendingBroker bImpl2 = new LendingBroker(address(moolah), address(vault), address(oracle));
+    LendingBroker bImpl2 = new LendingBroker(address(moolah));
     ERC1967Proxy bProxy2 = new ERC1967Proxy(
       address(bImpl2),
-      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
+      abi.encodeWithSelector(
+        LendingBroker.initialize.selector,
+        ADMIN,
+        MANAGER,
+        BOT,
+        PAUSER,
+        address(rateCalc),
+        10,
+        address(relayer),
+        address(oracle)
+      )
     );
     LendingBroker broker2 = LendingBroker(payable(address(bProxy2)));
     vm.expectRevert(bytes("Broker/market-not-set"));
@@ -1307,10 +1329,20 @@ contract LendingBrokerTest is Test {
   }
 
   function test_liquidatorSetMarketWhitelist_whitelistsNewBroker() public {
-    LendingBroker bImpl2 = new LendingBroker(address(moolah), address(relayer), address(oracle));
+    LendingBroker bImpl2 = new LendingBroker(address(moolah));
     ERC1967Proxy bProxy2 = new ERC1967Proxy(
       address(bImpl2),
-      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
+      abi.encodeWithSelector(
+        LendingBroker.initialize.selector,
+        ADMIN,
+        MANAGER,
+        BOT,
+        PAUSER,
+        address(rateCalc),
+        10,
+        address(relayer),
+        address(oracle)
+      )
     );
     LendingBroker newBroker = LendingBroker(payable(address(bProxy2)));
 
@@ -1338,10 +1370,20 @@ contract LendingBrokerTest is Test {
   }
 
   function test_liquidatorBatchSetMarketWhitelist_whitelistsMultipleMarkets() public {
-    LendingBroker bImplA = new LendingBroker(address(moolah), address(relayer), address(oracle));
+    LendingBroker bImplA = new LendingBroker(address(moolah));
     ERC1967Proxy bProxyA = new ERC1967Proxy(
       address(bImplA),
-      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
+      abi.encodeWithSelector(
+        LendingBroker.initialize.selector,
+        ADMIN,
+        MANAGER,
+        BOT,
+        PAUSER,
+        address(rateCalc),
+        10,
+        address(relayer),
+        address(oracle)
+      )
     );
     LendingBroker brokerA = LendingBroker(payable(address(bProxyA)));
 
@@ -1357,10 +1399,20 @@ contract LendingBrokerTest is Test {
     vm.prank(MANAGER);
     brokerA.setMarketId(idA);
 
-    LendingBroker bImplB = new LendingBroker(address(moolah), address(relayer), address(oracle));
+    LendingBroker bImplB = new LendingBroker(address(moolah));
     ERC1967Proxy bProxyB = new ERC1967Proxy(
       address(bImplB),
-      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
+      abi.encodeWithSelector(
+        LendingBroker.initialize.selector,
+        ADMIN,
+        MANAGER,
+        BOT,
+        PAUSER,
+        address(rateCalc),
+        10,
+        address(relayer),
+        address(oracle)
+      )
     );
     LendingBroker brokerB = LendingBroker(payable(address(bProxyB)));
 
@@ -1545,6 +1597,292 @@ contract LendingBrokerTest is Test {
     DynamicLoanPosition memory pos = broker.userDynamicPosition(borrower);
     assertEq(pos.principal, 0);
     assertEq(pos.normalizedDebt, 0);
+  }
+
+  // =============================================
+  // setRelayer / setOracle tests (one-time, admin-only)
+  // =============================================
+
+  /// @dev Deploy a fresh broker proxy with RELAYER/ORACLE unset (simulating V1->V2 upgrade)
+  function _deployBrokerWithEmptyRelayerOracle() internal returns (LendingBroker) {
+    LendingBroker bImpl = new LendingBroker(address(moolah));
+    // Use 6-param initialize (no relayer/oracle) by encoding only the original params
+    // and leaving RELAYER/ORACLE as address(0)
+    ERC1967Proxy bProxy = new ERC1967Proxy(
+      address(bImpl),
+      abi.encodeWithSelector(
+        LendingBroker.initialize.selector,
+        ADMIN,
+        MANAGER,
+        BOT,
+        PAUSER,
+        address(rateCalc),
+        10,
+        address(1), // placeholder relayer — will be overwritten below
+        address(1) // placeholder oracle — will be overwritten below
+      )
+    );
+    LendingBroker b = LendingBroker(payable(address(bProxy)));
+    // Simulate V1->V2 upgrade: storage RELAYER/ORACLE are zeroed out
+    vm.store(address(b), bytes32(uint256(18)), bytes32(0)); // RELAYER slot
+    vm.store(address(b), bytes32(uint256(19)), bytes32(0)); // ORACLE slot
+    return b;
+  }
+
+  function test_setRelayer_success() public {
+    LendingBroker b = _deployBrokerWithEmptyRelayerOracle();
+    assertEq(b.RELAYER(), address(0));
+
+    vm.prank(ADMIN);
+    b.setRelayer(address(relayer));
+    assertEq(b.RELAYER(), address(relayer));
+  }
+
+  function test_setRelayer_reverts_zeroAddress() public {
+    LendingBroker b = _deployBrokerWithEmptyRelayerOracle();
+    vm.prank(ADMIN);
+    vm.expectRevert(bytes("broker/zero-address-provided"));
+    b.setRelayer(address(0));
+  }
+
+  function test_setRelayer_reverts_alreadySet() public {
+    // broker from setUp already has RELAYER set via initialize
+    vm.prank(ADMIN);
+    vm.expectRevert(bytes("broker/already-set"));
+    broker.setRelayer(makeAddr("newRelayer"));
+  }
+
+  function test_setRelayer_reverts_notAdmin() public {
+    LendingBroker b = _deployBrokerWithEmptyRelayerOracle();
+    vm.prank(MANAGER);
+    vm.expectRevert();
+    b.setRelayer(address(relayer));
+  }
+
+  function test_setOracle_success() public {
+    LendingBroker b = _deployBrokerWithEmptyRelayerOracle();
+    assertEq(address(b.ORACLE()), address(0));
+
+    vm.prank(ADMIN);
+    b.setOracle(address(oracle));
+    assertEq(address(b.ORACLE()), address(oracle));
+  }
+
+  function test_setOracle_reverts_zeroAddress() public {
+    LendingBroker b = _deployBrokerWithEmptyRelayerOracle();
+    vm.prank(ADMIN);
+    vm.expectRevert(bytes("broker/zero-address-provided"));
+    b.setOracle(address(0));
+  }
+
+  function test_setOracle_reverts_alreadySet() public {
+    // broker from setUp already has ORACLE set via initialize
+    vm.prank(ADMIN);
+    vm.expectRevert(bytes("broker/already-set"));
+    broker.setOracle(makeAddr("newOracle"));
+  }
+
+  function test_setOracle_reverts_notAdmin() public {
+    LendingBroker b = _deployBrokerWithEmptyRelayerOracle();
+    vm.prank(MANAGER);
+    vm.expectRevert();
+    b.setOracle(address(oracle));
+  }
+
+  // =============================================
+  // Smart LP liquidation tests
+  // =============================================
+
+  /// @dev Helper: deploy a MockSmartProvider whose collateralToken == BTCB
+  /// and whose underlying tokens are LISUSD (token0) and BTCB (token1).
+  function _setupSmartProvider() internal returns (MockSmartProvider sp, MockSwapPair swapPair) {
+    sp = new MockSmartProvider(address(LISUSD), address(BTCB));
+    sp.setCollateralToken(address(BTCB));
+
+    // whitelist the smart provider
+    address[] memory providers = new address[](1);
+    providers[0] = address(sp);
+    vm.prank(MANAGER);
+    liquidator.batchSetSmartProviders(providers, true);
+
+    // deploy a mock swap pair that converts BTCB -> LISUSD at oracle price
+    swapPair = new MockSwapPair(address(BTCB), address(LISUSD), oracle);
+
+    // whitelist swap pair
+    vm.prank(MANAGER);
+    liquidator.setPairWhitelist(address(swapPair), true);
+
+    // whitelist tokens
+    vm.prank(MANAGER);
+    liquidator.setTokenWhitelist(address(LISUSD), true);
+    vm.prank(MANAGER);
+    liquidator.setTokenWhitelist(address(BTCB), true);
+  }
+
+  function test_liquidateSmartCollateral_seizes_and_redeems() public {
+    _prepareLiquidatablePosition(false);
+
+    (MockSmartProvider sp, ) = _setupSmartProvider();
+
+    Position memory posBefore = moolah.position(marketParams.id(), borrower);
+    uint256 userRepayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, 1 * 1e8, 100 * 1e8); // 1%
+
+    bytes memory payload = abi.encode(uint256(0), uint256(0)); // no slippage min
+
+    // Fund liquidator with LISUSD for repayment (non-flash: liquidator pays upfront)
+    LISUSD.setBalance(address(liquidator), 1_000_000 ether);
+
+    vm.prank(BOT);
+    liquidator.liquidateSmartCollateral(Id.unwrap(id), borrower, address(sp), 0, userRepayShares, payload);
+
+    // After liquidation + LP redemption, the liquidator should hold redeemed tokens
+    // The smart provider splits into LISUSD (token0) and BTCB (token1)
+    uint256 lisusdAfter = LISUSD.balanceOf(address(liquidator));
+    uint256 btcbAfter = BTCB.balanceOf(address(liquidator));
+    // Liquidator should have some redeemed tokens (LISUSD from redemption + leftover, BTCB from redemption)
+    assertGt(lisusdAfter + btcbAfter, 0, "liquidator received no redeemed tokens");
+
+    // Borrower position should have decreased
+    Position memory posAfter = moolah.position(marketParams.id(), borrower);
+    assertLt(posAfter.borrowShares, posBefore.borrowShares, "borrow shares did not decrease");
+  }
+
+  function test_flashLiquidateSmartCollateral_swaps_and_repays() public {
+    _prepareLiquidatablePosition(false);
+
+    (MockSmartProvider sp, MockSwapPair swapPair) = _setupSmartProvider();
+    // Configure mock to return 0% as token0 (LISUSD), 100% as token1 (BTCB)
+    // so that the entire LP value is in BTCB and gets swapped to LISUSD at oracle price
+    sp.setToken0Bps(0);
+
+    Position memory posBefore = moolah.position(marketParams.id(), borrower);
+    uint256 userRepayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, 1 * 1e8, 100 * 1e8); // 1%
+    uint256 seizedAssets = _previewLiquidationRepayment(
+      marketParams,
+      moolah.market(marketParams.id()),
+      0,
+      userRepayShares,
+      moolah._getPrice(marketParams, borrower)
+    );
+
+    // token0 = LISUSD, token1 = BTCB
+    // With 0% token0Bps, all redeemed as BTCB, so only token1 needs swapping
+    bytes memory swapToken0Data = ""; // no token0 output
+    bytes memory swapToken1Data = abi.encodeWithSelector(MockSwapPair.swap.selector);
+    bytes memory payload = abi.encode(uint256(0), uint256(0));
+
+    vm.prank(BOT);
+    liquidator.flashLiquidateSmartCollateral(
+      Id.unwrap(id),
+      borrower,
+      address(sp),
+      seizedAssets,
+      address(swapPair), // token0Pair (unused since amount0 == 0)
+      address(swapPair), // token1Pair (BTCB -> LISUSD swap)
+      swapToken0Data,
+      swapToken1Data,
+      payload
+    );
+
+    // Position should have reduced debt
+    Position memory posAfter = moolah.position(marketParams.id(), borrower);
+    assertLt(posAfter.borrowShares, posBefore.borrowShares, "borrow shares did not decrease");
+  }
+
+  function test_flashLiquidateSmartCollateral_reverts_notWhitelisted() public {
+    _prepareLiquidatablePosition(false);
+
+    MockSmartProvider sp = new MockSmartProvider(address(LISUSD), address(BTCB));
+    sp.setCollateralToken(address(BTCB));
+    // NOT whitelisted
+
+    bytes memory payload = abi.encode(uint256(0), uint256(0));
+
+    vm.prank(BOT);
+    vm.expectRevert(BrokerLiquidator.NotWhitelisted.selector);
+    liquidator.flashLiquidateSmartCollateral(
+      Id.unwrap(id),
+      borrower,
+      address(sp),
+      1e18,
+      address(1),
+      address(1),
+      "",
+      "",
+      payload
+    );
+  }
+
+  function test_liquidateSmartCollateral_reverts_invalidProvider() public {
+    _prepareLiquidatablePosition(false);
+
+    // Create a smart provider whose TOKEN() != collateralToken (BTCB)
+    MockSmartProvider sp = new MockSmartProvider(address(LISUSD), address(BTCB));
+    // collateralToken defaults to address(sp) != BTCB
+
+    address[] memory providers = new address[](1);
+    providers[0] = address(sp);
+    vm.prank(MANAGER);
+    liquidator.batchSetSmartProviders(providers, true);
+
+    bytes memory payload = abi.encode(uint256(0), uint256(0));
+
+    LISUSD.setBalance(address(liquidator), 1_000_000 ether);
+
+    vm.prank(BOT);
+    vm.expectRevert(bytes("Invalid smart provider"));
+    liquidator.liquidateSmartCollateral(Id.unwrap(id), borrower, address(sp), 0, 1, payload);
+  }
+
+  function test_flashLiquidateSmartCollateral_reverts_pairNotWhitelisted() public {
+    _prepareLiquidatablePosition(false);
+
+    (MockSmartProvider sp, MockSwapPair swapPair) = _setupSmartProvider();
+
+    address badPair = makeAddr("badPair");
+    bytes memory payload = abi.encode(uint256(0), uint256(0));
+
+    vm.prank(BOT);
+    vm.expectRevert(BrokerLiquidator.NotWhitelisted.selector);
+    liquidator.flashLiquidateSmartCollateral(
+      Id.unwrap(id),
+      borrower,
+      address(sp),
+      1e18,
+      badPair, // not whitelisted
+      address(swapPair),
+      "",
+      "",
+      payload
+    );
+  }
+}
+
+/// @dev Mock swap pair that converts tokenIn -> tokenOut at oracle price.
+/// Pulls the approved amount (not full balance) to match real aggregator behavior.
+contract MockSwapPair is Test {
+  address public tokenIn;
+  address public tokenOut;
+  OracleMock public oracle;
+
+  constructor(address _tokenIn, address _tokenOut, OracleMock _oracle) {
+    tokenIn = _tokenIn;
+    tokenOut = _tokenOut;
+    oracle = _oracle;
+  }
+
+  /// @dev Swap approved tokenIn for tokenOut at oracle price
+  function swap() external {
+    uint256 amountIn = IERC20(tokenIn).allowance(msg.sender, address(this));
+    if (amountIn > 0) {
+      IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
+      // convert at oracle price: amountIn * tokenInPrice / tokenOutPrice
+      uint256 tokenInPrice = oracle.peek(tokenIn);
+      uint256 tokenOutPrice = oracle.peek(tokenOut);
+      uint256 amountOut = (amountIn * tokenInPrice) / tokenOutPrice;
+      deal(tokenOut, address(this), amountOut);
+      IERC20(tokenOut).transfer(msg.sender, amountOut);
+    }
   }
 }
 

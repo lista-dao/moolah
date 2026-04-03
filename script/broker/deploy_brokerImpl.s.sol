@@ -29,13 +29,9 @@ contract DeployLendingBrokerImpl is DeployBase {
     0x1Fa26015286D1270343d7526C60bd57aB6bE8b54
   ];
   address moolah;
-  address interestRelayer;
-  address oracle;
 
   function setUp() public {
     moolah = vm.envAddress("MOOLAH");
-    interestRelayer = vm.envAddress("INTEREST_RELAYER");
-    oracle = vm.envAddress("ORACLE");
   }
 
   function run() public {
@@ -45,20 +41,9 @@ contract DeployLendingBrokerImpl is DeployBase {
 
     vm.startBroadcast(deployerPrivateKey);
 
-    for (uint256 i = 0; i < brokers.length; i++) {
-      address proxy = brokers[i];
-
-      // Read constructor params from the existing proxy contract
-      address moolah = address(LendingBroker(proxy).MOOLAH());
-      address relayer = LendingBroker(proxy).RELAYER();
-      address oracle = address(LendingBroker(proxy).ORACLE());
-
-      // Deploy LendingBroker implementation
-      LendingBroker impl = new LendingBroker(moolah, relayer, oracle);
-      console.log("Broker proxy:", proxy);
-      console.log("  New impl:  ", address(impl));
-    }
-
+    // Deploy LendingBroker implementation
+    LendingBroker impl = new LendingBroker(moolah);
+    console.log("LendingBroker implementation: ", address(impl));
     vm.stopBroadcast();
   }
 }
