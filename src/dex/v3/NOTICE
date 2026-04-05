@@ -1,0 +1,12 @@
+This code is derived from Uniswap V3 (https://github.com/Uniswap/v3-core,
+https://github.com/Uniswap/v3-periphery), originally licensed under
+Business Source License 1.1, which transitioned to GPL-2.0-or-later
+on 2023-04-01.
+
+Portions of src/dex/v3/core/libraries/ (FullMath, UnsafeMath) are derived
+from work by Remco Bloemen, licensed under MIT.
+
+Modifications by Lista DAO to the original Uniswap V3 code are licensed
+under GPL-2.0-or-later, consistent with the original license terms.
+
+Original files authored by Lista DAO are licensed under MIT.
