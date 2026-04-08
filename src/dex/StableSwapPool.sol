@@ -70,6 +70,8 @@ contract StableSwapPool is
   uint256 public price0DiffThreshold;
   /// @dev the threshold for token1 price difference between the pool and the oracle, in 1e18 precision
   uint256 public price1DiffThreshold;
+  /// @dev skip checkPriceDiff when true
+  bool public skipPriceDiff;
   /// @dev can only be initialized by the ss factory
   address public immutable STABLESWAP_FACTORY;
   bytes32 public constant MANAGER = keccak256("MANAGER");
@@ -349,7 +351,7 @@ contract StableSwapPool is
       transfer_in(coin, amount);
     }
 
-    checkPriceDiff();
+    if (!skipPriceDiff) checkPriceDiff();
 
     // Mint pool tokens
     IStableSwapLP(token).mint(msg.sender, mint_amount);
@@ -500,7 +502,7 @@ contract StableSwapPool is
     balances[j] = old_balances[j] - dy - dy_admin_fee;
 
     // check price diff
-    checkPriceDiff();
+    if (!skipPriceDiff) checkPriceDiff();
 
     address iAddress = coins[i];
     if (iAddress == BNB_ADDRESS) {
@@ -530,7 +532,7 @@ contract StableSwapPool is
       transfer_out(coins[i], value);
     }
 
-    checkPriceDiff(); // Check price diff before burning LP tokens
+    if (!skipPriceDiff) checkPriceDiff(); // Check price diff before burning LP tokens
 
     IStableSwapLP(token).burnFrom(msg.sender, _amount); // dev: insufficient funds
 
@@ -574,7 +576,7 @@ contract StableSwapPool is
     token_amount += 1; // In case of rounding errors - make it unfavorable for the "attacker"
     require(token_amount <= max_burn_amount, "Slippage screwed you");
 
-    checkPriceDiff(); // Check price diff before burning LP tokens
+    if (!skipPriceDiff) checkPriceDiff(); // Check price diff before burning LP tokens
 
     IStableSwapLP(token).burnFrom(msg.sender, token_amount); // dev: insufficient funds
 
@@ -684,7 +686,7 @@ contract StableSwapPool is
 
     balances[i] -= (dy + (dy_fee * admin_fee) / FEE_DENOMINATOR);
 
-    checkPriceDiff(); // Check price diff before burning LP tokens
+    if (!skipPriceDiff) checkPriceDiff(); // Check price diff before burning LP tokens
 
     IStableSwapLP(token).burnFrom(msg.sender, _token_amount); // dev: insufficient funds
     transfer_out(coins[i], dy);
@@ -826,6 +828,13 @@ contract StableSwapPool is
     price0DiffThreshold = _price0DiffThreshold;
     price1DiffThreshold = _price1DiffThreshold;
     emit ChangePriceDiffThreshold(_price0DiffThreshold, _price1DiffThreshold);
+  }
+
+  /// @dev toggle skipPriceDiff flag to skip oracle price diff check in exchange/liquidity operations
+  function setSkipPriceDiff(bool _skipPriceDiff) external onlyRole(MANAGER) {
+    require(_skipPriceDiff != skipPriceDiff, "No change");
+    skipPriceDiff = _skipPriceDiff;
+    emit SetSkipPriceDiff(_skipPriceDiff);
   }
 
   /// @dev change oracle address
