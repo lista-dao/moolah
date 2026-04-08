@@ -77,6 +77,6 @@ contract CreateMarketWithConfigDeploy is DeployBase, Config {
       vm.setEnv(lltvNames[i], vm.toString(lltvs[i]));
     }
 
-    _loadConfig("./config/markets_20260317.toml", true);
+    _loadConfig("./config/markets_20260408.toml", true);
   }
 }
