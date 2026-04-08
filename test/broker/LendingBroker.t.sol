@@ -1230,13 +1230,13 @@ contract LendingBrokerTest is Test {
   // -----------------------------
 
   function test_borrowZeroAmount_Reverts() public {
-    vm.expectRevert(bytes("broker/zero-amount"));
+    vm.expectRevert(LendingBroker.ZeroAmount.selector);
     vm.prank(borrower);
     broker.borrow(0);
   }
 
   function test_borrowFixedTermNotFound_Reverts() public {
-    vm.expectRevert(bytes("broker/term-not-found"));
+    vm.expectRevert(LendingBroker.TermNotFound.selector);
     vm.prank(borrower);
     broker.borrow(100 ether, 999);
   }
@@ -1250,7 +1250,7 @@ contract LendingBrokerTest is Test {
   function test_setBorrowPaused_sameValue_reverts() public {
     vm.prank(MANAGER);
     broker.setBorrowPaused(true);
-    vm.expectRevert(bytes("broker/same-value-provided"));
+    vm.expectRevert(LendingBroker.SameValueProvided.selector);
     vm.prank(MANAGER);
     broker.setBorrowPaused(true);
   }
@@ -1259,7 +1259,7 @@ contract LendingBrokerTest is Test {
     vm.prank(MANAGER);
     broker.setBorrowPaused(true);
 
-    vm.expectRevert(bytes("Broker/borrow-paused"));
+    vm.expectRevert(LendingBroker.BorrowIsPaused.selector);
     vm.prank(borrower);
     broker.borrow(1 ether);
   }
@@ -1271,7 +1271,7 @@ contract LendingBrokerTest is Test {
     vm.prank(MANAGER);
     broker.setBorrowPaused(true);
 
-    vm.expectRevert(bytes("Broker/borrow-paused"));
+    vm.expectRevert(LendingBroker.BorrowIsPaused.selector);
     vm.prank(borrower);
     broker.borrow(1 ether, 111);
   }
@@ -1305,7 +1305,7 @@ contract LendingBrokerTest is Test {
 
     vm.startPrank(borrower);
     broker.borrow(15 ether, 11);
-    vm.expectRevert(bytes("broker/exceed-max-fixed-positions"));
+    vm.expectRevert(LendingBroker.ExceedMaxFixedPositions.selector);
     broker.borrow(15 ether, 11);
     vm.stopPrank();
   }
@@ -1355,7 +1355,7 @@ contract LendingBrokerTest is Test {
   }
 
   function test_peekUnsupportedToken_Reverts() public {
-    vm.expectRevert(bytes("broker/unsupported-token"));
+    vm.expectRevert(LendingBroker.UnsupportedToken.selector);
     broker.peek(address(0xDEA), borrower);
   }
 
@@ -1367,13 +1367,13 @@ contract LendingBrokerTest is Test {
       abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
     );
     LendingBroker broker2 = LendingBroker(payable(address(bProxy2)));
-    vm.expectRevert(bytes("Broker/market-not-set"));
+    vm.expectRevert(LendingBroker.MarketNotSet.selector);
     vm.prank(borrower);
     broker2.borrow(1 ether);
   }
 
   function test_setMarketId_onlyOnce_reverts() public {
-    vm.expectRevert(bytes("broker/invalid-market"));
+    vm.expectRevert(LendingBroker.InvalidMarket.selector);
     vm.prank(MANAGER);
     broker.setMarketId(id);
   }
@@ -1474,15 +1474,15 @@ contract LendingBrokerTest is Test {
     FixedTermAndRate memory term2 = FixedTermAndRate({ termId: 1, duration: 0, apr: 105 * 1e25 });
     FixedTermAndRate memory term3 = FixedTermAndRate({ termId: 2, duration: 90 days, apr: 0 });
     // termId = 0
-    vm.expectRevert(bytes("broker/invalid-term-id"));
+    vm.expectRevert(LendingBroker.InvalidTermId.selector);
     vm.prank(BOT);
     broker.updateFixedTermAndRate(term1, false);
     // duration = 0
-    vm.expectRevert(bytes("broker/invalid-duration"));
+    vm.expectRevert(LendingBroker.InvalidDuration.selector);
     vm.prank(BOT);
     broker.updateFixedTermAndRate(term2, false);
     // apr < RATE_SCALE
-    vm.expectRevert(bytes("broker/invalid-apr"));
+    vm.expectRevert(LendingBroker.InvalidAPR.selector);
     vm.prank(BOT);
     broker.updateFixedTermAndRate(term3, false);
   }
@@ -1501,7 +1501,7 @@ contract LendingBrokerTest is Test {
     terms = broker.getFixedTerms();
     assertEq(terms.length, 0);
     // remove again -> revert
-    vm.expectRevert(bytes("broker/term-not-found"));
+    vm.expectRevert(LendingBroker.TermNotFound.selector);
     vm.prank(BOT);
     broker.updateFixedTermAndRate(term, true);
   }
@@ -1576,7 +1576,7 @@ contract LendingBrokerTest is Test {
 
   function test_setMaxFixedLoanPositions_sameValue_reverts() public {
     // default is 10 (from initialize)
-    vm.expectRevert(bytes("broker/same-value-provided"));
+    vm.expectRevert(LendingBroker.SameValueProvided.selector);
     vm.prank(MANAGER);
     broker.setMaxFixedLoanPositions(10);
   }
@@ -1648,7 +1648,7 @@ contract LendingBrokerTest is Test {
   }
 
   function test_emergencyWithdraw_revertsOnZeroAmount() public {
-    vm.expectRevert(bytes("broker/zero-amount"));
+    vm.expectRevert(LendingBroker.ZeroAmount.selector);
     vm.prank(MANAGER);
     broker.emergencyWithdraw(address(LISUSD), 0);
   }
@@ -1688,7 +1688,7 @@ contract LendingBrokerTest is Test {
 
     vm.deal(borrower, 1 ether);
     vm.prank(borrower);
-    vm.expectRevert("broker/native-not-supported");
+    vm.expectRevert(LendingBroker.NativeNotSupported.selector);
     broker.repay{ value: 1 ether }(1 ether, borrower);
   }
 

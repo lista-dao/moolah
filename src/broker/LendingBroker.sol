@@ -42,6 +42,34 @@ contract LendingBroker is
   using UtilsLib for uint256;
   using EnumerableSet for EnumerableSet.AddressSet;
 
+  // ------- Custom Errors -------
+  error ZeroAddressProvided();
+  error ZeroAmount();
+  error AmountZero();
+  error NativeNotSupported();
+  error ZeroAddress();
+  error NothingToRepay();
+  error ExceedMaxFixedPositions();
+  error NotLiquidationWhitelist();
+  error InvalidMarketId();
+  error InvalidUser();
+  error UnsupportedToken();
+  error ZeroPositions();
+  error InvalidBorrowedAmount();
+  error NativeTransferFailed();
+  error InvalidMarket();
+  error InvalidTermId();
+  error InvalidDuration();
+  error InvalidAPR();
+  error SameValueProvided();
+  error TransferFailed();
+  error TermNotFound();
+  error PositionNotFound();
+  error NotAuthorized();
+  error NotMoolah();
+  error MarketNotSet();
+  error BorrowIsPaused();
+
   // ------- Roles -------
   bytes32 public constant MANAGER = keccak256("MANAGER");
   bytes32 public constant PAUSER = keccak256("PAUSER");
@@ -92,17 +120,17 @@ contract LendingBroker is
 
   // ------- Modifiers -------
   modifier onlyMoolah() {
-    require(msg.sender == address(MOOLAH), "Broker/not-moolah");
+    if (msg.sender != address(MOOLAH)) revert NotMoolah();
     _;
   }
 
   modifier marketIdSet() {
-    require(Id.unwrap(MARKET_ID) != bytes32(0), "Broker/market-not-set");
+    if (Id.unwrap(MARKET_ID) == bytes32(0)) revert MarketNotSet();
     _;
   }
 
   modifier whenBorrowNotPaused() {
-    require(!borrowPaused, "Broker/borrow-paused");
+    if (borrowPaused) revert BorrowIsPaused();
     _;
   }
 
@@ -115,7 +143,7 @@ contract LendingBroker is
    */
   constructor(address moolah, address relayer, address oracle, address wbnb) {
     // zero address assert
-    require(moolah != address(0) && relayer != address(0) && oracle != address(0), "broker/zero-address-provided");
+    if (moolah == address(0) || relayer == address(0) || oracle == address(0)) revert ZeroAddressProvided();
     // set addresses
     MOOLAH = IMoolah(moolah);
     RELAYER = relayer;
@@ -142,15 +170,14 @@ contract LendingBroker is
     address _rateCalculator,
     uint256 _maxFixedLoanPositions
   ) public initializer {
-    require(
-      _admin != address(0) &&
-        _manager != address(0) &&
-        _bot != address(0) &&
-        _pauser != address(0) &&
-        _rateCalculator != address(0) &&
-        _maxFixedLoanPositions > 0,
-      "broker/zero-address-provided"
-    );
+    if (
+      _admin == address(0) ||
+      _manager == address(0) ||
+      _bot == address(0) ||
+      _pauser == address(0) ||
+      _rateCalculator == address(0) ||
+      _maxFixedLoanPositions == 0
+    ) revert ZeroAddressProvided();
 
     __AccessControlEnumerable_init();
     __Pausable_init();
@@ -174,7 +201,7 @@ contract LendingBroker is
    * @param amount The amount to borrow
    */
   function borrow(uint256 amount) external override marketIdSet whenNotPaused whenBorrowNotPaused nonReentrant {
-    require(amount > 0, "broker/zero-amount");
+    if (amount == 0) revert ZeroAmount();
     address user = msg.sender;
     // get updated rate
     uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
@@ -205,7 +232,7 @@ contract LendingBroker is
     uint256 amount,
     uint256 termId
   ) external override marketIdSet whenNotPaused whenBorrowNotPaused nonReentrant {
-    require(amount > 0, "broker/amount-zero");
+    if (amount == 0) revert AmountZero();
     address user = msg.sender;
     _borrowFixed(user, amount, termId);
     // transfer loan token to user (unwraps to native BNB if supported)
@@ -221,14 +248,14 @@ contract LendingBroker is
     bool isNative = msg.value > 0;
     address user = msg.sender;
     if (isNative) {
-      require(LOAN_TOKEN == WBNB, "broker/native-not-supported");
+      if (LOAN_TOKEN != WBNB) revert NativeNotSupported();
       amount = msg.value;
       IWBNB(WBNB).deposit{ value: amount }();
     } else {
       IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), amount);
     }
-    require(amount > 0, "broker/zero-amount");
-    require(onBehalf != address(0), "broker/zero-address");
+    if (amount == 0) revert ZeroAmount();
+    if (onBehalf == address(0)) revert ZeroAddress();
     // get user's dynamic position
     DynamicLoanPosition storage position = dynamicLoanPositions[onBehalf];
     // get updated rate
@@ -242,7 +269,7 @@ contract LendingBroker is
     uint256 amountLeft = amount - repayInterestAmt;
     uint256 repayPrincipalAmt = amountLeft > position.principal ? position.principal : amountLeft;
 
-    require(repayInterestAmt + repayPrincipalAmt > 0, "broker/nothing-to-repay");
+    if (repayInterestAmt + repayPrincipalAmt == 0) revert NothingToRepay();
 
     // record the actual repaid amount for event
     uint256 totalRepaid = 0;
@@ -305,14 +332,14 @@ contract LendingBroker is
     bool isNative = msg.value > 0;
     address user = msg.sender;
     if (isNative) {
-      require(LOAN_TOKEN == WBNB, "broker/native-not-supported");
+      if (LOAN_TOKEN != WBNB) revert NativeNotSupported();
       amount = msg.value;
       IWBNB(WBNB).deposit{ value: amount }();
     } else {
       IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), amount);
     }
-    require(amount > 0, "broker/zero-amount");
-    require(onBehalf != address(0), "broker/zero-address");
+    if (amount == 0) revert ZeroAmount();
+    if (onBehalf == address(0)) revert ZeroAddress();
 
     // fetch position (will revert if not found)
     FixedLoanPosition memory position = _getFixedPositionByPosId(onBehalf, posId);
@@ -405,10 +432,10 @@ contract LendingBroker is
     uint256 amount,
     uint256 termId
   ) external override marketIdSet whenBorrowNotPaused whenNotPaused nonReentrant {
-    require(amount > 0, "broker/zero-amount");
+    if (amount == 0) revert ZeroAmount();
     address user = msg.sender;
     DynamicLoanPosition storage position = dynamicLoanPositions[user];
-    require(fixedLoanPositions[user].length < maxFixedLoanPositions, "broker/exceed-max-fixed-positions");
+    if (fixedLoanPositions[user].length >= maxFixedLoanPositions) revert ExceedMaxFixedPositions();
     // cap amount by principal
     amount = UtilsLib.min(amount, position.principal);
     // accrue current rate so normalized debt reflects the latest interest
@@ -474,9 +501,9 @@ contract LendingBroker is
     address user,
     address receiver
   ) external marketIdSet whenNotPaused whenBorrowNotPaused nonReentrant {
-    require(amount > 0, "broker/amount-zero");
-    require(receiver != address(0), "broker/zero-address");
-    require(MOOLAH.isAuthorized(user, msg.sender), "broker/not-authorized");
+    if (amount == 0) revert AmountZero();
+    if (receiver == address(0)) revert ZeroAddress();
+    if (!MOOLAH.isAuthorized(user, msg.sender)) revert NotAuthorized();
     _borrowFixed(user, amount, termId);
     // Moolah requires receiver == broker when a broker is registered;
     // tokens land here via _borrowFixed, then forwarded to receiver (always ERC20, never native)
@@ -509,10 +536,10 @@ contract LendingBroker is
     bytes calldata data
   ) external override marketIdSet whenNotPaused nonReentrant {
     Id id = marketParams.id();
-    require(_checkLiquidationWhiteList(msg.sender), "broker/not-liquidation-whitelist");
-    require(Id.unwrap(id) == Id.unwrap(MARKET_ID), "broker/invalid-market-id");
-    require(UtilsLib.exactlyOneZero(seizedAssets, repaidShares), "broker/invalid-liquidation-params");
-    require(borrower != address(0), "broker/invalid-user");
+    if (!_checkLiquidationWhiteList(msg.sender)) revert NotLiquidationWhitelist();
+    if (Id.unwrap(id) != Id.unwrap(MARKET_ID)) revert InvalidMarketId();
+    if (!UtilsLib.exactlyOneZero(seizedAssets, repaidShares)) revert InvalidMarketId();
+    if (borrower == address(0)) revert InvalidUser();
 
     // [1] init liquidation context for onMoolahLiquidate() Callback
     uint256 collateralTokenPrebalance = IERC20(COLLATERAL_TOKEN).balanceOf(address(this));
@@ -709,8 +736,8 @@ contract LendingBroker is
    * @param user The address of the user
    */
   function peek(address token, address user) public view override marketIdSet returns (uint256 price) {
-    require(user != address(0), "broker/zero-address");
-    require(token == COLLATERAL_TOKEN || token == LOAN_TOKEN, "broker/unsupported-token");
+    if (user == address(0)) revert ZeroAddress();
+    if (token != COLLATERAL_TOKEN && token != LOAN_TOKEN) revert UnsupportedToken();
     price = BrokerMath.peek(token, user, address(MOOLAH), rateCalculator, address(ORACLE));
   }
 
@@ -758,8 +785,8 @@ contract LendingBroker is
     uint256 amount,
     uint256 posId
   ) external view returns (uint256 interestRepaid, uint256 penalty, uint256 principalRepaid) {
-    require(amount > 0, "broker/zero-amount");
-    require(user != address(0), "broker/zero-address");
+    if (amount == 0) revert ZeroAmount();
+    if (user == address(0)) revert ZeroAddress();
     FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
     (interestRepaid, penalty, principalRepaid) = BrokerMath.previewRepayFixedLoanPosition(position, amount);
   }
@@ -792,7 +819,7 @@ contract LendingBroker is
     address user,
     uint256[] calldata posIds
   ) external override whenNotPaused nonReentrant marketIdSet onlyRole(BOT) {
-    require(posIds.length > 0, "Broker/zero-positions");
+    if (posIds.length == 0) revert ZeroPositions();
     // update rate
     uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
     // get refinanced positions and updated dynamic position
@@ -822,7 +849,7 @@ contract LendingBroker is
    * @param termId The fixed-term product ID
    */
   function _borrowFixed(address user, uint256 amount, uint256 termId) private {
-    require(fixedLoanPositions[user].length < maxFixedLoanPositions, "broker/exceed-max-fixed-positions");
+    if (fixedLoanPositions[user].length >= maxFixedLoanPositions) revert ExceedMaxFixedPositions();
     FixedTermAndRate memory term = _getTermById(termId);
     uint256 start = block.timestamp;
     uint256 end = block.timestamp + term.duration;
@@ -865,7 +892,7 @@ contract LendingBroker is
         return fixedTerms[i];
       }
     }
-    revert("broker/term-not-found");
+    revert TermNotFound();
   }
 
   /**
@@ -880,7 +907,7 @@ contract LendingBroker is
     // borrow from moolah with zero interest
     MOOLAH.borrow(marketParams, amount, 0, onBehalf, address(this));
     // should increase the loan balance same as borrowed amount
-    require(IERC20(LOAN_TOKEN).balanceOf(address(this)) - preBalance == amount, "broker/invalid-borrowed-amount");
+    if (IERC20(LOAN_TOKEN).balanceOf(address(this)) - preBalance != amount) revert InvalidBorrowedAmount();
   }
 
   /**
@@ -914,7 +941,7 @@ contract LendingBroker is
         return;
       }
     }
-    revert("broker/position-not-found");
+    revert PositionNotFound();
   }
 
   /**
@@ -929,7 +956,7 @@ contract LendingBroker is
         return positions[i];
       }
     }
-    revert("broker/position-not-found");
+    revert PositionNotFound();
   }
 
   /**
@@ -945,7 +972,7 @@ contract LendingBroker is
         return;
       }
     }
-    revert("broker/position-not-found");
+    revert PositionNotFound();
   }
 
   /**
@@ -985,7 +1012,7 @@ contract LendingBroker is
   function _unwrapAndSend(address payable recipient, uint256 amount) internal {
     IWBNB(WBNB).withdraw(amount);
     (bool ok, ) = recipient.call{ value: amount }("");
-    require(ok, "broker/native-transfer-failed");
+    if (!ok) revert NativeTransferFailed();
   }
 
   /**
@@ -1024,7 +1051,7 @@ contract LendingBroker is
    */
   function setMarketId(Id marketId) external onlyRole(MANAGER) {
     // can only be set once
-    require(Id.unwrap(MARKET_ID) == bytes32(0), "broker/invalid-market");
+    if (Id.unwrap(MARKET_ID) != bytes32(0)) revert InvalidMarket();
     MARKET_ID = marketId;
     MarketParams memory _marketParams = MOOLAH.idToMarketParams(marketId);
     LOAN_TOKEN = _marketParams.loanToken;
@@ -1044,9 +1071,9 @@ contract LendingBroker is
    * @param removeTerm True to remove the term, false to add or update
    */
   function updateFixedTermAndRate(FixedTermAndRate calldata term, bool removeTerm) external onlyRole(BOT) {
-    require(term.termId > 0, "broker/invalid-term-id");
-    require(term.duration > 0, "broker/invalid-duration");
-    require(term.apr >= MIN_FIXED_TERM_APR && term.apr <= MAX_FIXED_TERM_APR, "broker/invalid-apr");
+    if (term.termId == 0) revert InvalidTermId();
+    if (term.duration == 0) revert InvalidDuration();
+    if (term.apr < MIN_FIXED_TERM_APR || term.apr > MAX_FIXED_TERM_APR) revert InvalidAPR();
     // update term if it exists
     for (uint256 i = 0; i < fixedTerms.length; i++) {
       // term found
@@ -1067,7 +1094,7 @@ contract LendingBroker is
     if (!removeTerm) {
       fixedTerms.push(term);
     } else {
-      revert("broker/term-not-found");
+      revert TermNotFound();
     }
   }
 
@@ -1076,7 +1103,7 @@ contract LendingBroker is
    * @param maxPositions The new maximum number of fixed loan positions
    */
   function setMaxFixedLoanPositions(uint256 maxPositions) external onlyRole(MANAGER) {
-    require(maxFixedLoanPositions != maxPositions, "broker/same-value-provided");
+    if (maxFixedLoanPositions == maxPositions) revert SameValueProvided();
     emit MaxFixedLoanPositionsUpdated(maxFixedLoanPositions, maxPositions);
     maxFixedLoanPositions = maxPositions;
   }
@@ -1086,7 +1113,7 @@ contract LendingBroker is
    * @param paused True to pause, false to unpause
    */
   function setBorrowPaused(bool paused) external onlyRole(MANAGER) {
-    require(borrowPaused != paused, "broker/same-value-provided");
+    if (borrowPaused == paused) revert SameValueProvided();
     borrowPaused = paused;
     emit BorrowPaused(paused);
   }
@@ -1110,7 +1137,7 @@ contract LendingBroker is
    * @param account The address to add
    */
   function toggleLiquidationWhitelist(address account, bool isAddition) public onlyRole(MANAGER) {
-    require(isAddition != liquidationWhitelist.contains(account), "broker/same-value-provided");
+    if (isAddition == liquidationWhitelist.contains(account)) revert SameValueProvided();
     if (isAddition) {
       liquidationWhitelist.add(account);
       emit AddedLiquidationWhitelist(account);
@@ -1126,11 +1153,11 @@ contract LendingBroker is
    * @param amount The amount to withdraw
    */
   function emergencyWithdraw(address token, uint256 amount) external onlyRole(MANAGER) {
-    require(amount > 0, "broker/zero-amount");
+    if (amount == 0) revert ZeroAmount();
 
     if (token == address(0)) {
       (bool success, ) = msg.sender.call{ value: amount }("");
-      require(success, "broker/transfer-failed");
+      if (!success) revert TransferFailed();
     } else {
       IERC20(token).safeTransfer(msg.sender, amount);
     }
