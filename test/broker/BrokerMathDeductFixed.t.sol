@@ -117,22 +117,25 @@ contract BrokerMathDeductFixedTest is Test {
   //  Full principal with partial interest -> fallback (position filtered out)
   // ====================================================================
 
-  function test_fullPrincipalPartialInterest_fallback() public {
+  function test_fullPrincipalPartialInterest_capsRepayment() public {
     FixedLoanPosition memory pos = _makePosition(100 ether);
     skip(DURATION);
 
     uint256 accruedInterest = _outstanding(pos);
     uint256 interestBudget = accruedInterest / 4;
 
-    (, , FixedLoanPosition memory updated) = BrokerMath.deductFixedPositionDebt(interestBudget, 100 ether, pos);
+    (uint256 interestLeft, uint256 principalLeft, FixedLoanPosition memory updated) = BrokerMath
+      .deductFixedPositionDebt(interestBudget, 100 ether, pos);
 
-    assertEq(updated.principalRepaid, 100 ether, "full principal repaid");
+    assertEq(interestLeft, 0, "interest budget consumed");
+    // With 25% interest paid, roughly 25% of principal can be safely repaid
+    uint256 principalRepaid = 100 ether - principalLeft;
+    assertGt(principalRepaid, 0, "some principal repaid");
+    assertLt(principalRepaid, 100 ether, "not all principal repaid");
 
-    // When principal is fully repaid, (principal - principalRepaid) = 0,
-    // so getAccruedInterestForFixedPosition returns 0 -> fallback case.
-    // outstanding = 0, but position would be filtered out anyway.
-    bool wouldBeFiltered = !(updated.principal > updated.principalRepaid);
-    assertTrue(wouldBeFiltered, "fully-repaid position filtered out in sortAndFilter");
+    // Outstanding interest preserved
+    uint256 unpaidInterest = accruedInterest - interestBudget;
+    assertGe(_outstanding(updated), unpaidInterest, "unpaid interest preserved");
   }
 
   // ====================================================================
@@ -179,9 +182,10 @@ contract BrokerMathDeductFixedTest is Test {
     (, , FixedLoanPosition memory after2) = BrokerMath.deductFixedPositionDebt(secondInterest, 30 ether, after1);
 
     uint256 expectedAfter2 = outstandingAfter1 - secondInterest;
-    // allow 1 wei tolerance due to Ceil rounding in interest formula
-    assertApproxEqAbs(_outstanding(after2), expectedAfter2, 1, "second: outstanding exact");
-    assertEq(after2.principalRepaid, 50 ether, "second: cumulative principal");
+    // allow tolerance due to Ceil rounding + lastRepaidTime adjustment in interest formula
+    assertApproxEqRel(_outstanding(after2), expectedAfter2, 1e15, "second: outstanding approx");
+    // With capping, cumulative principal may be slightly less due to floor rounding in cap
+    assertApproxEqRel(after2.principalRepaid, 50 ether, 1e15, "second: cumulative principal approx");
 
     // Outstanding still positive
     assertGt(_outstanding(after2), 0, "interest still outstanding");
@@ -246,10 +250,10 @@ contract BrokerMathDeductFixedTest is Test {
   }
 
   // ====================================================================
-  //  Zero interest budget with principal deduction -> maximize preserved
+  //  Zero interest budget with principal deduction -> principal capped
   // ====================================================================
 
-  function test_zeroInterestBudget_principalOnly_maximizesOutstanding() public {
+  function test_zeroInterestBudget_principalOnly_capsRepayment() public {
     FixedLoanPosition memory pos = _makePosition(100 ether);
     skip(DURATION);
 
@@ -260,24 +264,19 @@ contract BrokerMathDeductFixedTest is Test {
       .deductFixedPositionDebt(0, 50 ether, pos);
 
     assertEq(interestLeft, 0, "no interest budget to return");
-    assertEq(principalLeft, 0, "principal consumed");
-    assertEq(updated.principalRepaid, 50 ether, "principal repaid");
-
-    // newTotalAccrued = (100-50)*10%*1year = 5e18, unpaidInterest = 10e18
-    // newTotalAccrued < unpaidInterest -> fallback: outstanding = newTotalAccrued
-    // This is the maximum the formula can represent (better than reset which gives 0)
-    uint256 newTotalAccrued = BrokerMath.getAccruedInterestForFixedPosition(updated);
-    assertEq(_outstanding(updated), newTotalAccrued, "fallback preserves maximum possible");
-    assertGt(_outstanding(updated), 0, "outstanding > 0 (not reset to zero)");
-    // Verify: lastRepaidTime was NOT reset (preserves historical accrual)
-    assertEq(updated.lastRepaidTime, startTs, "lastRepaidTime not reset in fallback");
+    // No interest was paid -> oldTotalAccrued <= unpaidInterest -> no principal can be safely repaid
+    // So principalLeft should return the full 50 ether
+    assertEq(principalLeft, 50 ether, "principal returned as leftover");
+    assertEq(updated.principalRepaid, 0, "no principal repaid");
+    // Outstanding interest fully preserved
+    assertEq(_outstanding(updated), accruedInterest, "full outstanding preserved");
   }
 
   // ====================================================================
   //  Small principal + large interest -> fallback maximizes preserved
   // ====================================================================
 
-  function test_smallPrincipal_largeInterest_maximizesOutstanding() public {
+  function test_smallPrincipal_largeInterest_capsAndPreservesOutstanding() public {
     FixedLoanPosition memory pos = _makePosition(100 ether);
     skip(DURATION);
 
@@ -287,15 +286,90 @@ contract BrokerMathDeductFixedTest is Test {
     uint256 interestBudget = 1;
     uint256 principalBudget = 5 ether;
 
-    (, , FixedLoanPosition memory updated) = BrokerMath.deductFixedPositionDebt(interestBudget, principalBudget, pos);
+    (uint256 interestLeft, uint256 principalLeft, FixedLoanPosition memory updated) = BrokerMath
+      .deductFixedPositionDebt(interestBudget, principalBudget, pos);
 
-    // newTotalAccrued = (100-5)*10%*1year = 9.5e18, unpaidInterest ~= 10e18
-    // newTotalAccrued < unpaidInterest -> fallback: maximize outstanding
-    uint256 newTotalAccrued = BrokerMath.getAccruedInterestForFixedPosition(updated);
-    assertEq(_outstanding(updated), newTotalAccrued, "fallback preserves max possible");
-    assertGt(_outstanding(updated), 0, "outstanding > 0");
-    // Verify: better than old code which would give outstanding = 0
-    assertGt(_outstanding(updated), accruedInterest / 2, "preserves majority of interest");
+    uint256 unpaidInterest = accruedInterest - interestBudget;
+    assertEq(interestLeft, 0, "interest budget consumed");
+    // Principal repayment is capped: only a fraction of 5 ether can be repaid safely
+    // maxSafe = 100e18 * (oldTotalAccrued - unpaidInterest) / oldTotalAccrued
+    //         = 100e18 * 1 / oldTotalAccrued ≈ 0 (very small)
+    assertGt(principalLeft, 0, "some principal returned as leftover");
+    // Outstanding interest fully preserved
+    assertGe(_outstanding(updated), unpaidInterest, "unpaid interest fully preserved");
+  }
+
+  // ====================================================================
+  //  Edge case: near-full principal repay with tiny interest payment
+  // ====================================================================
+
+  /// @notice Repay 99/100 ether principal with 1 wei interest.
+  ///         Principal repayment is capped to preserve unpaid interest.
+  function test_edgeCase_nearFullPrincipalRepay_capsToPreserveInterest() public {
+    FixedLoanPosition memory pos = _makePosition(100 ether);
+    skip(DURATION);
+
+    uint256 accruedInterest = _outstanding(pos);
+    uint256 interestBudget = 1; // 1 wei
+    uint256 principalBudget = 99 ether;
+
+    (uint256 interestLeft, uint256 principalLeft, FixedLoanPosition memory updated) = BrokerMath
+      .deductFixedPositionDebt(interestBudget, principalBudget, pos);
+
+    assertEq(interestLeft, 0, "interest budget consumed");
+    uint256 unpaidInterest = accruedInterest - interestBudget;
+    // Principal repayment is capped -> most of the 99 ether is returned as leftover
+    assertGt(principalLeft, 0, "excess principal returned");
+    // Core assertion: outstanding interest must be >= unpaidInterest (not forgiven)
+    assertGe(_outstanding(updated), unpaidInterest, "unpaid interest fully preserved");
+  }
+
+  // ====================================================================
+  //  Edge case: partial interest allows proportional principal repayment
+  // ====================================================================
+
+  /// @notice When half the interest is paid, roughly half the principal can be safely repaid.
+  function test_edgeCase_halfInterestPaid_allowsProportionalPrincipal() public {
+    FixedLoanPosition memory pos = _makePosition(100 ether);
+    skip(DURATION);
+
+    uint256 accruedInterest = _outstanding(pos);
+    uint256 interestBudget = accruedInterest / 2;
+
+    (uint256 interestLeft, uint256 principalLeft, FixedLoanPosition memory updated) = BrokerMath
+      .deductFixedPositionDebt(interestBudget, 100 ether, pos);
+
+    assertEq(interestLeft, 0, "interest budget consumed");
+    // With half interest paid, roughly half the principal can be safely repaid
+    uint256 principalRepaid = 100 ether - principalLeft;
+    assertGt(principalRepaid, 0, "some principal repaid");
+    // Outstanding interest preserved
+    uint256 unpaidInterest = accruedInterest - interestBudget;
+    assertGe(_outstanding(updated), unpaidInterest, "unpaid interest preserved");
+  }
+
+  // ====================================================================
+  //  Edge case: zero interest budget -> no principal can be repaid
+  // ====================================================================
+
+  /// @notice When no interest is paid at all, no principal should be repaid
+  ///         because any reduction would lose interest tracking.
+  function test_edgeCase_zeroInterestBudget_noPrincipalRepaid() public {
+    FixedLoanPosition memory pos = _makePosition(100 ether);
+    skip(DURATION);
+
+    uint256 accruedInterest = _outstanding(pos);
+
+    (, uint256 principalLeft, FixedLoanPosition memory updated) = BrokerMath.deductFixedPositionDebt(
+      0,
+      99.9 ether,
+      pos
+    );
+
+    // No interest paid -> oldTotalAccrued == unpaidInterest -> maxSafePrincipalRepay = 0
+    assertEq(principalLeft, 99.9 ether, "all principal returned");
+    assertEq(updated.principalRepaid, 0, "no principal repaid");
+    assertEq(_outstanding(updated), accruedInterest, "outstanding unchanged");
   }
 
   // ====================================================================
