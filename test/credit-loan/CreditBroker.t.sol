@@ -12,10 +12,10 @@ import { OracleMock } from "../../src/moolah/mocks/OracleMock.sol";
 import { IrmMockZero } from "../../src/moolah/mocks/IrmMock.sol";
 import { ERC20Mock } from "../../src/moolah/mocks/ERC20Mock.sol";
 
-import { CreditBroker } from "../../src/broker/CreditBroker.sol";
-import { CreditBrokerInterestRelayer } from "../../src/broker/CreditBrokerInterestRelayer.sol";
-import { ICreditBroker, FixedLoanPosition, FixedTermAndRate, GraceConfig, FixedTermType } from "../../src/broker/interfaces/ICreditBroker.sol";
-import { CreditBrokerMath, RATE_SCALE } from "../../src/broker/libraries/CreditBrokerMath.sol";
+import { CreditBroker } from "../../src/credit-loan/CreditBroker.sol";
+import { CreditBrokerInterestRelayer } from "../../src/credit-loan/CreditBrokerInterestRelayer.sol";
+import { ICreditBroker, FixedLoanPosition, FixedTermAndRate, GraceConfig, FixedTermType } from "../../src/credit-loan/interfaces/ICreditBroker.sol";
+import { CreditBrokerMath, RATE_SCALE } from "../../src/credit-loan/libraries/CreditBrokerMath.sol";
 import { MoolahVault } from "../../src/moolah-vault/MoolahVault.sol";
 import { MarketAllocation } from "../../src/moolah-vault/interfaces/IMoolahVault.sol";
 
@@ -25,8 +25,8 @@ import { MathLib, WAD } from "moolah/libraries/MathLib.sol";
 import { UtilsLib } from "moolah/libraries/UtilsLib.sol";
 import { ORACLE_PRICE_SCALE, LIQUIDATION_CURSOR, MAX_LIQUIDATION_INCENTIVE_FACTOR } from "moolah/libraries/ConstantsLib.sol";
 
-import { CreditToken } from "../../src/utils/CreditToken.sol";
-import { CreditBrokerInfo } from "../../src/broker/CreditBrokerInfo.sol";
+import { CreditToken } from "../../src/credit-loan/CreditToken.sol";
+import { CreditBrokerInfo } from "../../src/credit-loan/CreditBrokerInfo.sol";
 import { Merkle } from "murky/src/Merkle.sol";
 
 contract CreditBrokerTest is Test {

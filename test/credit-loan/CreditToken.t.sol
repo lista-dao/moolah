@@ -13,7 +13,7 @@ import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { ErrorsLib } from "moolah/libraries/ErrorsLib.sol";
 import { MathLib } from "moolah/libraries/MathLib.sol";
 
-import { CreditToken } from "../../src/utils/CreditToken.sol";
+import { CreditToken } from "../../src/credit-loan/CreditToken.sol";
 
 import { Moolah } from "../../src/moolah/Moolah.sol";
 import { IOracle } from "../../src/moolah/interfaces/IOracle.sol";

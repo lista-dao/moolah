@@ -4,7 +4,7 @@ pragma solidity 0.8.34;
 import "forge-std/Script.sol";
 import { DeployBase } from "../DeployBase.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import { CreditBrokerInterestRelayer } from "../../src/broker/CreditBrokerInterestRelayer.sol";
+import { CreditBrokerInterestRelayer } from "../../src/credit-loan/CreditBrokerInterestRelayer.sol";
 
 contract DeployBrokerInterestRelayer is DeployBase {
   address vault = 0x4E82Fa869F8D05c8F94900d4652Fdb82f3C7A004;

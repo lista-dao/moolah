@@ -4,7 +4,7 @@ pragma solidity 0.8.34;
 import "forge-std/Script.sol";
 import { DeployBase } from "../DeployBase.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import { CreditBrokerInfo } from "../../src/broker/CreditBrokerInfo.sol";
+import { CreditBrokerInfo } from "../../src/credit-loan/CreditBrokerInfo.sol";
 
 contract DeployCreditBrokerInfo is DeployBase {
   function run() public {
