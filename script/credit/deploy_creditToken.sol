@@ -4,7 +4,7 @@ import "forge-std/Script.sol";
 import { DeployBase } from "../DeployBase.sol";
 
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import { CreditToken } from "src/utils/CreditToken.sol";
+import { CreditToken } from "src/credit-loan/CreditToken.sol";
 
 contract CreditTokenDeploy is DeployBase {
   address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
