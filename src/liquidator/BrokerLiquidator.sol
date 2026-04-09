@@ -81,11 +81,16 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
 
   receive() external payable {}
 
-  /// @dev withdraws ERC20 tokens.
-  /// @param token The address of the token.
+  /// @dev withdraws ERC20 tokens or native BNB from the contract.
+  /// @param token The address of the token. Use BNB_ADDRESS (0xEeee...EEeE) for native BNB.
   /// @param amount The amount to withdraw.
-  function withdrawERC20(address token, uint256 amount) external onlyRole(MANAGER) {
-    SafeTransferLib.safeTransfer(token, msg.sender, amount);
+  function withdraw(address token, uint256 amount) external onlyRole(MANAGER) {
+    if (token == BNB_ADDRESS) {
+      (bool success, ) = msg.sender.call{ value: amount }("");
+      require(success, "broker-liquidator/native-transfer-failed");
+    } else {
+      SafeTransferLib.safeTransfer(token, msg.sender, amount);
+    }
   }
 
   /// @dev sets the token whitelist.
@@ -452,6 +457,8 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   /// @dev redeems smart collateral LP tokens.
   /// @param smartProvider The address of the smart collateral provider.
   /// @param lpAmount The amount of LP collateral tokens to redeem.
+  /// @notice Redeems LP collateral that is already held by this contract (seized during a prior liquidation step).
+  ///         The SmartProvider burns LP tokens from msg.sender (this contract), so the LP must already be in custody.
   /// @param minToken0Amt The minimum amount of token0 to receive.
   /// @param minToken1Amt The minimum amount of token1 to receive.
   /// @return The amount of token0 and token1 redeemed.

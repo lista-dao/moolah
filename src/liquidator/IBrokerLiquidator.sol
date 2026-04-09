@@ -18,7 +18,7 @@ interface IBrokerLiquidator {
     bytes swapToken0Data;
     bytes swapToken1Data;
   }
-  function withdrawERC20(address token, uint256 amount) external;
+  function withdraw(address token, uint256 amount) external;
   function flashLiquidate(
     bytes32 id,
     address borrower,
