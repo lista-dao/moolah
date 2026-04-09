@@ -22,7 +22,7 @@ import { UtilsLib } from "../moolah/libraries/UtilsLib.sol";
 import { MoolahOperateLib } from "./libraries/MoolahOperateLib.sol";
 import { CreditBrokerLib } from "./libraries/CreditBrokerLib.sol";
 
-import { ICreditToken } from "../utils/interfaces/ICreditToken.sol";
+import { ICreditToken } from "./interfaces/ICreditToken.sol";
 
 /// @title Credit Loan Broker for Lista Lending
 /// @author Lista DAO

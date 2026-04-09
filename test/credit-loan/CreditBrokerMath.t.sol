@@ -1,8 +1,8 @@
 pragma solidity ^0.8.34;
 
 import "forge-std/Test.sol";
-import { CreditBrokerMath, RATE_SCALE } from "../../src/broker/libraries/CreditBrokerMath.sol";
-import { ICreditBroker, FixedLoanPosition, FixedTermAndRate, GraceConfig, FixedTermType } from "../../src/broker/interfaces/ICreditBroker.sol";
+import { CreditBrokerMath, RATE_SCALE } from "../../src/credit-loan/libraries/CreditBrokerMath.sol";
+import { ICreditBroker, FixedLoanPosition, FixedTermAndRate, GraceConfig, FixedTermType } from "../../src/credit-loan/interfaces/ICreditBroker.sol";
 
 contract CreditBrokerMathTest is Test {
   FixedLoanPosition position;
