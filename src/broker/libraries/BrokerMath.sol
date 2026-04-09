@@ -563,8 +563,39 @@ library BrokerMath {
           p.interestRepaid = newTotalAccrued - unpaidInterest;
         } else {
           // edge case: most principal repaid, formula can't represent full outstanding
-          // preserve maximum possible: outstanding = newTotalAccrued (don't reset lastRepaidTime)
-          p.interestRepaid = 0;
+          // with current (lastRepaidTime, principalRepaid). Fix by moving lastRepaidTime
+          // backward so a longer time window lets the smaller principal encode unpaidInterest.
+          uint256 newRemainingPrincipal = p.principal - p.principalRepaid;
+          uint256 aprPerSec = _aprPerSecond(p.apr);
+          if (newRemainingPrincipal > 0 && aprPerSec > 0) {
+            // requiredTime such that: ceil(newRemainingPrincipal * aprPerSec * requiredTime / RATE_SCALE) >= unpaidInterest
+            // => requiredTime = floor(unpaidInterest * RATE_SCALE / (newRemainingPrincipal * aprPerSec))
+            //    then verify with ceiling math; bump +1 if needed.
+            uint256 requiredTime = Math.mulDiv(unpaidInterest, RATE_SCALE, newRemainingPrincipal * aprPerSec);
+            // verify: recompute with ceiling rounding (matches getAccruedInterestForFixedPosition)
+            uint256 recomputed = Math.mulDiv(
+              newRemainingPrincipal,
+              aprPerSec * requiredTime,
+              RATE_SCALE,
+              Math.Rounding.Ceil
+            );
+            if (recomputed < unpaidInterest) {
+              requiredTime += 1;
+            }
+            uint256 cap = block.timestamp > p.end ? p.end : block.timestamp;
+            // only apply if requiredTime fits within valid range
+            if (requiredTime <= cap) {
+              p.lastRepaidTime = cap - requiredTime;
+              p.interestRepaid = 0;
+            } else {
+              // requiredTime exceeds cap: set lastRepaidTime to 0 (start of epoch) to maximize window
+              p.lastRepaidTime = 0;
+              p.interestRepaid = 0;
+            }
+          } else {
+            // zero principal or zero apr: no interest can accrue, forgive residual
+            p.interestRepaid = 0;
+          }
         }
       }
     }
