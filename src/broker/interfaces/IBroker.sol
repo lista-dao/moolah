@@ -106,6 +106,8 @@ interface IBroker is IBrokerBase {
   event Liquidated(address indexed user, uint256 principalCleared, uint256 interestCleared);
   event MarketIdSet(Id marketId);
   event BorrowPaused(bool paused);
+  event RelayerSet(address indexed relayer);
+  event OracleSet(address indexed oracle);
   event AddedLiquidationWhitelist(address indexed account);
   event RemovedLiquidationWhitelist(address indexed account);
   event FixedPositionRefinanced(

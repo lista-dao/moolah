@@ -1018,6 +1018,7 @@ contract LendingBroker is
     require(_relayer != address(0), "broker/zero-address-provided");
     require(RELAYER == address(0), "broker/already-set");
     RELAYER = _relayer;
+    emit RelayerSet(_relayer);
   }
 
   /**
@@ -1028,6 +1029,7 @@ contract LendingBroker is
     require(_oracle != address(0), "broker/zero-address-provided");
     require(address(ORACLE) == address(0), "broker/already-set");
     ORACLE = IOracle(_oracle);
+    emit OracleSet(_oracle);
   }
 
   /**
