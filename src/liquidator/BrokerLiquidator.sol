@@ -36,6 +36,8 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   mapping(address => bytes32) public brokerToMarketId;
   // @dev smart collateral provider whitelist
   mapping(address => bool) public smartProviders;
+  /// @dev transient storage for repaidAssets from onMoolahLiquidate callback
+  uint256 internal _lastRepaidAssets;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // manager role
@@ -306,6 +308,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     address lpToken = ISmartProvider(smartProvider).dexLP();
 
     uint256 collBalanceBefore = IERC20(params.collateralToken).balanceOf(address(this));
+    uint256 loanBalanceBefore = IERC20(params.loanToken).balanceOf(address(this));
     (uint256 minAmount0, uint256 minAmount1) = abi.decode(payload, (uint256, uint256));
     IBrokerBase(broker).liquidate(
       params,
@@ -333,6 +336,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
       )
     );
     uint256 collAmount = IERC20(params.collateralToken).balanceOf(address(this)) - collBalanceBefore;
+    uint256 repaidAssets = loanBalanceBefore - IERC20(params.loanToken).balanceOf(address(this));
     require(collAmount > 0, "No collateral seized");
 
     (uint256 amount0, uint256 amount1) = ISmartProvider(smartProvider).redeemLpCollateral(
@@ -342,7 +346,8 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     );
 
     emit SmartLiquidation(id, lpToken, params.collateralToken, collAmount, minAmount0, minAmount1, amount0, amount1);
-    return (seizedAssets, 0);
+    _lastRepaidAssets = 0;
+    return (collAmount, repaidAssets);
   }
 
   /// @dev flash liquidates a position with smart collateral.
@@ -395,7 +400,9 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     );
 
     IBrokerBase(broker).liquidate(params, borrower, seizedAssets, 0, abi.encode(callback));
-    return (seizedAssets, 0);
+    uint256 repaidAssets = _lastRepaidAssets;
+    _lastRepaidAssets = 0;
+    return (seizedAssets, repaidAssets);
   }
 
   /// @dev the function will be called by the the Broker, when Broker's onMoolahLiquidate is called by Moolah.
@@ -451,6 +458,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
       if (token1 != BNB_ADDRESS) SafeTransferLib.safeApprove(token1, arb.token1Pair, 0);
     }
 
+    _lastRepaidAssets = repaidAssets;
     SafeTransferLib.safeApprove(arb.loanToken, msg.sender, repaidAssets);
   }
 
