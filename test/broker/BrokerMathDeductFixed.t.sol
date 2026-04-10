@@ -56,8 +56,8 @@ contract BrokerMathDeductFixedTest is Test {
     uint256 interestBudget = accruedInterest / 2;
     uint256 principalBudget = 50 ether;
 
-    (uint256 interestLeft, uint256 principalLeft, FixedLoanPosition memory updated) = BrokerMath
-      .deductFixedPositionDebt(interestBudget, principalBudget, pos);
+    (uint256 interestLeft, uint256 principalLeft, FixedLoanPosition memory updated, ) = BrokerMath
+      .deductFixedPositionDebt(interestBudget, principalBudget, pos, 0);
 
     // Budgets fully consumed
     assertEq(interestLeft, 0, "interest budget consumed");
@@ -80,7 +80,7 @@ contract BrokerMathDeductFixedTest is Test {
 
     uint256 accruedInterest = _outstanding(pos);
 
-    (, , FixedLoanPosition memory updated) = BrokerMath.deductFixedPositionDebt(accruedInterest, 30 ether, pos);
+    (, , FixedLoanPosition memory updated, ) = BrokerMath.deductFixedPositionDebt(accruedInterest, 30 ether, pos, 0);
 
     assertEq(updated.interestRepaid, 0, "interestRepaid resets when all interest paid");
     assertEq(updated.lastRepaidTime, block.timestamp, "lastRepaidTime resets to now");
@@ -101,8 +101,8 @@ contract BrokerMathDeductFixedTest is Test {
     uint256 accruedInterest = _outstanding(pos);
     uint256 interestBudget = accruedInterest / 3;
 
-    (uint256 interestLeft, uint256 principalLeft, FixedLoanPosition memory updated) = BrokerMath
-      .deductFixedPositionDebt(interestBudget, 0, pos);
+    (uint256 interestLeft, uint256 principalLeft, FixedLoanPosition memory updated, ) = BrokerMath
+      .deductFixedPositionDebt(interestBudget, 0, pos, 0);
 
     assertEq(interestLeft, 0, "interest budget consumed");
     assertEq(principalLeft, 0, "no principal to deduct");
@@ -124,7 +124,7 @@ contract BrokerMathDeductFixedTest is Test {
     uint256 accruedInterest = _outstanding(pos);
     uint256 interestBudget = accruedInterest / 4;
 
-    (, , FixedLoanPosition memory updated) = BrokerMath.deductFixedPositionDebt(interestBudget, 100 ether, pos);
+    (, , FixedLoanPosition memory updated, ) = BrokerMath.deductFixedPositionDebt(interestBudget, 100 ether, pos, 0);
 
     assertEq(updated.principalRepaid, 100 ether, "full principal repaid");
 
@@ -143,8 +143,8 @@ contract BrokerMathDeductFixedTest is Test {
     FixedLoanPosition memory pos = _makePosition(100 ether);
     // No time skip -> zero interest
 
-    (uint256 interestLeft, uint256 principalLeft, FixedLoanPosition memory updated) = BrokerMath
-      .deductFixedPositionDebt(10 ether, 50 ether, pos);
+    (uint256 interestLeft, uint256 principalLeft, FixedLoanPosition memory updated, ) = BrokerMath
+      .deductFixedPositionDebt(10 ether, 50 ether, pos, 0);
 
     assertEq(interestLeft, 10 ether, "interest budget returned unused");
     assertEq(principalLeft, 0, "principal budget consumed");
@@ -166,7 +166,7 @@ contract BrokerMathDeductFixedTest is Test {
 
     // First partial: 1/4 interest + 20 principal
     uint256 firstInterest = originalAccrued / 4;
-    (, , FixedLoanPosition memory after1) = BrokerMath.deductFixedPositionDebt(firstInterest, 20 ether, pos);
+    (, , FixedLoanPosition memory after1, ) = BrokerMath.deductFixedPositionDebt(firstInterest, 20 ether, pos, 0);
 
     uint256 expectedAfter1 = originalAccrued - firstInterest;
     assertEq(_outstanding(after1), expectedAfter1, "first: outstanding exact");
@@ -176,7 +176,7 @@ contract BrokerMathDeductFixedTest is Test {
     uint256 outstandingAfter1 = _outstanding(after1);
     uint256 secondInterest = outstandingAfter1 / 3;
 
-    (, , FixedLoanPosition memory after2) = BrokerMath.deductFixedPositionDebt(secondInterest, 30 ether, after1);
+    (, , FixedLoanPosition memory after2, ) = BrokerMath.deductFixedPositionDebt(secondInterest, 30 ether, after1, 0);
 
     uint256 expectedAfter2 = outstandingAfter1 - secondInterest;
     // allow 1 wei tolerance due to Ceil rounding in interest formula
@@ -197,8 +197,8 @@ contract BrokerMathDeductFixedTest is Test {
 
     uint256 accruedInterest = _outstanding(pos);
 
-    (uint256 interestLeft, uint256 principalLeft, FixedLoanPosition memory updated) = BrokerMath
-      .deductFixedPositionDebt(accruedInterest * 10, 500 ether, pos);
+    (uint256 interestLeft, uint256 principalLeft, FixedLoanPosition memory updated, ) = BrokerMath
+      .deductFixedPositionDebt(accruedInterest * 10, 500 ether, pos, 0);
 
     assertApproxEqAbs(interestLeft, accruedInterest * 9, 1e15, "excess interest returned");
     assertEq(principalLeft, 400 ether, "excess principal returned");
@@ -218,7 +218,7 @@ contract BrokerMathDeductFixedTest is Test {
 
     uint256 accruedInterest = _outstanding(pos);
 
-    (, , FixedLoanPosition memory updated) = BrokerMath.deductFixedPositionDebt(accruedInterest, 40 ether, pos);
+    (, , FixedLoanPosition memory updated, ) = BrokerMath.deductFixedPositionDebt(accruedInterest, 40 ether, pos, 0);
 
     assertEq(updated.interestRepaid, 0, "reset on exact match");
     assertEq(updated.lastRepaidTime, block.timestamp, "reset time on exact match");
@@ -239,7 +239,7 @@ contract BrokerMathDeductFixedTest is Test {
 
     uint256 interestBudget = accruedInterest - 1;
 
-    (, , FixedLoanPosition memory updated) = BrokerMath.deductFixedPositionDebt(interestBudget, 50 ether, pos);
+    (, , FixedLoanPosition memory updated, ) = BrokerMath.deductFixedPositionDebt(interestBudget, 50 ether, pos, 0);
 
     // 1 wei unpaid -> must preserve exactly
     assertEq(_outstanding(updated), 1, "exactly 1 wei outstanding preserved");
@@ -256,8 +256,8 @@ contract BrokerMathDeductFixedTest is Test {
     uint256 accruedInterest = _outstanding(pos);
     assertGt(accruedInterest, 0, "should have accrued interest");
 
-    (uint256 interestLeft, uint256 principalLeft, FixedLoanPosition memory updated) = BrokerMath
-      .deductFixedPositionDebt(0, 50 ether, pos);
+    (uint256 interestLeft, uint256 principalLeft, FixedLoanPosition memory updated, ) = BrokerMath
+      .deductFixedPositionDebt(0, 50 ether, pos, 0);
 
     assertEq(interestLeft, 0, "no interest budget to return");
     assertEq(principalLeft, 0, "principal consumed");
@@ -287,7 +287,12 @@ contract BrokerMathDeductFixedTest is Test {
     uint256 interestBudget = 1;
     uint256 principalBudget = 5 ether;
 
-    (, , FixedLoanPosition memory updated) = BrokerMath.deductFixedPositionDebt(interestBudget, principalBudget, pos);
+    (, , FixedLoanPosition memory updated, ) = BrokerMath.deductFixedPositionDebt(
+      interestBudget,
+      principalBudget,
+      pos,
+      0
+    );
 
     // newTotalAccrued = (100-5)*10%*1year = 9.5e18, unpaidInterest ~= 10e18
     // newTotalAccrued < unpaidInterest -> fallback: maximize outstanding
@@ -309,7 +314,7 @@ contract BrokerMathDeductFixedTest is Test {
     uint256 accrued1 = _outstanding(pos);
 
     // Pay all interest + 20 principal -> triggers reset
-    (, , FixedLoanPosition memory after1) = BrokerMath.deductFixedPositionDebt(accrued1, 20 ether, pos);
+    (, , FixedLoanPosition memory after1, ) = BrokerMath.deductFixedPositionDebt(accrued1, 20 ether, pos, 0);
 
     assertEq(after1.interestRepaid, 0, "reset after full interest");
     assertEq(after1.lastRepaidTime, block.timestamp, "lastRepaidTime reset");
@@ -323,7 +328,7 @@ contract BrokerMathDeductFixedTest is Test {
 
     // Partial interest + 30 principal -> should NOT reset, preserve exact
     uint256 partialInterest = accrued2 / 2;
-    (, , FixedLoanPosition memory after2) = BrokerMath.deductFixedPositionDebt(partialInterest, 30 ether, after1);
+    (, , FixedLoanPosition memory after2, ) = BrokerMath.deductFixedPositionDebt(partialInterest, 30 ether, after1, 0);
 
     uint256 expectedOutstanding = accrued2 - partialInterest;
     assertEq(_outstanding(after2), expectedOutstanding, "exact after second partial");

@@ -89,6 +89,10 @@ contract LendingBroker is
   address public RELAYER;
   IOracle public ORACLE;
 
+  // --- V3 storage ---
+  /// @dev user => posId => extra interest that cannot be represented by the formula after liquidation
+  mapping(address => mapping(uint256 => uint256)) public fixedPositionExtraInterest;
+
   // ------- Modifiers -------
   modifier onlyMoolah() {
     require(msg.sender == address(MOOLAH), "Broker/not-moolah");
@@ -316,8 +320,10 @@ contract LendingBroker is
     FixedLoanPosition memory position = _getFixedPositionByPosId(onBehalf, posId);
     // remaining principal before repayment
     uint256 remainingPrincipal = position.principal - position.principalRepaid;
-    // get outstanding accrued interest
-    uint256 accruedInterest = _getAccruedInterestForFixedPosition(position) - position.interestRepaid;
+    // get outstanding accrued interest (including extra overflow from liquidation)
+    uint256 accruedInterest = _getAccruedInterestForFixedPosition(position) -
+      position.interestRepaid +
+      fixedPositionExtraInterest[onBehalf][posId];
 
     // initialize repay amounts
     uint256 repayInterestAmt = amount < accruedInterest ? amount : accruedInterest;
@@ -355,6 +361,8 @@ contract LendingBroker is
         position.interestRepaid = 0;
         // reset last repay time to now
         position.lastRepaidTime = block.timestamp;
+        // clear extra interest (all interest fully covered before principal repay)
+        fixedPositionExtraInterest[onBehalf][posId] = 0;
       }
     }
 
@@ -528,7 +536,12 @@ contract LendingBroker is
 
       // [4] calculate interest to broker
       uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
-      uint256 totalDebtAtBroker = BrokerMath.getTotalDebt(fixedPositions, dynamicPosition, rate);
+      uint256 totalDebtAtBroker = BrokerMath.getTotalDebt(
+        fixedPositions,
+        dynamicPosition,
+        rate,
+        _getExtraInterests(borrower, fixedPositions)
+      );
       uint256 interestToBroker = BrokerMath
         .mulDivCeiling(repaidAssets, totalDebtAtBroker, liquidationContext.debtAtMoolah)
         .zeroFloorSub(repaidAssets);
@@ -546,6 +559,10 @@ contract LendingBroker is
       if (BrokerMath.getDebtAtMoolah(borrower) == 0) {
         // clear all positions
         delete dynamicLoanPositions[borrower];
+        FixedLoanPosition[] memory fps = fixedLoanPositions[borrower];
+        for (uint256 i = 0; i < fps.length; i++) {
+          delete fixedPositionExtraInterest[borrower][fps[i].posId];
+        }
         delete fixedLoanPositions[borrower];
       } else {
         // [9] deduct interest and principal from positions
@@ -627,12 +644,14 @@ contract LendingBroker is
     for (uint256 i = 0; i < len; i++) {
       if (principalToDeduct == 0 && interestToDeduct == 0) break;
       FixedLoanPosition memory p = sortedFixedPositions[i];
+      uint256 extraInterest;
       // call BrokerMath to process deduction one by one
       // will return leftover interest/principal to deduct and the updated position
-      (interestToDeduct, principalToDeduct, p) = BrokerMath.deductFixedPositionDebt(
+      (interestToDeduct, principalToDeduct, p, extraInterest) = BrokerMath.deductFixedPositionDebt(
         interestToDeduct,
         principalToDeduct,
-        p
+        p,
+        fixedPositionExtraInterest[user][p.posId]
       );
       // post repayment
       if (p.principalRepaid >= p.principal) {
@@ -641,6 +660,8 @@ contract LendingBroker is
       } else {
         // update position
         _updateFixedPosition(user, p);
+        // persist extra interest overflow
+        fixedPositionExtraInterest[user][p.posId] = extraInterest;
       }
     }
   }
@@ -674,7 +695,14 @@ contract LendingBroker is
   function peek(address token, address user) public view override marketIdSet returns (uint256 price) {
     require(user != address(0), "broker/zero-address");
     require(token == COLLATERAL_TOKEN || token == LOAN_TOKEN, "broker/unsupported-token");
-    price = BrokerMath.peek(token, user, address(MOOLAH), rateCalculator, address(ORACLE));
+    price = BrokerMath.peek(
+      token,
+      user,
+      address(MOOLAH),
+      rateCalculator,
+      address(ORACLE),
+      _getExtraInterests(user, fixedLoanPositions[user])
+    );
   }
 
   /**
@@ -703,7 +731,7 @@ contract LendingBroker is
     uint256 rate = IRateCalculator(rateCalculator).getRate(address(this));
     DynamicLoanPosition memory dynPos = dynamicLoanPositions[user];
     FixedLoanPosition[] memory fixedPos = fixedLoanPositions[user];
-    totalDebt = BrokerMath.getTotalDebt(fixedPos, dynPos, rate);
+    totalDebt = BrokerMath.getTotalDebt(fixedPos, dynPos, rate, _getExtraInterests(user, fixedPos));
   }
 
   /**
@@ -724,7 +752,11 @@ contract LendingBroker is
     require(amount > 0, "broker/zero-amount");
     require(user != address(0), "broker/zero-address");
     FixedLoanPosition memory position = _getFixedPositionByPosId(user, posId);
-    (interestRepaid, penalty, principalRepaid) = BrokerMath.previewRepayFixedLoanPosition(position, amount);
+    (interestRepaid, penalty, principalRepaid) = BrokerMath.previewRepayFixedLoanPosition(
+      position,
+      amount,
+      fixedPositionExtraInterest[user][posId]
+    );
   }
 
   /**
@@ -758,14 +790,23 @@ contract LendingBroker is
     require(posIds.length > 0, "Broker/zero-positions");
     // update rate
     uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
+    // build extra interests array aligned with posIds
+    uint256[] memory extras = new uint256[](posIds.length);
+    for (uint256 i = 0; i < posIds.length; i++) {
+      extras[i] = fixedPositionExtraInterest[user][posIds[i]];
+    }
     // get refinanced positions and updated dynamic position
     (
       FixedLoanPosition[] memory updatedFixedPos,
       DynamicLoanPosition memory updatedDynPos,
       uint256 refinancedPrincipal
-    ) = BrokerMath.refinanceMaturedFixedPositions(user, rate, posIds);
+    ) = BrokerMath.refinanceMaturedFixedPositions(user, rate, posIds, extras);
     // update fixed positions
     fixedLoanPositions[user] = updatedFixedPos;
+    // clean up extra interest for refinanced positions
+    for (uint256 i = 0; i < posIds.length; i++) {
+      delete fixedPositionExtraInterest[user][posIds[i]];
+    }
     // update dynamic position if changed
     if (refinancedPrincipal > 0) {
       dynamicLoanPositions[user] = updatedDynPos;
@@ -864,6 +905,7 @@ contract LendingBroker is
         // remove position
         positions[i] = positions[positions.length - 1];
         positions.pop();
+        delete fixedPositionExtraInterest[user][posId];
         emit FixedLoanPositionRemoved(user, posId);
         return;
       }
@@ -900,6 +942,22 @@ contract LendingBroker is
       }
     }
     revert("broker/position-not-found");
+  }
+
+  /**
+   * @dev Build the extra interest array for a user's fixed positions
+   * @param user The address of the user
+   * @param positions The user's fixed loan positions
+   */
+  function _getExtraInterests(
+    address user,
+    FixedLoanPosition[] memory positions
+  ) internal view returns (uint256[] memory) {
+    uint256[] memory extras = new uint256[](positions.length);
+    for (uint256 i = 0; i < positions.length; i++) {
+      extras[i] = fixedPositionExtraInterest[user][positions[i].posId];
+    }
+    return extras;
   }
 
   /**
