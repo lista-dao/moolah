@@ -83,16 +83,16 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
 
   receive() external payable {}
 
-  /// @dev withdraws ERC20 tokens or native BNB from the contract.
-  /// @param token The address of the token. Use BNB_ADDRESS (0xEeee...EEeE) for native BNB.
+  /// @dev withdraws ERC20 tokens.
+  /// @param token The address of the token.
   /// @param amount The amount to withdraw.
-  function withdraw(address token, uint256 amount) external onlyRole(MANAGER) {
-    if (token == BNB_ADDRESS) {
-      (bool success, ) = msg.sender.call{ value: amount }("");
-      require(success, "broker-liquidator/native-transfer-failed");
-    } else {
-      SafeTransferLib.safeTransfer(token, msg.sender, amount);
-    }
+  function withdrawERC20(address token, uint256 amount) external onlyRole(MANAGER) {
+    SafeTransferLib.safeTransfer(token, msg.sender, amount);
+  }
+  /// @dev withdraws ETH.
+  /// @param amount The amount to withdraw.
+  function withdrawETH(uint256 amount) external onlyRole(MANAGER) {
+    SafeTransferLib.safeTransferETH(msg.sender, amount);
   }
 
   /// @dev sets the token whitelist.
