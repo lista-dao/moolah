@@ -304,6 +304,116 @@ contract BrokerMathDeductFixedTest is Test {
   }
 
   // ====================================================================
+  //  Audit #5: interest-only repayment must consume extraInterest
+  // ====================================================================
+
+  function test_interestOnlyRepayment_consumesExtraInterest() public {
+    FixedLoanPosition memory pos = _makePosition(100 ether);
+    skip(DURATION);
+
+    // Step 1: principal-only deduction creates extraInterest overflow
+    (, , FixedLoanPosition memory afterPrincipalCut, uint256 extraInterest) = BrokerMath.deductFixedPositionDebt(
+      0,
+      50 ether,
+      pos,
+      0
+    );
+
+    uint256 formulaInterest = BrokerMath.getAccruedInterestForFixedPosition(afterPrincipalCut);
+    assertGt(extraInterest, 0, "expected extra interest overflow");
+
+    // Step 2: repay all remaining interest (formula + extra), no principal
+    uint256 fullOutstanding = formulaInterest + extraInterest;
+    (, , FixedLoanPosition memory afterInterestOnly, uint256 extraAfterInterestOnly) = BrokerMath
+      .deductFixedPositionDebt(fullOutstanding, 0, afterPrincipalCut, extraInterest);
+
+    // extraInterest should be fully consumed
+    assertEq(extraAfterInterestOnly, 0, "extra interest should be consumed");
+    // interestRepaid should not exceed formula interest
+    assertLe(
+      afterInterestOnly.interestRepaid,
+      BrokerMath.getAccruedInterestForFixedPosition(afterInterestOnly),
+      "interestRepaid must not exceed formula interest"
+    );
+
+    // previewRepayFixedLoanPosition should NOT revert
+    BrokerMath.previewRepayFixedLoanPosition(afterInterestOnly, 1, extraAfterInterestOnly);
+  }
+
+  // ====================================================================
+  //  Audit #5: sequential positions - later position gets zero interest budget
+  // ====================================================================
+
+  function _makePositionWith(
+    uint256 posId,
+    uint256 principal,
+    uint256 apr,
+    uint256 end
+  ) internal view returns (FixedLoanPosition memory) {
+    return
+      FixedLoanPosition({
+        posId: posId,
+        principal: principal,
+        apr: apr,
+        start: startTs,
+        end: end,
+        lastRepaidTime: startTs,
+        interestRepaid: 0,
+        principalRepaid: 0
+      });
+  }
+
+  function _deductSequentialFixedPositions(
+    FixedLoanPosition[] memory positions,
+    uint256 interestToDeduct,
+    uint256 principalToDeduct
+  ) internal view returns (FixedLoanPosition[] memory, uint256, uint256) {
+    FixedLoanPosition[] memory sorted = BrokerMath.sortAndFilterFixedPositions(positions);
+    uint256 len = sorted.length;
+    uint256 extraInterest = 0;
+    for (uint256 i = 0; i < len; i++) {
+      if (interestToDeduct == 0 && principalToDeduct == 0) break;
+      (interestToDeduct, principalToDeduct, sorted[i], extraInterest) = BrokerMath.deductFixedPositionDebt(
+        interestToDeduct,
+        principalToDeduct,
+        sorted[i],
+        extraInterest
+      );
+    }
+    return (sorted, interestToDeduct, principalToDeduct);
+  }
+
+  function test_sequentialFixedLiquidation_laterPositionGetsExtraInterest() public {
+    uint256 highApr = 101 * RATE_SCALE; // 100x principal interest over one year
+
+    FixedLoanPosition[] memory positions = new FixedLoanPosition[](2);
+    positions[0] = _makePositionWith(1, 1 ether, highApr, startTs + DURATION);
+    positions[1] = _makePositionWith(2, 99 ether, APR, startTs + DURATION + 1);
+
+    skip(DURATION);
+
+    uint256 firstOutstandingBefore = _outstanding(positions[0]);
+    uint256 secondOutstandingBefore = _outstanding(positions[1]);
+    assertApproxEqAbs(firstOutstandingBefore, 100 ether, 1, "first accrued interest");
+    assertApproxEqAbs(secondOutstandingBefore, 9.9 ether, 1e15, "second accrued interest");
+
+    (FixedLoanPosition[] memory updated, uint256 interestLeft, uint256 principalLeft) = _deductSequentialFixedPositions(
+      positions,
+      50 ether,
+      50 ether
+    );
+
+    assertEq(interestLeft, 0, "interest fully consumed");
+    assertEq(principalLeft, 0, "principal fully consumed");
+
+    FixedLoanPosition memory first = updated[0];
+    FixedLoanPosition memory second = updated[1];
+
+    assertEq(first.principalRepaid, 1 ether, "first position principal fully repaid");
+    assertEq(second.principalRepaid, 49 ether, "later position still receives principal");
+  }
+
+  // ====================================================================
   //  After reset, new interest accrues correctly
   // ====================================================================
 

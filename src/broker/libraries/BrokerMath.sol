@@ -548,9 +548,11 @@ library BrokerMath {
 
     // repay interest first, it might be zero if user just repaid before
     if (repayInterestAmt > 0) {
-      // update repaid interest amount
-      p.interestRepaid += repayInterestAmt;
-      // supply interest into vault as revenue
+      // consume extraInterest before increasing interestRepaid
+      // this preserves the invariant: interestRepaid <= formula-based accrued interest
+      uint256 extraConsumed = UtilsLib.min(repayInterestAmt, existingExtraInterest);
+      existingExtraInterest -= extraConsumed;
+      p.interestRepaid += (repayInterestAmt - extraConsumed);
       interestToDeduct -= repayInterestAmt;
     }
     // then repay principal if there is any amount left
@@ -584,7 +586,7 @@ library BrokerMath {
         }
       }
     } else {
-      // no principal deducted, preserve existing extra interest
+      // no principal deducted, preserve remaining extra interest after consumption above
       extraInterest = existingExtraInterest;
     }
 
