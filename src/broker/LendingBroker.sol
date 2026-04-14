@@ -332,8 +332,13 @@ contract LendingBroker is
     // repay interest first, it might be zero if user just repaid before
     if (repayInterestAmt > 0) {
       IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), repayInterestAmt);
-      // update repaid interest amount
-      position.interestRepaid += repayInterestAmt;
+      // consume extraInterest before increasing interestRepaid
+      // this preserves the invariant: interestRepaid <= formula-based accrued interest
+      uint256 extra = fixedPositionExtraInterest[onBehalf][posId];
+      uint256 extraConsumed = UtilsLib.min(repayInterestAmt, extra);
+      fixedPositionExtraInterest[onBehalf][posId] = extra - extraConsumed;
+      // update repaid interest amount (only formula-based portion)
+      position.interestRepaid += (repayInterestAmt - extraConsumed);
       // supply interest into vault as revenue
       _supplyToMoolahVault(repayInterestAmt);
     }
@@ -655,8 +660,14 @@ contract LendingBroker is
       );
       // post repayment
       if (p.principalRepaid >= p.principal) {
-        // removes it from user's fixed positions
-        _removeFixedPositionByPosId(user, p.posId);
+        if (extraInterest > 0) {
+          // keep position alive for remaining interest debt
+          _updateFixedPosition(user, p);
+          fixedPositionExtraInterest[user][p.posId] = extraInterest;
+        } else {
+          // removes it from user's fixed positions
+          _removeFixedPositionByPosId(user, p.posId);
+        }
       } else {
         // update position
         _updateFixedPosition(user, p);

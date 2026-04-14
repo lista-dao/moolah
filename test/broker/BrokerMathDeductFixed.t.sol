@@ -414,6 +414,111 @@ contract BrokerMathDeductFixedTest is Test {
   }
 
   // ====================================================================
+  //  Audit #5: fully-liquidated position returns extraInterest
+  // ====================================================================
+
+  function test_fullPrincipalPartialInterest_returnsExtraInterest() public {
+    FixedLoanPosition memory pos = _makePosition(100 ether);
+    skip(DURATION);
+
+    uint256 accruedInterest = _outstanding(pos);
+    uint256 interestBudget = accruedInterest / 4;
+
+    (, , FixedLoanPosition memory updated, uint256 extraInterest) = BrokerMath.deductFixedPositionDebt(
+      interestBudget,
+      100 ether,
+      pos,
+      0
+    );
+
+    assertEq(updated.principalRepaid, 100 ether, "full principal repaid");
+    // With 0 remaining principal, formula returns 0. Unpaid interest stored as extraInterest.
+    uint256 unpaidInterest = accruedInterest - interestBudget;
+    assertEq(extraInterest, unpaidInterest, "extraInterest must capture all unpaid interest");
+  }
+
+  // ====================================================================
+  //  Audit #5: sequential liquidation preserves total debt
+  // ====================================================================
+
+  function test_sequentialLiquidation_totalDebtPreserved() public {
+    uint256 highApr = 101 * RATE_SCALE;
+
+    FixedLoanPosition[] memory positions = new FixedLoanPosition[](2);
+    positions[0] = _makePositionWith(1, 1 ether, highApr, startTs + DURATION);
+    positions[1] = _makePositionWith(2, 99 ether, APR, startTs + DURATION + 1);
+
+    skip(DURATION);
+
+    uint256 totalDebtBefore = 0;
+    for (uint256 i = 0; i < positions.length; i++) {
+      totalDebtBefore += positions[i].principal - positions[i].principalRepaid;
+      totalDebtBefore += _outstanding(positions[i]);
+    }
+
+    uint256 interestBudget = 50 ether;
+    uint256 principalBudget = 50 ether;
+
+    // Process sequentially (simulating _deductFixedPositionsDebt with per-position extraInterest)
+    FixedLoanPosition[] memory sorted = BrokerMath.sortAndFilterFixedPositions(positions);
+    uint256[] memory extras = new uint256[](sorted.length);
+    uint256 intLeft = interestBudget;
+    uint256 prinLeft = principalBudget;
+    for (uint256 i = 0; i < sorted.length; i++) {
+      if (intLeft == 0 && prinLeft == 0) break;
+      (intLeft, prinLeft, sorted[i], extras[i]) = BrokerMath.deductFixedPositionDebt(intLeft, prinLeft, sorted[i], 0);
+    }
+
+    // Calculate total remaining debt (principal + formula interest + extraInterest)
+    uint256 totalDebtAfter = 0;
+    for (uint256 i = 0; i < sorted.length; i++) {
+      totalDebtAfter += sorted[i].principal - sorted[i].principalRepaid;
+      totalDebtAfter += _outstanding(sorted[i]) + extras[i];
+    }
+
+    // Total debt should decrease by exactly the budgets consumed
+    uint256 consumed = (interestBudget - intLeft) + (principalBudget - prinLeft);
+    assertEq(totalDebtBefore - totalDebtAfter, consumed, "total debt reduction must equal consumed budgets");
+  }
+
+  // ====================================================================
+  //  Audit #5: extraInterest survives interest-only then principal deduction
+  // ====================================================================
+
+  function test_extraInterest_survives_multiStepDeduction() public {
+    FixedLoanPosition memory pos = _makePosition(100 ether);
+    skip(DURATION);
+
+    // Step 1: principal-only deduction creates extraInterest
+    (, , FixedLoanPosition memory after1, uint256 extra1) = BrokerMath.deductFixedPositionDebt(0, 50 ether, pos, 0);
+    assertGt(extra1, 0, "step 1: extraInterest created");
+
+    // Step 2: partial interest-only repayment consumes some extraInterest
+    uint256 halfExtra = extra1 / 2;
+    (, , FixedLoanPosition memory after2, uint256 extra2) = BrokerMath.deductFixedPositionDebt(
+      halfExtra,
+      0,
+      after1,
+      extra1
+    );
+    assertEq(extra2, extra1 - halfExtra, "step 2: partial extraInterest consumed");
+
+    // Step 3: full interest repayment clears everything
+    uint256 formulaAfter2 = BrokerMath.getAccruedInterestForFixedPosition(after2);
+    uint256 totalOutstanding = formulaAfter2 - after2.interestRepaid + extra2;
+    (, , FixedLoanPosition memory after3, uint256 extra3) = BrokerMath.deductFixedPositionDebt(
+      totalOutstanding,
+      0,
+      after2,
+      extra2
+    );
+    assertEq(extra3, 0, "step 3: all extraInterest consumed");
+
+    // previewRepayFixedLoanPosition must not revert
+    BrokerMath.previewRepayFixedLoanPosition(after3, 1, extra3);
+  }
+
+  // ====================================================================
   //  After reset, new interest accrues correctly
   // ====================================================================
 
