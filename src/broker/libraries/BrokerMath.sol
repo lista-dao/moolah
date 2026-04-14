@@ -28,7 +28,8 @@ library BrokerMath {
     address user,
     address moolah,
     address rateCalculator,
-    address oracle
+    address oracle,
+    uint256[] memory extraInterests
   ) public view returns (uint256 price) {
     IBroker broker = IBroker(address(this));
     address loanToken = broker.LOAN_TOKEN();
@@ -53,7 +54,8 @@ library BrokerMath {
       uint256 debtAtBroker = getTotalDebt(
         broker.userFixedPositions(user),
         broker.userDynamicPosition(user),
-        IRateCalculator(rateCalculator).getRate(address(this))
+        IRateCalculator(rateCalculator).getRate(address(this)),
+        extraInterests
       );
       // fetch collateral price from oracle
       uint256 collateralPrice = IOracle(oracle).peek(collateralToken);
@@ -141,15 +143,19 @@ library BrokerMath {
   function getTotalDebt(
     FixedLoanPosition[] memory fixedPositions,
     DynamicLoanPosition memory dynamicPosition,
-    uint256 currentRate
+    uint256 currentRate,
+    uint256[] memory extraInterests
   ) public view returns (uint256 totalDebt) {
     // [1] total debt from fixed position
     for (uint256 i = 0; i < fixedPositions.length; i++) {
       FixedLoanPosition memory _fixedPos = fixedPositions[i];
       // add principal
       totalDebt += _fixedPos.principal - _fixedPos.principalRepaid;
-      // add interest
+      // add interest (formula-based + extra overflow from liquidation)
       totalDebt += getAccruedInterestForFixedPosition(_fixedPos) - _fixedPos.interestRepaid;
+      if (i < extraInterests.length) {
+        totalDebt += extraInterests[i];
+      }
     }
     // [2] total debt from dynamic position
     totalDebt += denormalizeBorrowAmount(dynamicPosition.normalizedDebt, currentRate);
@@ -229,12 +235,13 @@ library BrokerMath {
    */
   function previewRepayFixedLoanPosition(
     FixedLoanPosition memory position,
-    uint256 amount
+    uint256 amount,
+    uint256 extraInterest
   ) public view returns (uint256 interestRepaid, uint256 penalty, uint256 principalRepaid) {
     // remaining principal before repayment
     uint256 remainingPrincipal = position.principal - position.principalRepaid;
-    // get outstanding accrued interest
-    uint256 accruedInterest = getAccruedInterestForFixedPosition(position) - position.interestRepaid;
+    // get outstanding accrued interest (including extra overflow from liquidation)
+    uint256 accruedInterest = getAccruedInterestForFixedPosition(position) - position.interestRepaid + extraInterest;
 
     // initialize repay amounts
     interestRepaid = amount < accruedInterest ? amount : accruedInterest;
@@ -280,7 +287,8 @@ library BrokerMath {
   function refinanceMaturedFixedPositions(
     address user,
     uint256 rate,
-    uint256[] calldata posIds
+    uint256[] calldata posIds,
+    uint256[] memory extraInterests
   ) public returns (FixedLoanPosition[] memory, DynamicLoanPosition memory, uint256) {
     _revertIfDuplicatePosIds(posIds);
     IBroker broker = IBroker(address(this));
@@ -307,8 +315,11 @@ library BrokerMath {
       // Debt of a fixed loan position consist of (1) and (2)
       // (1) net principal
       _principal += position.principal - position.principalRepaid;
-      // (2) get outstanding interest
+      // (2) get outstanding interest (including extra overflow from liquidation)
       _interest += getAccruedInterestForFixedPosition(position) - position.interestRepaid;
+      if (i < extraInterests.length) {
+        _interest += extraInterests[i];
+      }
       // save it and remove later
       posIdToRemove[i] = posId;
       // broadcast event
@@ -523,12 +534,13 @@ library BrokerMath {
   function deductFixedPositionDebt(
     uint256 interestToDeduct,
     uint256 principalToDeduct,
-    FixedLoanPosition memory p
-  ) public view returns (uint256, uint256, FixedLoanPosition memory) {
+    FixedLoanPosition memory p,
+    uint256 existingExtraInterest
+  ) public view returns (uint256, uint256, FixedLoanPosition memory, uint256 extraInterest) {
     // remaining principal before repayment
     uint256 remainingPrincipal = p.principal - p.principalRepaid;
-    // get accrued interest from LAST REPAID TIME to NOW
-    uint256 accruedInterest = getAccruedInterestForFixedPosition(p) - p.interestRepaid;
+    // get accrued interest from LAST REPAID TIME to NOW (including extra interest from prior liquidations)
+    uint256 accruedInterest = getAccruedInterestForFixedPosition(p) - p.interestRepaid + existingExtraInterest;
 
     // initialize repay amounts
     uint256 repayInterestAmt = UtilsLib.min(interestToDeduct, accruedInterest);
@@ -536,9 +548,11 @@ library BrokerMath {
 
     // repay interest first, it might be zero if user just repaid before
     if (repayInterestAmt > 0) {
-      // update repaid interest amount
-      p.interestRepaid += repayInterestAmt;
-      // supply interest into vault as revenue
+      // consume extraInterest before increasing interestRepaid
+      // this preserves the invariant: interestRepaid <= formula-based accrued interest
+      uint256 extraConsumed = UtilsLib.min(repayInterestAmt, existingExtraInterest);
+      existingExtraInterest -= extraConsumed;
+      p.interestRepaid += (repayInterestAmt - extraConsumed);
       interestToDeduct -= repayInterestAmt;
     }
     // then repay principal if there is any amount left
@@ -551,6 +565,8 @@ library BrokerMath {
         // all accrued interest fully covered -> safe to reset tracking
         p.interestRepaid = 0;
         p.lastRepaidTime = block.timestamp;
+        // extra interest fully covered
+        extraInterest = 0;
       } else {
         // partial interest covered -> adjust interestRepaid to preserve outstanding
         // After principalRepaid increased, getAccruedInterestForFixedPosition() recalculates
@@ -561,15 +577,20 @@ library BrokerMath {
         if (newTotalAccrued >= unpaidInterest) {
           // exact: outstanding is perfectly preserved
           p.interestRepaid = newTotalAccrued - unpaidInterest;
+          extraInterest = 0;
         } else {
           // edge case: most principal repaid, formula can't represent full outstanding
-          // preserve maximum possible: outstanding = newTotalAccrued (don't reset lastRepaidTime)
+          // store the overflow in extraInterest so it's not lost
           p.interestRepaid = 0;
+          extraInterest = unpaidInterest - newTotalAccrued;
         }
       }
+    } else {
+      // no principal deducted, preserve remaining extra interest after consumption above
+      extraInterest = existingExtraInterest;
     }
 
-    return (interestToDeduct, principalToDeduct, p);
+    return (interestToDeduct, principalToDeduct, p, extraInterest);
   }
 
   /**

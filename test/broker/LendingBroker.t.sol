@@ -1546,6 +1546,253 @@ contract LendingBrokerTest is Test {
     assertGt(dynPrincipal, 0);
   }
 
+  // =============================================
+  // Audit #5: extraInterest handling
+  // =============================================
+
+  /// @dev Creates two fixed positions (A: small+highAPR, B: large+lowAPR), makes liquidatable,
+  ///      performs a partial liquidation that creates extraInterest on both positions.
+  ///      Position A (small principal, 30% APR, earlier end) is processed first in liquidation.
+  ///      With a ~10% liquidation, the interest budget is smaller than A's accrued interest,
+  ///      so A is fully liquidated (all principal consumed) but has unpaid interest → extraInterest.
+  ///      B gets the remaining principal budget with zero interest → also creates extraInterest.
+  function _createExtraInterestViaLiquidation() internal {
+    uint256 highTermId = ++nextTermId;
+    uint256 normalTermId = ++nextTermId;
+
+    vm.startPrank(BOT);
+    broker.updateFixedTermAndRate(
+      FixedTermAndRate({ termId: highTermId, duration: 30 days, apr: 13e26 }), // 30% APR, earlier end
+      false
+    );
+    broker.updateFixedTermAndRate(
+      FixedTermAndRate({ termId: normalTermId, duration: 31 days, apr: 105 * 1e25 }), // 5% APR, later end
+      false
+    );
+    vm.stopPrank();
+
+    // A: small principal + high APR → lots of interest per unit of principal
+    // B: large principal + low APR
+    vm.startPrank(borrower);
+    broker.borrow(2000 ether, highTermId);
+    broker.borrow(78000 ether, normalTermId);
+    vm.stopPrank();
+
+    // Skip time and make liquidatable
+    skip(30 days);
+    oracle.setPrice(address(BTCB), 100000e8);
+
+    // ~10% liquidation: repaidAssets ≈ 8000 > A.principal(2000), but interestBudget < A.interest
+    Position memory posBefore = moolah.position(marketParams.id(), borrower);
+    uint256 repayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, 10 * 1e8, 100 * 1e8);
+
+    LISUSD.setBalance(address(liquidator), 1_000_000 ether);
+    vm.prank(BOT);
+    liquidator.liquidate(Id.unwrap(id), borrower, 0, repayShares);
+  }
+
+  /// @notice Partial liquidation with sequential position processing creates extraInterest
+  function test_liquidation_createsExtraInterest() public {
+    _createExtraInterestViaLiquidation();
+
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    assertGt(positions.length, 0, "should still have positions");
+
+    // At least one position should have extraInterest
+    bool foundExtra = false;
+    for (uint256 i = 0; i < positions.length; i++) {
+      uint256 extra = broker.fixedPositionExtraInterest(borrower, positions[i].posId);
+      if (extra > 0) foundExtra = true;
+    }
+    assertTrue(foundExtra, "no extraInterest created by liquidation");
+  }
+
+  /// @notice Full liquidation (principal fully consumed) with unpaid interest keeps position alive
+  function test_liquidation_keepsFullyLiquidatedPositionWithExtraInterest() public {
+    _createExtraInterestViaLiquidation();
+
+    // Position A (small principal, highAPR) should be fully liquidated but kept alive with extraInterest
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+
+    bool foundFullyLiquidatedWithExtra = false;
+    for (uint256 i = 0; i < positions.length; i++) {
+      FixedLoanPosition memory p = positions[i];
+      uint256 extra = broker.fixedPositionExtraInterest(borrower, p.posId);
+      if (p.principalRepaid >= p.principal && extra > 0) {
+        foundFullyLiquidatedWithExtra = true;
+        // verify this position has 0 remaining principal but real outstanding debt
+        assertEq(p.principal - p.principalRepaid, 0, "should have 0 remaining principal");
+        // total debt = formula(0) - interestRepaid + extra = 0 - 0 + extra = extra
+        assertGt(extra, 0, "extraInterest is the only remaining debt");
+      }
+    }
+    assertTrue(foundFullyLiquidatedWithExtra, "no fully-liquidated position kept alive with extraInterest");
+
+    // Total debt at broker should still be >= moolah debt (includes extraInterest)
+    uint256 totalDebtBroker = broker.getUserTotalDebt(borrower);
+    uint256 principalMoolah = _principalAtMoolah(borrower);
+    assertGe(totalDebtBroker, principalMoolah, "broker debt should be >= moolah debt");
+  }
+
+  /// @notice Interest-only repay after liquidation consumes extraInterest before increasing interestRepaid
+  function test_repayFixedInterestOnly_consumesExtraInterest() public {
+    _createExtraInterestViaLiquidation();
+
+    // Find a position with extraInterest that still has remaining principal (position B)
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    uint256 targetPosId;
+    uint256 targetExtra;
+    uint256 targetInterestRepaidBefore;
+    for (uint256 i = 0; i < positions.length; i++) {
+      uint256 extra = broker.fixedPositionExtraInterest(borrower, positions[i].posId);
+      if (extra > 0 && positions[i].principal > positions[i].principalRepaid) {
+        targetPosId = positions[i].posId;
+        targetExtra = extra;
+        targetInterestRepaidBefore = positions[i].interestRepaid;
+        break;
+      }
+    }
+    assertGt(targetPosId, 0, "no suitable position found");
+    assertGt(targetExtra, 0, "position should have extraInterest");
+
+    // Repay exactly the extraInterest amount (interest-only, no principal)
+    LISUSD.setBalance(borrower, targetExtra);
+    vm.prank(borrower);
+    broker.repay(targetExtra, targetPosId, borrower);
+
+    // extraInterest should be fully consumed
+    assertEq(broker.fixedPositionExtraInterest(borrower, targetPosId), 0, "extraInterest not consumed");
+
+    // interestRepaid should NOT have increased (all repayment went to extraInterest)
+    FixedLoanPosition memory afterPos = _getFixedPositionByPosId(borrower, targetPosId);
+    assertEq(afterPos.interestRepaid, targetInterestRepaidBefore, "interestRepaid should not change");
+
+    // previewRepayFixedLoanPosition must not revert
+    broker.previewRepayFixedLoanPosition(borrower, 1 ether, targetPosId);
+  }
+
+  /// @notice Partial interest repay: extraInterest consumed first, remainder goes to interestRepaid
+  function test_repayFixedInterest_partiallyConsumesExtraInterest() public {
+    _createExtraInterestViaLiquidation();
+
+    // Find position B (has extraInterest + remaining principal)
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    uint256 targetPosId;
+    uint256 targetExtra;
+    uint256 targetInterestRepaidBefore;
+    for (uint256 i = 0; i < positions.length; i++) {
+      uint256 extra = broker.fixedPositionExtraInterest(borrower, positions[i].posId);
+      if (extra > 0 && positions[i].principal > positions[i].principalRepaid) {
+        targetPosId = positions[i].posId;
+        targetExtra = extra;
+        targetInterestRepaidBefore = positions[i].interestRepaid;
+        break;
+      }
+    }
+    assertGt(targetPosId, 0, "no suitable position found");
+
+    // Repay extra + 2 ether more: extra consumed, 2 ether goes to interestRepaid
+    uint256 overshoot = 2 ether;
+    uint256 repayAmt = targetExtra + overshoot;
+    LISUSD.setBalance(borrower, repayAmt);
+    vm.prank(borrower);
+    broker.repay(repayAmt, targetPosId, borrower);
+
+    assertEq(broker.fixedPositionExtraInterest(borrower, targetPosId), 0, "extraInterest not consumed");
+
+    FixedLoanPosition memory afterPos = _getFixedPositionByPosId(borrower, targetPosId);
+    assertEq(
+      afterPos.interestRepaid,
+      targetInterestRepaidBefore + overshoot,
+      "interestRepaid should increase by overshoot only"
+    );
+  }
+
+  /// @notice User repays extraInterest on fully-liquidated position (0 principal) → position removed
+  function test_repayExtraInterest_onZeroPrincipalPosition_removesIt() public {
+    _createExtraInterestViaLiquidation();
+
+    // Find the fully-liquidated position kept alive by extraInterest (position A)
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    uint256 targetPosId;
+    uint256 targetExtra;
+    for (uint256 i = 0; i < positions.length; i++) {
+      uint256 extra = broker.fixedPositionExtraInterest(borrower, positions[i].posId);
+      if (positions[i].principalRepaid >= positions[i].principal && extra > 0) {
+        targetPosId = positions[i].posId;
+        targetExtra = extra;
+        break;
+      }
+    }
+    assertGt(targetPosId, 0, "no fully-liquidated position with extraInterest found");
+
+    uint256 posCountBefore = positions.length;
+
+    // Repay the extraInterest (this is all the debt on this position)
+    LISUSD.setBalance(borrower, targetExtra);
+    vm.prank(borrower);
+    broker.repay(targetExtra, targetPosId, borrower);
+
+    // Position should be removed (principalRepaid >= principal and no more extraInterest)
+    FixedLoanPosition[] memory afterPositions = broker.userFixedPositions(borrower);
+    assertEq(afterPositions.length, posCountBefore - 1, "position should have been removed");
+    assertEq(broker.fixedPositionExtraInterest(borrower, targetPosId), 0, "extraInterest not cleaned");
+  }
+
+  /// @notice previewRepayFixedLoanPosition must not revert when position has extraInterest from liquidation
+  function test_previewRepay_afterLiquidation_doesNotRevert() public {
+    _createExtraInterestViaLiquidation();
+
+    // Find any position with extraInterest
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    for (uint256 i = 0; i < positions.length; i++) {
+      uint256 extra = broker.fixedPositionExtraInterest(borrower, positions[i].posId);
+      if (extra > 0) {
+        // preview should not revert
+        (uint256 interest, , ) = broker.previewRepayFixedLoanPosition(borrower, 100 ether, positions[i].posId);
+        assertGt(interest, 0, "should preview some interest");
+      }
+    }
+  }
+
+  /// @notice Full repay on a position with extraInterest removes it and cleans up
+  function test_fullRepayWithExtraInterest_removesPositionAndCleansUp() public {
+    _createExtraInterestViaLiquidation();
+
+    // Find position B (has extraInterest + remaining principal)
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    uint256 targetPosId;
+    for (uint256 i = 0; i < positions.length; i++) {
+      uint256 extra = broker.fixedPositionExtraInterest(borrower, positions[i].posId);
+      if (extra > 0 && positions[i].principal > positions[i].principalRepaid) {
+        targetPosId = positions[i].posId;
+        break;
+      }
+    }
+    assertGt(targetPosId, 0, "no suitable position found");
+
+    uint256 posCountBefore = positions.length;
+
+    // Repay everything (large amount to cover interest + extra + penalty + principal)
+    uint256 repayAll = 200_000 ether;
+    LISUSD.setBalance(borrower, repayAll);
+    vm.prank(borrower);
+    broker.repay(repayAll, targetPosId, borrower);
+
+    FixedLoanPosition[] memory afterPositions = broker.userFixedPositions(borrower);
+    assertEq(afterPositions.length, posCountBefore - 1, "position should be removed after full repay");
+    assertEq(broker.fixedPositionExtraInterest(borrower, targetPosId), 0, "extraInterest not cleaned");
+  }
+
+  /// @dev helper to find a fixed position by posId
+  function _getFixedPositionByPosId(address user, uint256 posId) internal view returns (FixedLoanPosition memory) {
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(user);
+    for (uint256 i = 0; i < positions.length; i++) {
+      if (positions[i].posId == posId) return positions[i];
+    }
+    revert("position not found");
+  }
+
   function test_peek_otherUser_noCollateral_returnsOraclePrice() public {
     // another user with no collateral
     address other = address(0xBEEF);
