@@ -1,13 +1,12 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "./DeployBase.sol";
 
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 
 import { VaultAllocator, FlowCapsConfig, FlowCaps, Id, MarketParams } from "vault-allocator/VaultAllocator.sol";
 
-contract LiquidatorDeploy is DeployBase {
+contract LiquidatorDeploy is Script {
   using MarketParamsLib for MarketParams;
   VaultAllocator allocator = VaultAllocator(0x9ECF66f016FCaA853FdA24d223bdb4276E5b524a);
   address vault = 0xfa27f172e0b6ebcEF9c51ABf817E2cb142FbE627;
@@ -23,7 +22,7 @@ contract LiquidatorDeploy is DeployBase {
   uint256 lltv70 = 70 * 1e16;
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

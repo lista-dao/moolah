@@ -3,6 +3,9 @@
 src = "src"
 out = "out"
 libs = ["lib"]
+remappings = [
+  "@openzeppelin/contracts/=lib/openzeppelin-contracts-upgradeable/lib/openzeppelin-contracts/contracts/",
+]
 solc = "0.8.34"
 optimizer = true
 optimizer_runs = 20
@@ -17,11 +20,6 @@ build_info = true
 extra_output = ["storageLayout"]
 # Enable the Solidity via-IR pipeline for better code size optimization
 via_ir = true
-
-[profile.ci]
-force = false
-build_info = false
-extra_output = []
 
 [rpc_endpoints]
 bsc_testnet = "${BSC_TESTNET_RPC_URL}"

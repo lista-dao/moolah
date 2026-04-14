@@ -1,13 +1,12 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "../DeployBase.sol";
 
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import { PTLinearDiscountOracle } from "../../src/oracle/PTLinearDiscountOracle.sol";
 
-contract PTLinearDiscountOracleDeploy is DeployBase {
+contract PTLinearDiscountOracleDeploy is Script {
   address ptToken = 0x62C6E813b9589C3631Ba0Cdb013acdB8544038B7;
   address USD1 = 0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d;
   address multiOracle = 0xA64FE284EB8279B9b63946DD51813b0116099301;
@@ -15,7 +14,7 @@ contract PTLinearDiscountOracleDeploy is DeployBase {
   address ptOracle = 0xd386A68d9EB8d4E6E7D18886634b30D807B6cc9b;
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

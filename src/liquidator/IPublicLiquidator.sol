@@ -36,8 +36,4 @@ interface IPublicLiquidator {
   function setMarketUserWhitelist(bytes32 id, address user, bool status) external;
 
   function setPairWhitelist(address pair, bool status) external;
-
-  function batchSetSmartProviders(address[] calldata providers, bool status) external;
-
-  function smartProviders(address provider) external view returns (bool);
 }

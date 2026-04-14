@@ -2,12 +2,11 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "../DeployBase.sol";
 import { BrokerInterestRelayer } from "../../src/broker/BrokerInterestRelayer.sol";
 
-contract DeployBrokerInterestRelayerImplScript is DeployBase {
+contract DeployBrokerInterestRelayerImplScript is Script {
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

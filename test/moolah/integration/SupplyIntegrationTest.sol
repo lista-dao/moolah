@@ -43,7 +43,7 @@ contract SupplyIntegrationTest is BaseTest {
   function testSupplyTokenNotCreated(uint256 amount, address token) public {
     amount = bound(amount, 1, MAX_TEST_AMOUNT);
 
-    vm.assume(token != address(0) && token.code.length == 0);
+    vm.assume(token.code.length == 0);
 
     marketParams.loanToken = token;
     marketParams.collateralToken = token;

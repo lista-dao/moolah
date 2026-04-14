@@ -1,11 +1,10 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "./DeployBase.sol";
 
 import { Moolah } from "moolah/Moolah.sol";
 
-contract MoolahTransferRoleDeploy is DeployBase {
+contract MoolahTransferRoleDeploy is Script {
   Moolah moolah = Moolah(0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C);
   address feeRecipient = 0x34B504A5CF0fF41F8A480580533b6Dda687fa3Da;
   address admin = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253;
@@ -17,7 +16,7 @@ contract MoolahTransferRoleDeploy is DeployBase {
   bytes32 public constant PAUSER = keccak256("PAUSER");
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

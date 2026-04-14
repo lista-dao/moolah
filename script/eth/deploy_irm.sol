@@ -1,7 +1,6 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "../DeployBase.sol";
 
 import { ERC1967Proxy, ERC1967Utils } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
@@ -9,14 +8,14 @@ import { InterestRateModel } from "interest-rate-model/InterestRateModel.sol";
 import { Moolah } from "moolah/Moolah.sol";
 //import "forge-std/console.sol";
 
-contract InterestRateModelDeploy is DeployBase {
+contract InterestRateModelDeploy is Script {
   address moolah = 0xf820fB4680712CD7263a0D3D024D5b5aEA82Fd70;
 
   bytes32 public constant BOT = keccak256("BOT");
   bytes32 public constant MANAGER = keccak256("MANAGER");
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

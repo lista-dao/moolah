@@ -2,10 +2,9 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "../DeployBase.sol";
 import { RateCalculator } from "../../src/broker/RateCalculator.sol";
 
-contract RegisterBrokers is DeployBase {
+contract RegisterBrokers is Script {
   struct RegisterConfig {
     address broker;
     uint256 minRate;
@@ -23,7 +22,7 @@ contract RegisterBrokers is DeployBase {
   }
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

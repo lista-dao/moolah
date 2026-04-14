@@ -25,8 +25,6 @@ interface IRateCalculator {
    */
   function getRate(address broker) external view returns (uint256);
 
-  function registerBroker(address _broker, uint256 _ratePerSecond, uint256 _maxRatePerSecond) external;
-
   /// ------------------------------
   ///            Events
   /// ------------------------------

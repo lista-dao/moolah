@@ -1,11 +1,10 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "../DeployBase.sol";
 
 import { InterestRateModel } from "interest-rate-model/InterestRateModel.sol";
 
-contract IrmTransferRoleDeploy is DeployBase {
+contract IrmTransferRoleDeploy is Script {
   InterestRateModel irm = InterestRateModel(0x8b7d334d243b74D63C4b963893267A0F5240F990);
   address admin = 0xa18ae79AEDA3e711E0CD64cfe1Cd06402d400D61;
   address manager = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
@@ -17,7 +16,7 @@ contract IrmTransferRoleDeploy is DeployBase {
   bytes32 public constant BOT = keccak256("BOT");
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

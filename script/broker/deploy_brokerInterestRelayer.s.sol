@@ -2,11 +2,10 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "../DeployBase.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { BrokerInterestRelayer } from "../../src/broker/BrokerInterestRelayer.sol";
 
-contract DeployBrokerInterestRelayer is DeployBase {
+contract DeployBrokerInterestRelayer is Script {
   address timelock;
   address manager;
   address moolah;
@@ -22,7 +21,7 @@ contract DeployBrokerInterestRelayer is DeployBase {
   }
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

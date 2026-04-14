@@ -1,7 +1,6 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "../DeployBase.sol";
 
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
@@ -10,9 +9,9 @@ import { StableSwapLP } from "src/dex/StableSwapLP.sol";
 import { StableSwapLPCollateral } from "src/dex/StableSwapLPCollateral.sol";
 import { StableSwapPool } from "src/dex/StableSwapPool.sol";
 
-contract StableSwapFactoryDeploy is DeployBase {
+contract StableSwapFactoryDeploy is Script {
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

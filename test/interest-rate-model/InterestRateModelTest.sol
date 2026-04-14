@@ -508,32 +508,4 @@ contract InterestRateModelTest is Test {
   function min(int256 a, uint256 b) internal pure returns (int256) {
     return a < int256(b) ? a : int256(b);
   }
-
-  function testBorrowRateUpdateRateAtTargetFloorGreaterOrEqualThanCap() public {
-    uint256 cap = uint256(4 ether) / 365 days;
-    uint256 floor = uint256(4 ether) / 365 days;
-    Market memory market;
-
-    vm.startPrank(makeAddr("bot"));
-    irm.updateRateCap(marketParams.id(), cap);
-    irm.updateRateFloor(marketParams.id(), floor);
-    vm.stopPrank();
-    Id id = marketParams.id();
-    irm.borrowRate(marketParams, market);
-    assertEq(irm.rateAtTarget(id), int256(cap / 4), "initial rateAtTarget");
-  }
-
-  function testBorrowRateUpdateRateAtTargetFloorLessThanCap() public {
-    uint256 cap = uint256(16 ether) / 365 days;
-    uint256 floor = uint256(0.1 ether) / 365 days;
-    Market memory market;
-
-    vm.startPrank(makeAddr("bot"));
-    irm.updateRateCap(marketParams.id(), cap);
-    irm.updateRateFloor(marketParams.id(), floor);
-    vm.stopPrank();
-    Id id = marketParams.id();
-    irm.borrowRate(marketParams, market);
-    assertEq(irm.rateAtTarget(id), int256(floor * 4), "initial rateAtTarget");
-  }
 }

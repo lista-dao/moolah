@@ -57,10 +57,4 @@ interface ILiquidator {
   function setPairWhitelist(address pair, bool status) external;
 
   function marketWhitelist(bytes32 id) external view returns (bool);
-
-  function tokenWhitelist(address token) external view returns (bool);
-
-  function batchSetSmartProviders(address[] calldata smartProviders, bool status) external;
-
-  function smartProviders(address provider) external view returns (bool);
 }

@@ -1,13 +1,12 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "../DeployBase.sol";
 
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 
-contract MoolahWBNBVaultDeploy is DeployBase {
+contract MoolahWBNBVaultDeploy is Script {
   address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
 
   address asset = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c; //USDT
@@ -15,7 +14,7 @@ contract MoolahWBNBVaultDeploy is DeployBase {
   string symbol = "MEVBNB";
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

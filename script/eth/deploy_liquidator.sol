@@ -1,18 +1,17 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "../DeployBase.sol";
 
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import { Liquidator } from "liquidator/Liquidator.sol";
 
-contract LiquidatorDeploy is DeployBase {
+contract LiquidatorDeploy is Script {
   address moolah = 0xf820fB4680712CD7263a0D3D024D5b5aEA82Fd70;
   address bot = 0x08E83A96F4dA5DecC0e6E9084dDe049A3E84ca04;
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

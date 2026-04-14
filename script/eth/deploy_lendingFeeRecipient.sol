@@ -1,13 +1,12 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "../DeployBase.sol";
 
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import { LendingFeeRecipient } from "revenue/LendingFeeRecipient.sol";
 
-contract LendingFeeRecipientDeploy is DeployBase {
+contract LendingFeeRecipientDeploy is Script {
   address moolah = 0xf820fB4680712CD7263a0D3D024D5b5aEA82Fd70;
   address vault = 0x57134a64B7cD9F9eb72F8255A671F5Bf2fe3E2d0;
   address marketFeeRecipient = 0x34B504A5CF0fF41F8A480580533b6Dda687fa3Da;
@@ -15,7 +14,7 @@ contract LendingFeeRecipientDeploy is DeployBase {
   address bot = 0x6F28FeC449dbd2056b76ac666350Af8773E03873;
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

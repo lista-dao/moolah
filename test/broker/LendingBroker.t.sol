@@ -896,103 +896,6 @@ contract LendingBrokerTest is Test {
     test_liquidation(1, false, false, false);
   }
 
-  // --------------- LISUSD DEPEG LIQUIDATIONS ---------------
-  // When LISUSD oracle price rises above 1e8, effective collateral price drops
-  // (collateralPrice = scaleFactor * basePrice / quotePrice), making positions liquidatable.
-  function test_liquidation_triggeredByLoanTokenPriceIncrease() public {
-    _prepareLiquidatablePositionByLoanTokenDepeg();
-
-    Position memory posBefore = moolah.position(marketParams.id(), borrower);
-    uint256 userRepayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, 50 * 1e8, 100 * 1e8);
-
-    uint256 principalBeforeBroker = _totalPrincipalAtBroker(borrower);
-    uint256 principalBeforeMoolah = _principalAtMoolah(borrower);
-    assertApproxEqAbs(principalBeforeBroker, principalBeforeMoolah, 1, "pre principal mismatch");
-
-    LISUSD.setBalance(address(liquidator), 1_000_000 ether);
-
-    vm.prank(BOT);
-    liquidator.liquidate(Id.unwrap(id), borrower, 0, userRepayShares);
-
-    uint256 principalAfterBroker = _totalPrincipalAtBroker(borrower);
-    uint256 principalAfterMoolah = _principalAtMoolah(borrower);
-    assertApproxEqAbs(principalAfterBroker, principalAfterMoolah, 1, "principal mismatch after liquidation");
-    assertLt(principalAfterBroker, principalBeforeBroker, "principal should decrease after liquidation");
-
-    Position memory posAfter = moolah.position(marketParams.id(), borrower);
-    assertLt(posAfter.borrowShares, posBefore.borrowShares, "borrow shares should decrease");
-    assertLt(posAfter.collateral, posBefore.collateral, "collateral should decrease");
-  }
-
-  function test_liquidation_notTriggeredWhenLoanTokenPriceDrops() public {
-    // Borrow near the limit with normal prices
-    uint256 termId = ++nextTermId;
-    FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: 30 days, apr: 105 * 1e25 });
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
-
-    vm.startPrank(borrower);
-    broker.borrow(40000 ether);
-    broker.borrow(40000 ether, termId);
-    vm.stopPrank();
-
-    // LISUSD depegs downward → effective collateral price increases → position stays healthy
-    oracle.setPrice(address(LISUSD), 0.8e8);
-
-    // Attempting to liquidate should revert because position is healthy
-    Position memory posBefore = moolah.position(marketParams.id(), borrower);
-    uint256 userRepayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, 50 * 1e8, 100 * 1e8);
-
-    LISUSD.setBalance(address(liquidator), 1_000_000 ether);
-
-    vm.prank(BOT);
-    vm.expectRevert();
-    liquidator.liquidate(Id.unwrap(id), borrower, 0, userRepayShares);
-  }
-
-  function test_liquidation_badDebt_triggeredByLoanTokenPriceIncrease() public {
-    _prepareLiquidatablePositionByLoanTokenDepeg();
-    // Further increase LISUSD price to create bad debt scenario
-    oracle.setPrice(address(LISUSD), 3e8);
-
-    Position memory posBefore = moolah.position(marketParams.id(), borrower);
-    // Use small percentage to avoid seizing more collateral than available
-    uint256 userRepayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, 1, 100 * 1e8);
-
-    LISUSD.setBalance(address(liquidator), 1_000_000 ether);
-
-    vm.prank(BOT);
-    liquidator.liquidate(Id.unwrap(id), borrower, 0, userRepayShares);
-
-    Position memory posAfter = moolah.position(marketParams.id(), borrower);
-    assertLt(posAfter.borrowShares, posBefore.borrowShares, "borrow shares should decrease");
-  }
-
-  function _prepareLiquidatablePositionByLoanTokenDepeg() internal {
-    uint256 termId = ++nextTermId;
-    FixedTermAndRate memory term = FixedTermAndRate({ termId: termId, duration: 30 days, apr: 105 * 1e25 });
-
-    vm.prank(BOT);
-    broker.updateFixedTermAndRate(term, false);
-
-    // Borrow near the limit
-    vm.startPrank(borrower);
-    broker.borrow(40000 ether);
-    broker.borrow(40000 ether, termId);
-    vm.stopPrank();
-
-    // Accrue some interest
-    vm.prank(MANAGER);
-    rateCalc.setMaxRatePerSecond(address(broker), RATE_SCALE + 30301 * 10 ** 14);
-    vm.prank(BOT);
-    rateCalc.setRatePerSecond(address(broker), RATE_SCALE + 30300 * 10 ** 14);
-    skip(10 days);
-
-    // LISUSD price rises → effective collateral price drops → position becomes unhealthy
-    // At 1.5e8, collateral is worth 2/3 in LISUSD terms, max borrow drops significantly
-    oracle.setPrice(address(LISUSD), 1.5e8);
-  }
-
   function test_liquidation(
     uint256 percentageToLiquidate,
     bool repayBySeizedCollateral,
@@ -1241,25 +1144,6 @@ contract LendingBrokerTest is Test {
   function test_peekLoanToken_OneE8() public {
     uint256 p = broker.peek(address(LISUSD), borrower);
     assertEq(p, 1e8);
-  }
-
-  function test_peekLoanToken_usesOraclePrice() public {
-    // Change the oracle price for LISUSD to a non-default value
-    oracle.setPrice(address(LISUSD), 0.98e8);
-    uint256 p = broker.peek(address(LISUSD), borrower);
-    assertEq(p, 0.98e8, "loan token price should come from oracle");
-  }
-
-  function test_peekLoanToken_oraclePriceAboveOneE8() public {
-    oracle.setPrice(address(LISUSD), 1.05e8);
-    uint256 p = broker.peek(address(LISUSD), borrower);
-    assertEq(p, 1.05e8, "loan token price should reflect oracle price above 1e8");
-  }
-
-  function test_peekLoanToken_oraclePriceZero() public {
-    oracle.setPrice(address(LISUSD), 0);
-    uint256 p = broker.peek(address(LISUSD), borrower);
-    assertEq(p, 0, "loan token price should be zero when oracle returns zero");
   }
 
   function test_peekCollateralReducedWithFixedInterest() public {

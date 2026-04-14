@@ -1,20 +1,19 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "../DeployBase.sol";
 
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import { TimeLock } from "timelock/TimeLock.sol";
 
-contract TimeLockDeploy is DeployBase {
+contract TimeLockDeploy is Script {
   address proposer = 0xB672Ea44A1EC692A9Baf851dC90a1Ee3DB25F1C4;
   address executor = 0xB672Ea44A1EC692A9Baf851dC90a1Ee3DB25F1C4;
   address canceller = 0xB672Ea44A1EC692A9Baf851dC90a1Ee3DB25F1C4;
   uint256 minDelay = 1 days;
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

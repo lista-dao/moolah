@@ -167,13 +167,4 @@ interface IBroker is IBrokerBase {
   /// @dev get the total debt of a user including principal and interest
   /// @param user The address of the user
   function getUserTotalDebt(address user) external view returns (uint256 totalDebt);
-
-  /// @dev set the market id for the broker, callable by owner only
-  /// @param marketId The market id to set
-  function setMarketId(Id marketId) external;
-
-  /// @dev toggle the liquidation whitelist status of an account
-  /// @param account The address of the account
-  /// @param isAddition Whether to add or remove the account from the whitelist
-  function toggleLiquidationWhitelist(address account, bool isAddition) external;
 }

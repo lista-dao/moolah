@@ -1,12 +1,11 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "../DeployBase.sol";
 
 import { SmartProvider } from "src/provider/SmartProvider.sol";
 import "./SCAddress.sol";
 
-contract TransferRole is DeployBase {
+contract TransferRole is Script {
   bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
   bytes32 public constant MANAGER = keccak256("MANAGER");
   bytes32 public constant PAUSER = keccak256("PAUSER");
@@ -14,7 +13,7 @@ contract TransferRole is DeployBase {
   bytes32 public constant ALLOCATOR = keccak256("ALLOCATOR"); // manager role
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

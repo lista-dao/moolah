@@ -1,12 +1,11 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "../DeployBase.sol";
 
 import { Liquidator } from "liquidator/Liquidator.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 
-contract LiquidatorTransferRoleDeploy is DeployBase {
+contract LiquidatorTransferRoleDeploy is Script {
   // using MarketParamsLib for MarketParams;
   Liquidator liquidator = Liquidator(payable(0x5Bf5c3B5f5c29dBC647d2557Cc22B00ED29f301C));
 
@@ -17,7 +16,7 @@ contract LiquidatorTransferRoleDeploy is DeployBase {
   bytes32 public constant MANAGER = keccak256("MANAGER");
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 

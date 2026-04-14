@@ -1,13 +1,12 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "../DeployBase.sol";
 
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import { SlisBNBxMinter } from "src/utils/SlisBNBxMinter.sol";
 
-contract StableSwapLPCollateralDeploy is DeployBase {
+contract StableSwapLPCollateralDeploy is Script {
   //  address slisBNBx_test = 0x3dC5a40119B85d5f2b06eEC86a6d36852bd9aB52;
   //  address slisBnbModule_test = 0x0612c940460D68C16aA213315E32Fba579beD6A6;
   //  address smartLpModule_test = 0x3953B325b5aD068E74D1fc58fc66CE4440F1E2FF;
@@ -17,7 +16,7 @@ contract StableSwapLPCollateralDeploy is DeployBase {
   address slisBnbModule = 0x33f7A980a246f9B8FEA2254E3065576E127D4D5f;
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

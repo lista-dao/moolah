@@ -2,10 +2,9 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "../DeployBase.sol";
 import { IBrokerLiquidator } from "../../src/liquidator/IBrokerLiquidator.sol";
 
-contract BrokerLiquidatorWhitelistTokensAndPairsScript is DeployBase {
+contract BrokerLiquidatorWhitelistTokensAndPairsScript is Script {
   address[] tokens = [
     0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c, // WBNB
     0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B, // slisBNB
@@ -22,7 +21,7 @@ contract BrokerLiquidatorWhitelistTokensAndPairsScript is DeployBase {
   }
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

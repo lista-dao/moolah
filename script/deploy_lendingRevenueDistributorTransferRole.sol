@@ -1,11 +1,10 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "./DeployBase.sol";
 
 import { LendingRevenueDistributor } from "src/revenue/LendingRevenueDistributor.sol";
 
-contract MoolahVaultTransferRoleDeploy is DeployBase {
+contract MoolahVaultTransferRoleDeploy is Script {
   LendingRevenueDistributor lendingRevenueDistributor =
     LendingRevenueDistributor(payable(0xea55952a51ddd771d6eBc45Bd0B512276dd0b866));
   address admin = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253; // timelock
@@ -16,7 +15,7 @@ contract MoolahVaultTransferRoleDeploy is DeployBase {
   bytes32 public constant BOT = keccak256("BOT");
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

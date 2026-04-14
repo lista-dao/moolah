@@ -29,7 +29,4 @@ interface IInterestRateModel is IIrm {
 
   /// @notice Updates the minimum borrow rate cap for all markets.
   function updateMinCap(uint256 newMinCap) external;
-
-  /// @notice Updates the minimum borrow rate for a market.
-  function updateRateFloor(Id id, uint256 newRateFloor) external;
 }

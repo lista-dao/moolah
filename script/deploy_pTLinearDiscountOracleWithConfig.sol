@@ -1,7 +1,6 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "./DeployBase.sol";
 import { Config } from "forge-std/Config.sol";
 
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
@@ -9,9 +8,9 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { PTLinearDiscountOracle } from "../src/oracle/PTLinearDiscountOracle.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
-contract PTLinearDiscountOracleWithConfigDeploy is DeployBase, Config {
+contract PTLinearDiscountOracleWithConfigDeploy is Script, Config {
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
@@ -81,6 +80,6 @@ contract PTLinearDiscountOracleWithConfigDeploy is DeployBase, Config {
       vm.setEnv(walletNames[i], vm.toString(wallets[i]));
     }
 
-    _loadConfig("./config/pt_oracles_20260320.toml", true);
+    _loadConfig("./config/pt_oracles_20260205.toml", true);
   }
 }

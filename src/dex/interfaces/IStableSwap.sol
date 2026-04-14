@@ -106,7 +106,6 @@ interface IStableSwap {
   event RevertParameters();
   event DonateAdminFees();
   event ChangePriceDiffThreshold(uint256 price0DiffThreshold, uint256 price1DiffThreshold);
-  event SetSkipPriceDiff(bool skipPriceDiff);
   event ChangeOracle(address newOracle);
 }
 

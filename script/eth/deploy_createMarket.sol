@@ -1,13 +1,12 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "../DeployBase.sol";
 
 import { Moolah } from "moolah/Moolah.sol";
 import { MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 
-contract CreateMarketDeploy is DeployBase {
+contract CreateMarketDeploy is Script {
   using MarketParamsLib for MarketParams;
 
   Moolah moolah = Moolah(0xf820fB4680712CD7263a0D3D024D5b5aEA82Fd70);
@@ -46,7 +45,7 @@ contract CreateMarketDeploy is DeployBase {
   uint256 lltv965 = 0.965 ether;
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 

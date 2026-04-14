@@ -1,20 +1,19 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
-import { DeployBase } from "./DeployBase.sol";
 
 import { Moolah } from "moolah/Moolah.sol";
 import { MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { Config } from "forge-std/Config.sol";
 
-contract CreateMarketWithConfigDeploy is DeployBase, Config {
+contract CreateMarketWithConfigDeploy is Script, Config {
   using MarketParamsLib for MarketParams;
   Moolah moolah = Moolah(0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C);
   address moolahManager = 0xd7e38800201D6a42C408Bf79d8723740C4E7f631;
 
   function run() public {
-    uint256 deployerPrivateKey = _deployerKey();
+    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
@@ -77,6 +76,6 @@ contract CreateMarketWithConfigDeploy is DeployBase, Config {
       vm.setEnv(lltvNames[i], vm.toString(lltvs[i]));
     }
 
-    _loadConfig("./config/markets_20260408.toml", true);
+    _loadConfig("./config/markets_20260313_02.toml", true);
   }
 }
