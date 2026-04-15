@@ -490,6 +490,11 @@ contract MoolahVault is
     }
   }
 
+  /// @inheritdoc IERC20Metadata
+  function symbol() public view override(ERC20Upgradeable, IERC20Metadata) returns (string memory) {
+    return "vlisU";
+  }
+
   /* ERC4626Upgradeable (INTERNAL) */
 
   /// @inheritdoc ERC4626Upgradeable
