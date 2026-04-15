@@ -1,0 +1,8 @@
+[bsc]
+enendpoint_url = "${BSC_RPC_URL}"
+
+[bsc.address]
+pt = []
+
+[bsc.uint]
+discount = []
