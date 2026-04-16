@@ -11,6 +11,8 @@ import { IMoolah, MarketParams, Id, Position, Market } from "moolah/interfaces/I
 import { OracleMock } from "../../src/moolah/mocks/OracleMock.sol";
 import { IrmMockZero } from "../../src/moolah/mocks/IrmMock.sol";
 import { ERC20Mock } from "../../src/moolah/mocks/ERC20Mock.sol";
+import { WBNBMock } from "../../src/moolah/mocks/WBNBMock.sol";
+import { BNBProvider } from "../../src/provider/BNBProvider.sol";
 
 import { LendingBroker } from "../../src/broker/LendingBroker.sol";
 import { RateCalculator } from "../../src/broker/RateCalculator.sol";
@@ -39,13 +41,19 @@ contract LendingBrokerTest is Test {
   // Core
   IMoolah public moolah;
   LendingBroker public broker;
+  LendingBroker public bnbBroker;
   RateCalculator public rateCalc;
   MoolahVault public vault;
+  MoolahVault public bnbVault;
   BrokerInterestRelayer public relayer;
+  BrokerInterestRelayer public bnbRelayer;
+  BNBProvider public bnbProvider;
 
   // Market commons
   MarketParams public marketParams;
+  MarketParams public bnbMarketParams;
   Id public id;
+  Id public bnbId;
 
   // Token handles (real tokens on fork or mocks locally if used)
   OracleMock public oracle; // unused in fork path
@@ -67,6 +75,7 @@ contract LendingBrokerTest is Test {
   // Local mocks
   ERC20Mock public LISUSD;
   ERC20Mock public BTCB;
+  WBNBMock public WBNB;
   uint8 constant LISUSD_DECIMALS = 18;
   uint8 constant BTCB_DECIMALS = 18;
 
@@ -90,21 +99,30 @@ contract LendingBrokerTest is Test {
     BTCB.setName("Wrapped BTC (BSC)");
     BTCB.setSymbol("BTCB");
     BTCB.setDecimals(BTCB_DECIMALS);
+    WBNB = new WBNBMock();
 
     // Oracle with initial prices
     oracle = new OracleMock();
     oracle.setPrice(address(LISUSD), 1e8);
     oracle.setPrice(address(BTCB), 120000e8);
+    oracle.setPrice(address(WBNB), 1e8);
 
     // IRM enable + LLTV
     irm = new IrmMockZero();
-    vm.prank(MANAGER);
+    vm.startPrank(MANAGER);
     Moolah(address(moolah)).enableIrm(address(irm));
-    vm.prank(MANAGER);
     Moolah(address(moolah)).enableLltv(80 * 1e16); // 80%
+    vm.stopPrank();
 
     // Vault (only used as supply receiver for interest in tests)
     vault = new MoolahVault(address(moolah), address(LISUSD));
+
+    MoolahVault bnbVaultImpl = new MoolahVault(address(moolah), address(WBNB));
+    ERC1967Proxy bnbVaultProxy = new ERC1967Proxy(
+      address(bnbVaultImpl),
+      abi.encodeWithSelector(MoolahVault.initialize.selector, ADMIN, MANAGER, address(WBNB), "BNB Vault", "vBNB")
+    );
+    bnbVault = MoolahVault(address(bnbVaultProxy));
 
     // BrokerInterestRelayer
     BrokerInterestRelayer relayerImpl = new BrokerInterestRelayer();
@@ -121,6 +139,20 @@ contract LendingBrokerTest is Test {
     );
     relayer = BrokerInterestRelayer(address(relayerProxy));
 
+    BrokerInterestRelayer bnbRelayerImpl = new BrokerInterestRelayer();
+    ERC1967Proxy bnbRelayerProxy = new ERC1967Proxy(
+      address(bnbRelayerImpl),
+      abi.encodeWithSelector(
+        BrokerInterestRelayer.initialize.selector,
+        ADMIN,
+        MANAGER,
+        address(moolah),
+        address(bnbVault),
+        address(WBNB)
+      )
+    );
+    bnbRelayer = BrokerInterestRelayer(address(bnbRelayerProxy));
+
     // RateCalculator proxy
     RateCalculator rcImpl = new RateCalculator();
     ERC1967Proxy rcProxy = new ERC1967Proxy(
@@ -130,12 +162,26 @@ contract LendingBrokerTest is Test {
     rateCalc = RateCalculator(address(rcProxy));
 
     // Deploy LendingBroker proxy first (used as oracle by the market)
-    LendingBroker bImpl = new LendingBroker(address(moolah), address(relayer), address(oracle));
+    LendingBroker bImpl = new LendingBroker(address(moolah), address(relayer), address(oracle), address(0));
     ERC1967Proxy bProxy = new ERC1967Proxy(
       address(bImpl),
       abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
     );
     broker = LendingBroker(payable(address(bProxy)));
+
+    LendingBroker bnbImpl = new LendingBroker(address(moolah), address(bnbRelayer), address(oracle), address(WBNB));
+    ERC1967Proxy bnbProxy = new ERC1967Proxy(
+      address(bnbImpl),
+      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
+    );
+    bnbBroker = LendingBroker(payable(address(bnbProxy)));
+
+    BNBProvider bnbProviderImpl = new BNBProvider(address(moolah), address(bnbVault), address(WBNB));
+    ERC1967Proxy bnbProviderProxy = new ERC1967Proxy(
+      address(bnbProviderImpl),
+      abi.encodeWithSelector(BNBProvider.initialize.selector, ADMIN, MANAGER)
+    );
+    bnbProvider = BNBProvider(payable(address(bnbProviderProxy)));
 
     // Create market using LendingBroker as the oracle address
     marketParams = MarketParams({
@@ -147,35 +193,54 @@ contract LendingBrokerTest is Test {
     });
     id = marketParams.id();
     Moolah(address(moolah)).createMarket(marketParams);
+    bnbMarketParams = MarketParams({
+      loanToken: address(WBNB),
+      collateralToken: address(BTCB),
+      oracle: address(bnbBroker),
+      irm: address(irm),
+      lltv: 80 * 1e16
+    });
+    bnbId = bnbMarketParams.id();
+    Moolah(address(moolah)).createMarket(bnbMarketParams);
 
     // Bind broker to market id
-    vm.prank(MANAGER);
+    vm.startPrank(MANAGER);
     broker.setMarketId(id);
+    bnbBroker.setMarketId(bnbId);
+    vm.stopPrank();
 
     // Register broker and set as market broker (for user-aware pricing)
     vm.startPrank(MANAGER);
     rateCalc.registerBroker(address(broker), RATE_SCALE + 1, RATE_SCALE + 2);
+    rateCalc.registerBroker(address(bnbBroker), RATE_SCALE + 1, RATE_SCALE + 2);
     Moolah(address(moolah)).setMarketBroker(id, address(broker), true);
+    Moolah(address(moolah)).setMarketBroker(bnbId, address(bnbBroker), true);
+    Moolah(address(moolah)).setProvider(bnbId, address(bnbProvider), true);
     vm.stopPrank();
 
     // Seed market liquidity
     uint256 seed = SUPPLY_LIQ;
     LISUSD.setBalance(supplier, seed);
+    deal(address(WBNB), supplier, seed);
     vm.startPrank(supplier);
     IERC20(address(LISUSD)).approve(address(moolah), type(uint256).max);
     moolah.supply(marketParams, seed, 0, supplier, bytes(""));
+    IERC20(address(WBNB)).approve(address(moolah), type(uint256).max);
+    moolah.supply(bnbMarketParams, seed, 0, supplier, bytes(""));
     vm.stopPrank();
 
     // Fund borrower with collateral and deposit to Moolah
-    BTCB.setBalance(borrower, COLLATERAL);
+    BTCB.setBalance(borrower, COLLATERAL * 2);
     vm.startPrank(borrower);
     BTCB.approve(address(moolah), type(uint256).max);
     moolah.supplyCollateral(marketParams, COLLATERAL, borrower, bytes(""));
+    moolah.supplyCollateral(bnbMarketParams, COLLATERAL, borrower, bytes(""));
     vm.stopPrank();
 
     // Approval for borrower -> broker (for future repay)
-    vm.prank(borrower);
+    vm.startPrank(borrower);
     LISUSD.approve(address(broker), type(uint256).max);
+    vm.stopPrank();
 
     // deploy liquidator contract
     BrokerLiquidator mockLiqImpl = new BrokerLiquidator(address(moolah));
@@ -186,11 +251,14 @@ contract LendingBrokerTest is Test {
     liquidator = BrokerLiquidator(address(mockLiqProxy));
 
     // whitelist lendingbroker as liquidator in moolah
-    Id[] memory ids = new Id[](1);
+    Id[] memory ids = new Id[](2);
     ids[0] = id;
-    address[][] memory accounts = new address[][](1);
+    ids[1] = bnbId;
+    address[][] memory accounts = new address[][](2);
     accounts[0] = new address[](1);
     accounts[0][0] = address(broker);
+    accounts[1] = new address[](1);
+    accounts[1][0] = address(bnbBroker);
     vm.prank(MANAGER);
     Moolah(address(moolah)).batchToggleLiquidationWhitelist(ids, accounts, true);
 
@@ -199,12 +267,16 @@ contract LendingBrokerTest is Test {
     broker.toggleLiquidationWhitelist(address(liquidator), true);
 
     // add broker into relayer
-    vm.prank(MANAGER);
+    vm.startPrank(MANAGER);
     relayer.addBroker(address(broker));
+    bnbRelayer.addBroker(address(bnbBroker));
+    vm.stopPrank();
 
     // add brokers mapping in liquidator
-    vm.prank(MANAGER);
+    vm.startPrank(MANAGER);
     liquidator.setMarketToBroker(Id.unwrap(id), address(broker), true);
+    liquidator.setMarketToBroker(Id.unwrap(bnbId), address(bnbBroker), true);
+    vm.stopPrank();
   }
 
   function _snapshot(address user) internal view returns (Market memory market, Position memory pos) {
@@ -1158,13 +1230,13 @@ contract LendingBrokerTest is Test {
   // -----------------------------
 
   function test_borrowZeroAmount_Reverts() public {
-    vm.expectRevert(bytes("broker/zero-amount"));
+    vm.expectRevert(LendingBroker.ZeroAmount.selector);
     vm.prank(borrower);
     broker.borrow(0);
   }
 
   function test_borrowFixedTermNotFound_Reverts() public {
-    vm.expectRevert(bytes("broker/term-not-found"));
+    vm.expectRevert(LendingBroker.TermNotFound.selector);
     vm.prank(borrower);
     broker.borrow(100 ether, 999);
   }
@@ -1178,7 +1250,7 @@ contract LendingBrokerTest is Test {
   function test_setBorrowPaused_sameValue_reverts() public {
     vm.prank(MANAGER);
     broker.setBorrowPaused(true);
-    vm.expectRevert(bytes("broker/same-value-provided"));
+    vm.expectRevert(LendingBroker.SameValueProvided.selector);
     vm.prank(MANAGER);
     broker.setBorrowPaused(true);
   }
@@ -1187,7 +1259,7 @@ contract LendingBrokerTest is Test {
     vm.prank(MANAGER);
     broker.setBorrowPaused(true);
 
-    vm.expectRevert(bytes("Broker/borrow-paused"));
+    vm.expectRevert(LendingBroker.BorrowIsPaused.selector);
     vm.prank(borrower);
     broker.borrow(1 ether);
   }
@@ -1199,7 +1271,7 @@ contract LendingBrokerTest is Test {
     vm.prank(MANAGER);
     broker.setBorrowPaused(true);
 
-    vm.expectRevert(bytes("Broker/borrow-paused"));
+    vm.expectRevert(LendingBroker.BorrowIsPaused.selector);
     vm.prank(borrower);
     broker.borrow(1 ether, 111);
   }
@@ -1233,7 +1305,7 @@ contract LendingBrokerTest is Test {
 
     vm.startPrank(borrower);
     broker.borrow(15 ether, 11);
-    vm.expectRevert(bytes("broker/exceed-max-fixed-positions"));
+    vm.expectRevert(LendingBroker.ExceedMaxFixedPositions.selector);
     broker.borrow(15 ether, 11);
     vm.stopPrank();
   }
@@ -1283,31 +1355,31 @@ contract LendingBrokerTest is Test {
   }
 
   function test_peekUnsupportedToken_Reverts() public {
-    vm.expectRevert(bytes("broker/unsupported-token"));
+    vm.expectRevert(LendingBroker.UnsupportedToken.selector);
     broker.peek(address(0xDEA), borrower);
   }
 
   function test_marketIdSet_guard_reverts() public {
     // Deploy a second broker without setting market id
-    LendingBroker bImpl2 = new LendingBroker(address(moolah), address(vault), address(oracle));
+    LendingBroker bImpl2 = new LendingBroker(address(moolah), address(vault), address(oracle), address(0));
     ERC1967Proxy bProxy2 = new ERC1967Proxy(
       address(bImpl2),
       abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
     );
     LendingBroker broker2 = LendingBroker(payable(address(bProxy2)));
-    vm.expectRevert(bytes("Broker/market-not-set"));
+    vm.expectRevert(LendingBroker.MarketNotSet.selector);
     vm.prank(borrower);
     broker2.borrow(1 ether);
   }
 
   function test_setMarketId_onlyOnce_reverts() public {
-    vm.expectRevert(bytes("broker/invalid-market"));
+    vm.expectRevert(LendingBroker.InvalidMarket.selector);
     vm.prank(MANAGER);
     broker.setMarketId(id);
   }
 
   function test_liquidatorSetMarketWhitelist_whitelistsNewBroker() public {
-    LendingBroker bImpl2 = new LendingBroker(address(moolah), address(relayer), address(oracle));
+    LendingBroker bImpl2 = new LendingBroker(address(moolah), address(relayer), address(oracle), address(0));
     ERC1967Proxy bProxy2 = new ERC1967Proxy(
       address(bImpl2),
       abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
@@ -1338,7 +1410,7 @@ contract LendingBrokerTest is Test {
   }
 
   function test_liquidatorBatchSetMarketWhitelist_whitelistsMultipleMarkets() public {
-    LendingBroker bImplA = new LendingBroker(address(moolah), address(relayer), address(oracle));
+    LendingBroker bImplA = new LendingBroker(address(moolah), address(relayer), address(oracle), address(0));
     ERC1967Proxy bProxyA = new ERC1967Proxy(
       address(bImplA),
       abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
@@ -1357,7 +1429,7 @@ contract LendingBrokerTest is Test {
     vm.prank(MANAGER);
     brokerA.setMarketId(idA);
 
-    LendingBroker bImplB = new LendingBroker(address(moolah), address(relayer), address(oracle));
+    LendingBroker bImplB = new LendingBroker(address(moolah), address(relayer), address(oracle), address(0));
     ERC1967Proxy bProxyB = new ERC1967Proxy(
       address(bImplB),
       abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
@@ -1402,15 +1474,15 @@ contract LendingBrokerTest is Test {
     FixedTermAndRate memory term2 = FixedTermAndRate({ termId: 1, duration: 0, apr: 105 * 1e25 });
     FixedTermAndRate memory term3 = FixedTermAndRate({ termId: 2, duration: 90 days, apr: 0 });
     // termId = 0
-    vm.expectRevert(bytes("broker/invalid-term-id"));
+    vm.expectRevert(LendingBroker.InvalidTermId.selector);
     vm.prank(BOT);
     broker.updateFixedTermAndRate(term1, false);
     // duration = 0
-    vm.expectRevert(bytes("broker/invalid-duration"));
+    vm.expectRevert(LendingBroker.InvalidDuration.selector);
     vm.prank(BOT);
     broker.updateFixedTermAndRate(term2, false);
     // apr < RATE_SCALE
-    vm.expectRevert(bytes("broker/invalid-apr"));
+    vm.expectRevert(LendingBroker.InvalidAPR.selector);
     vm.prank(BOT);
     broker.updateFixedTermAndRate(term3, false);
   }
@@ -1429,7 +1501,7 @@ contract LendingBrokerTest is Test {
     terms = broker.getFixedTerms();
     assertEq(terms.length, 0);
     // remove again -> revert
-    vm.expectRevert(bytes("broker/term-not-found"));
+    vm.expectRevert(LendingBroker.TermNotFound.selector);
     vm.prank(BOT);
     broker.updateFixedTermAndRate(term, true);
   }
@@ -1504,7 +1576,7 @@ contract LendingBrokerTest is Test {
 
   function test_setMaxFixedLoanPositions_sameValue_reverts() public {
     // default is 10 (from initialize)
-    vm.expectRevert(bytes("broker/same-value-provided"));
+    vm.expectRevert(LendingBroker.SameValueProvided.selector);
     vm.prank(MANAGER);
     broker.setMaxFixedLoanPositions(10);
   }
@@ -1530,6 +1602,68 @@ contract LendingBrokerTest is Test {
     broker.repay(minLoan / 2, borrower);
   }
 
+  // -----------------------------
+  // Emergency withdraw & receive
+  // -----------------------------
+
+  function test_receive_acceptsNativeBNB() public {
+    uint256 amount = 1 ether;
+    vm.deal(address(this), amount);
+    (bool success, ) = address(broker).call{ value: amount }("");
+    assertTrue(success, "receive failed");
+    assertEq(address(broker).balance, amount, "broker balance mismatch");
+  }
+
+  function test_emergencyWithdraw_ERC20_byManager() public {
+    uint256 amount = 500 ether;
+    LISUSD.setBalance(address(broker), amount);
+
+    uint256 managerBefore = LISUSD.balanceOf(MANAGER);
+    vm.prank(MANAGER);
+    broker.emergencyWithdraw(address(LISUSD), amount);
+
+    assertEq(LISUSD.balanceOf(address(broker)), 0, "broker should have 0 after withdraw");
+    assertEq(LISUSD.balanceOf(MANAGER) - managerBefore, amount, "manager should receive tokens");
+  }
+
+  function test_emergencyWithdraw_nativeBNB_byManager() public {
+    uint256 amount = 2 ether;
+    vm.deal(address(broker), amount);
+
+    uint256 managerBefore = MANAGER.balance;
+    vm.prank(MANAGER);
+    broker.emergencyWithdraw(address(0), amount);
+
+    assertEq(address(broker).balance, 0, "broker should have 0 BNB after withdraw");
+    assertEq(MANAGER.balance - managerBefore, amount, "manager should receive BNB");
+  }
+
+  function test_emergencyWithdraw_revertsForNonManager() public {
+    uint256 amount = 1 ether;
+    LISUSD.setBalance(address(broker), amount);
+
+    vm.expectRevert();
+    vm.prank(borrower);
+    broker.emergencyWithdraw(address(LISUSD), amount);
+  }
+
+  function test_emergencyWithdraw_revertsOnZeroAmount() public {
+    vm.expectRevert(LendingBroker.ZeroAmount.selector);
+    vm.prank(MANAGER);
+    broker.emergencyWithdraw(address(LISUSD), 0);
+  }
+
+  function test_emergencyWithdraw_emitsEvent() public {
+    uint256 amount = 100 ether;
+    LISUSD.setBalance(address(broker), amount);
+
+    vm.expectEmit(true, true, false, true);
+    emit IBroker.EmergencyWithdrawn(MANAGER, address(LISUSD), amount);
+
+    vm.prank(MANAGER);
+    broker.emergencyWithdraw(address(LISUSD), amount);
+  }
+
   function test_checkPositionsMeetsMinLoan_allowsFullRepay() public {
     vm.prank(MANAGER);
     moolah.setMinLoanValue(1e8);
@@ -1545,6 +1679,26 @@ contract LendingBrokerTest is Test {
     DynamicLoanPosition memory pos = broker.userDynamicPosition(borrower);
     assertEq(pos.principal, 0);
     assertEq(pos.normalizedDebt, 0);
+  }
+
+  /// @notice repay{value} reverts when LOAN_TOKEN != WBNB (native BNB not supported).
+  function test_repay_native_revertsWhenLoanTokenIsNotWBNB() public {
+    vm.prank(borrower);
+    broker.borrow(1000 ether);
+
+    vm.deal(borrower, 1 ether);
+    vm.prank(borrower);
+    vm.expectRevert(LendingBroker.NativeNotSupported.selector);
+    broker.repay{ value: 1 ether }(1 ether, borrower);
+  }
+
+  function test_borrowAndRepay_native_whenLoanTokenIsWBNB() public {
+    vm.deal(borrower, 1000 ether);
+    vm.deal(address(WBNB), 1000 ether);
+    vm.startPrank(borrower);
+    bnbBroker.borrow(1000 ether);
+    bnbBroker.repay{ value: 1 ether }(1 ether, borrower);
+    vm.stopPrank();
   }
 }
 

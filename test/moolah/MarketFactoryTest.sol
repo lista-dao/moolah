@@ -495,7 +495,7 @@ contract MarketFactoryTest is Test {
   }
 
   function newLendingBroker(address replayer) private returns (LendingBroker) {
-    LendingBroker lendingBrokerImpl = new LendingBroker(address(moolah), replayer, address(oracle));
+    LendingBroker lendingBrokerImpl = new LendingBroker(address(moolah), replayer, address(oracle), address(0));
     ERC1967Proxy lendingBrokerProxy = new ERC1967Proxy(
       address(lendingBrokerImpl),
       abi.encodeWithSelector(
@@ -509,6 +509,6 @@ contract MarketFactoryTest is Test {
       )
     );
 
-    return LendingBroker(address(lendingBrokerProxy));
+    return LendingBroker(payable(address(lendingBrokerProxy)));
   }
 }

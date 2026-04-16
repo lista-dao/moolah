@@ -108,6 +108,7 @@ interface IBroker is IBrokerBase {
   event BorrowPaused(bool paused);
   event AddedLiquidationWhitelist(address indexed account);
   event RemovedLiquidationWhitelist(address indexed account);
+  event EmergencyWithdrawn(address indexed sender, address indexed token, uint256 amount);
   event FixedPositionRefinanced(
     address indexed user,
     uint256 posId,
@@ -144,20 +145,27 @@ interface IBroker is IBrokerBase {
   function borrow(uint256 amount, uint256 termId) external;
 
   /// @dev repay a loan with the dynamic rate scheme
-  /// @param amount The amount to repay
+  /// @param amount The amount to repay (overridden by msg.value when sending native BNB)
   /// @param onBehalf The address of the user whose position to repay
-  function repay(uint256 amount, address onBehalf) external;
+  function repay(uint256 amount, address onBehalf) external payable;
 
   /// @dev repay a loan with a fixed rate and term
-  /// @param amount The amount to repay
+  /// @param amount The amount to repay (overridden by msg.value when sending native BNB)
   /// @param posIdx The index of the fixed position to repay
   /// @param onBehalf The address of the user whose position to repay
-  function repay(uint256 amount, uint256 posIdx, address onBehalf) external;
+  function repay(uint256 amount, uint256 posIdx, address onBehalf) external payable;
 
   /// @dev refinance expired fixed positions to dynamic
   /// @param user The address of the user to refinance
   /// @param positionIds The posIds of the fixed positions to refinance
   function refinanceMaturedFixedPositions(address user, uint256[] calldata positionIds) external;
+
+  /// @dev Borrow with a fixed rate and term on behalf of a user. Caller must be authorized in Moolah.
+  /// @param amount The amount to borrow
+  /// @param termId The ID of the fixed term to use
+  /// @param user The address of the user whose position is created
+  /// @param receiver The address that receives the borrowed tokens
+  function borrow(uint256 amount, uint256 termId, address user, address receiver) external;
 
   /// @dev Convert a portion of or the entire dynamic loan position to a fixed loan position
   /// @param amount The amount to convert from dynamic to fixed
