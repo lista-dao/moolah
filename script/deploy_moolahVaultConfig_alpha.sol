@@ -91,7 +91,7 @@ contract MoolahVaultConfigDeploy is DeployBase {
 
     vault.setFee(fee);
 
-    vault.addWhiteList(whiteList);
+    vault.setWhiteList(whiteList, true);
 
     vault.setCap(BTCBParams, 10_000_000 ether);
     vault.setCap(USDTParams, 10_000_000 ether);
@@ -136,7 +136,7 @@ contract MoolahVaultConfigDeploy is DeployBase {
 
     vault.setFee(fee);
 
-    vault.addWhiteList(whiteList);
+    vault.setWhiteList(whiteList, true);
 
     vault.setCap(BTCBParams, 50_000_000 ether);
     vault.setCap(USDTParams, 50_000_000 ether);
@@ -181,7 +181,7 @@ contract MoolahVaultConfigDeploy is DeployBase {
 
     vault.setFee(fee);
 
-    vault.addWhiteList(whiteList);
+    vault.setWhiteList(whiteList, true);
 
     vault.setCap(BTCBParams, 1_000_000 ether);
     vault.setCap(USDTParams, 1_000_000 ether);
