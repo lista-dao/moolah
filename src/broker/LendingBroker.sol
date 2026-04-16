@@ -439,15 +439,16 @@ contract LendingBroker is
     address user = msg.sender;
     DynamicLoanPosition storage position = dynamicLoanPositions[user];
     if (fixedLoanPositions[user].length >= maxFixedLoanPositions) revert ExceedMaxFixedPositions();
-    // cap amount by principal
-    amount = UtilsLib.min(amount, position.principal);
     // accrue current rate so normalized debt reflects the latest interest
     uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
     uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate);
     uint256 totalInterest = actualDebt.zeroFloorSub(position.principal);
 
-    // force user to repay interest portion when converting to fixed
-    uint256 interestToRepay = BrokerMath.mulDivCeiling(amount, totalInterest, position.principal);
+    // prioritize clearing interest first, then principal
+    uint256 interestToRepay = UtilsLib.min(amount, totalInterest);
+    uint256 principalToMove = UtilsLib.min(amount - interestToRepay, position.principal);
+    amount = interestToRepay + principalToMove;
+
     if (interestToRepay > 0) {
       // borrow from Moolah to increase user's actual debt at moolah
       _borrowFromMoolah(user, interestToRepay);
@@ -456,9 +457,9 @@ contract LendingBroker is
     }
 
     position.normalizedDebt = position.normalizedDebt.zeroFloorSub(
-      BrokerMath.normalizeBorrowAmount(amount + interestToRepay, rate, false)
+      BrokerMath.normalizeBorrowAmount(amount, rate, false)
     );
-    position.principal -= amount;
+    position.principal -= principalToMove;
 
     if (position.principal == 0) {
       delete dynamicLoanPositions[user];
@@ -473,7 +474,7 @@ contract LendingBroker is
     fixedLoanPositions[user].push(
       FixedLoanPosition({
         posId: fixedPosUuid,
-        principal: amount + interestToRepay,
+        principal: amount,
         apr: term.apr,
         start: start,
         end: end,
