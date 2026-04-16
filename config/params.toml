@@ -67,6 +67,10 @@ tokens = [
   "0x1e798C7fcE8B3Cdce8950f8Ff5a0C62f1Dc7d532",
   "0xF74d306D939724236d7D99858428bC786A495932",
   "0x719f6445cdAC08B84611D0F19d733F57214bcfee",
+  "0x4aa18834211Fb3E2B6cBD14b5e22B33c2C0475c2",
+  "0x54a8F370575fe98c305640D7D11B8aa2df451B13",
+  "0x721105716Ab5419f1aAADbbC7835e3eaBd7e067d",
+  "0x3d383503fc6df144a1cbf0CD588a78835f54672c",
 ]
 
 ### Oracles
@@ -121,6 +125,10 @@ ptBaseOracles = [
   "0x55791D105E485Da4DE7e275090c64a8De12080a7",
   "0xEf3fE714D397ABF83631B9ADee021d8CC80104Fb",
   "0xA7c82BA0438748293E51aA726289dE4848BcC722",
+    "0x26b7feAeb375998604721D27Eb1Bb40496eB375e",
+  "0x9f025f958A93BB71982949Cb6B499052EE23956b",
+  "0x94a5A1BB09dfA5b92Ef3F1d8596C5c47b1F06326",
+  "0xC7DFE519dfC714fE745Bb2348c8cb117080dD5e0",
 ]
 
 wallets = [
@@ -143,6 +151,14 @@ lltvs = [
   915000000000000000,
   945000000000000000,
   965000000000000000,
+]
+
+### Discounts
+discounts = [
+  170000000000000000,
+  270000000000000000,
+  250000000000000000,
+  150000000000000000,
 ]
 
 [bsc.string]
@@ -210,6 +226,10 @@ tokenNames = [
   "ptSUSDai15OTC2026",
   "ptCUSD24JUL2026",
   "slisBNB_BNB",
+  "ptUSDG28MAY2026",
+  "ptReUSD25JUN2026",
+  "ptSUSDe7MAY2026ETH",
+  "ptSUSDe18JUN2026Plasma",
 ]
 
 ptBaseOracleNames = [
@@ -219,6 +239,10 @@ ptBaseOracleNames = [
   "ptSlisBNBx25JUN2026BaseOracle",
   "ptSUSDai15OTC2026BaseOracle",
   "ptCUSD24JUL2026BaseOracle",
+  "ptUSDG28MAY2026BaseOracle",
+  "ptReUSD25JUN2026BaseOracle",
+  "ptSUSDe7MAY2026ETHBaseOracle",
+  "ptSUSDe18JUN2026PlasmaBaseOracle",
 ]
 
 oracleNames = [
@@ -278,6 +302,13 @@ lltvNames = [
   "LLTV_915",
   "LLTV_945",
   "LLTV_965"
+]
+
+discountNames = [
+  "discount_17",
+  "discount_27",
+  "discount_25",
+  "discount_15",
 ]
 
 walletNames = [

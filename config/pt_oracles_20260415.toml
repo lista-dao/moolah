@@ -1,0 +1,28 @@
+[bsc]
+enendpoint_url = "${BSC_RPC_URL}"
+
+[bsc.address]
+### PT-USDG-28MAY2026, PT-reUSD-25JUN2026, PT-sUSDe-7MAY2026(ETH), PT-sUSDe-18JUN2026(Plasma)
+ptCollateral = [
+  "${ptUSDG28MAY2026}",
+  "${ptReUSD25JUN2026}",
+  "${ptSUSDe7MAY2026ETH}",
+  "${ptSUSDe18JUN2026Plasma}",
+]
+
+ptLoan = [
+  "${USDT}",
+  "${USDT}",
+  "${USDT}",
+  "${USDT}",
+]
+
+ptOracle = [
+  "${ptUSDG28MAY2026BaseOracle}",
+  "${ptReUSD25JUN2026BaseOracle}",
+  "${ptSUSDe7MAY2026ETHBaseOracle}",
+  "${ptSUSDe18JUN2026PlasmaBaseOracle}",
+]
+
+multiOracle = "${MULTI_ORACLE}"
+admin = "${ADMIN}"
