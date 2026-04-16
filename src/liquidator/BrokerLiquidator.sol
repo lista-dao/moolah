@@ -11,6 +11,10 @@ import { Id, MarketParams, IMoolah } from "moolah/interfaces/IMoolah.sol";
 import { IBrokerLiquidator } from "./IBrokerLiquidator.sol";
 import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
 
+interface IHasMinter {
+  function minter() external view returns (address);
+}
+
 contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerLiquidator {
   using MarketParamsLib for MarketParams;
 
@@ -23,6 +27,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   error NotWhitelisted();
   error SwapFailed();
   error BrokerMarketIdMismatch();
+  error SmartCollateralMustUseDedicatedFunction();
 
   address public immutable MOOLAH;
   mapping(address => bool) public tokenWhitelist;
@@ -40,7 +45,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   uint256 internal _lastRepaidAssets;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
-  bytes32 public constant BOT = keccak256("BOT"); // manager role
+  bytes32 public constant BOT = keccak256("BOT"); // bot role
   address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
   event TokenWhitelistChanged(address indexed token, bool added);
@@ -201,6 +206,41 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     emit SellToken(pair, tokenIn, tokenOut, actualAmountIn, actualAmountOut);
   }
 
+  /// @dev sell native BNB for a token.
+  /// @param pair The address of the pair.
+  /// @param tokenOut The address of the output token.
+  /// @param amountIn The amount of BNB to sell.
+  /// @param amountOutMin The minimum amount to receive.
+  /// @param swapData The swap data.
+  function sellBNB(
+    address pair,
+    address tokenOut,
+    uint256 amountIn,
+    uint256 amountOutMin,
+    bytes calldata swapData
+  ) external onlyRole(BOT) {
+    require(tokenWhitelist[BNB_ADDRESS], NotWhitelisted());
+    require(tokenWhitelist[tokenOut], NotWhitelisted());
+    require(pairWhitelist[pair], NotWhitelisted());
+    require(amountIn > 0, "amountIn zero");
+
+    require(address(this).balance >= amountIn, ExceedAmount());
+
+    uint256 beforeTokenIn = address(this).balance;
+    uint256 beforeTokenOut = SafeTransferLib.balanceOf(tokenOut, address(this));
+
+    (bool success, ) = pair.call{ value: amountIn }(swapData);
+    require(success, SwapFailed());
+
+    uint256 actualAmountIn = beforeTokenIn - address(this).balance;
+    uint256 actualAmountOut = SafeTransferLib.balanceOf(tokenOut, address(this)) - beforeTokenOut;
+
+    require(actualAmountIn <= amountIn, ExceedAmount());
+    require(actualAmountOut >= amountOutMin, NoProfit());
+
+    emit SellToken(pair, BNB_ADDRESS, tokenOut, actualAmountIn, actualAmountOut);
+  }
+
   /// @dev flash liquidates a position.
   /// @param id The id of the market.
   /// @param borrower The address of the borrower.
@@ -256,6 +296,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     require(broker != address(0), NotWhitelisted());
     require(_checkBrokerMarketId(broker, id), BrokerMarketIdMismatch());
     MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(Id.wrap(id));
+    require(!_isSmartCollateral(params.collateralToken), SmartCollateralMustUseDedicatedFunction());
     IBrokerBase(broker).liquidate(
       params,
       borrower,
@@ -486,8 +527,23 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   function batchSetSmartProviders(address[] calldata providers, bool status) external onlyRole(MANAGER) {
     for (uint256 i = 0; i < providers.length; i++) {
       address provider = providers[i];
+      require(provider != address(0), ZERO_ADDRESS);
       smartProviders[provider] = status;
       emit SmartProvidersChanged(provider, status);
+    }
+  }
+
+  /// @dev Checks if a collateral token is a SmartCollateral (StableSwapLPCollateral).
+  ///      Uses try/catch so it won't revert for normal collateral tokens that lack minter().
+  function _isSmartCollateral(address collateralToken) internal view returns (bool) {
+    try IHasMinter(collateralToken).minter() returns (address minterAddr) {
+      try ISmartProvider(minterAddr).TOKEN() returns (address token) {
+        return token == collateralToken;
+      } catch {
+        return false;
+      }
+    } catch {
+      return false;
     }
   }
 
