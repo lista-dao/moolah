@@ -88,7 +88,7 @@ contract LendingBrokerTest is Test {
     Moolah mImpl = new Moolah();
     ERC1967Proxy mProxy = new ERC1967Proxy(
       address(mImpl),
-      abi.encodeWithSelector(Moolah.initialize.selector, ADMIN, MANAGR, PAUSER, 15e8)
+      abi.encodeWithSelector(Moolah.initialize.selector, ADMIN, MANAGER, PAUSER, 15e8)
     );
     moolah = IMoolah(address(mProxy));
 
