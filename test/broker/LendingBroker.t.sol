@@ -181,10 +181,20 @@ contract LendingBrokerTest is Test {
     );
     broker = LendingBroker(payable(address(bProxy)));
 
-    LendingBroker bnbImpl = new LendingBroker(address(moolah), address(bnbRelayer), address(oracle), address(WBNB));
+    LendingBroker bnbImpl = new LendingBroker(address(moolah), address(WBNB));
     ERC1967Proxy bnbProxy = new ERC1967Proxy(
       address(bnbImpl),
-      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
+      abi.encodeWithSelector(
+        LendingBroker.initialize.selector,
+        ADMIN,
+        MANAGER,
+        BOT,
+        PAUSER,
+        address(rateCalc),
+        10,
+        address(bnbRelayer),
+        address(oracle)
+      )
     );
     bnbBroker = LendingBroker(payable(address(bnbProxy)));
 
@@ -605,15 +615,11 @@ contract LendingBrokerTest is Test {
     uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(normalizedBefore, rate);
     uint256 outstandingInterest = actualDebt > principalBefore ? actualDebt - principalBefore : 0;
 
+    // amount > interest => interest fully cleared, remainder moves principal
     uint256 convertAmount = 400 ether;
-    uint256 expectedInterestShare = outstandingInterest == 0
-      ? 0
-      : BrokerMath.mulDivCeiling(outstandingInterest, convertAmount, principalBefore);
-    uint256 expectedNormalizedDelta = BrokerMath.normalizeBorrowAmount(
-      convertAmount + expectedInterestShare,
-      rate,
-      true
-    );
+    uint256 expectedInterest = outstandingInterest < convertAmount ? outstandingInterest : convertAmount;
+    uint256 expectedPrincipalMove = convertAmount - expectedInterest;
+    uint256 expectedNormalizedDelta = BrokerMath.normalizeBorrowAmount(convertAmount, rate, true);
     uint256 expectedNormalizedAfter = normalizedBefore > expectedNormalizedDelta
       ? normalizedBefore - expectedNormalizedDelta
       : 0;
@@ -622,12 +628,12 @@ contract LendingBrokerTest is Test {
     broker.convertDynamicToFixed(convertAmount, 51);
 
     (uint256 principalAfter, uint256 normalizedAfter) = broker.dynamicLoanPositions(borrower);
-    assertEq(principalAfter, principalBefore - convertAmount, "dynamic principal not reduced by amount");
+    assertEq(principalAfter, principalBefore - expectedPrincipalMove, "dynamic principal not reduced correctly");
     assertApproxEqAbs(normalizedAfter, expectedNormalizedAfter, 1, "normalized debt delta mismatch");
 
     FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(borrower);
     assertEq(fixedPositions.length, 1, "fixed position not created");
-    assertEq(fixedPositions[0].principal, convertAmount + expectedInterestShare, "converted fixed principal incorrect");
+    assertEq(fixedPositions[0].principal, convertAmount, "fixed principal should equal amount");
     assertEq(fixedPositions[0].interestRepaid, 0);
     assertEq(fixedPositions[0].principalRepaid, 0);
   }
@@ -651,10 +657,10 @@ contract LendingBrokerTest is Test {
     uint256 rate = rateCalc.accrueRate(address(broker));
     uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(normalizedBefore, rate);
     uint256 outstandingInterest = actualDebt > principalBefore ? actualDebt - principalBefore : 0;
-    uint256 expectedNormalizedDelta = BrokerMath.normalizeBorrowAmount(actualDebt, rate, true);
 
+    // pass amount > actualDebt => capped to interest + principal
     vm.prank(borrower);
-    broker.convertDynamicToFixed(principalBefore, 52);
+    broker.convertDynamicToFixed(actualDebt + 100 ether, 52);
 
     (uint256 principalAfter, uint256 normalizedAfter) = broker.dynamicLoanPositions(borrower);
     assertApproxEqAbs(principalAfter, 0, 1, "dynamic principal should be cleared");
@@ -662,15 +668,80 @@ contract LendingBrokerTest is Test {
 
     FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(borrower);
     assertEq(fixedPositions.length, 1);
-    assertApproxEqAbs(
-      fixedPositions[0].principal,
-      principalBefore + outstandingInterest,
-      1,
-      "fixed principal should equal full outstanding debt"
-    );
+    uint256 expectedFixed = outstandingInterest + principalBefore;
+    assertApproxEqAbs(fixedPositions[0].principal, expectedFixed, 1, "fixed principal should equal full debt");
+  }
 
-    // sanity: normalized delta consumed the whole normalized debt (allowing rounding wiggle)
-    assertApproxEqAbs(expectedNormalizedDelta, normalizedBefore, 1, "normalized debt delta rounding");
+  function test_convertDynamicToFixed_exactFullAmount() public {
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: 53, duration: 60 days, apr: 105 * 1e25 });
+    vm.prank(BOT);
+    broker.updateFixedTermAndRate(term, false);
+
+    uint256 borrowAmt = 500 ether;
+    vm.prank(borrower);
+    broker.borrow(borrowAmt);
+
+    vm.prank(MANAGER);
+    rateCalc.setMaxRatePerSecond(address(broker), RATE_SCALE + 5);
+    vm.prank(BOT);
+    rateCalc.setRatePerSecond(address(broker), RATE_SCALE + 3);
+    skip(4 days);
+
+    (uint256 principalBefore, uint256 normalizedBefore) = broker.dynamicLoanPositions(borrower);
+    uint256 rate = rateCalc.accrueRate(address(broker));
+    uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(normalizedBefore, rate);
+    uint256 outstandingInterest = actualDebt > principalBefore ? actualDebt - principalBefore : 0;
+
+    // amount == interest + principal exactly
+    uint256 convertAmount = outstandingInterest + principalBefore;
+
+    vm.prank(borrower);
+    broker.convertDynamicToFixed(convertAmount, 53);
+
+    (uint256 principalAfter, uint256 normalizedAfter) = broker.dynamicLoanPositions(borrower);
+    assertApproxEqAbs(principalAfter, 0, 1, "dynamic principal should be cleared");
+    assertApproxEqAbs(normalizedAfter, 0, 1, "dynamic normalized debt should be cleared");
+
+    FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(borrower);
+    assertEq(fixedPositions.length, 1);
+    assertEq(fixedPositions[0].principal, convertAmount, "fixed principal should equal amount");
+  }
+
+  function test_convertDynamicToFixed_excessAmountCapped() public {
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: 54, duration: 30 days, apr: 105 * 1e25 });
+    vm.prank(BOT);
+    broker.updateFixedTermAndRate(term, false);
+
+    uint256 borrowAmt = 600 ether;
+    vm.prank(borrower);
+    broker.borrow(borrowAmt);
+
+    vm.prank(MANAGER);
+    rateCalc.setMaxRatePerSecond(address(broker), RATE_SCALE + 5);
+    vm.prank(BOT);
+    rateCalc.setRatePerSecond(address(broker), RATE_SCALE + 3);
+    skip(3 days);
+
+    (uint256 principalBefore, uint256 normalizedBefore) = broker.dynamicLoanPositions(borrower);
+    uint256 rate = rateCalc.accrueRate(address(broker));
+    uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(normalizedBefore, rate);
+    uint256 outstandingInterest = actualDebt > principalBefore ? actualDebt - principalBefore : 0;
+
+    // amount much larger than actualDebt => should be capped
+    uint256 convertAmount = actualDebt + 999 ether;
+
+    vm.prank(borrower);
+    broker.convertDynamicToFixed(convertAmount, 54);
+
+    (uint256 principalAfter, uint256 normalizedAfter) = broker.dynamicLoanPositions(borrower);
+    assertApproxEqAbs(principalAfter, 0, 1, "dynamic principal should be cleared");
+    assertApproxEqAbs(normalizedAfter, 0, 1, "dynamic normalized debt should be cleared");
+
+    FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(borrower);
+    assertEq(fixedPositions.length, 1);
+    uint256 expectedFixed = outstandingInterest + principalBefore;
+    assertApproxEqAbs(fixedPositions[0].principal, expectedFixed, 1, "fixed principal capped to actual debt");
+    assertLe(fixedPositions[0].principal, convertAmount, "fixed principal must be <= amount");
   }
 
   // -----------------------------
@@ -1759,7 +1830,7 @@ contract LendingBrokerTest is Test {
 
   /// @dev Deploy a fresh broker proxy with RELAYER/ORACLE unset (simulating V1->V2 upgrade)
   function _deployBrokerWithEmptyRelayerOracle() internal returns (LendingBroker) {
-    LendingBroker bImpl = new LendingBroker(address(moolah));
+    LendingBroker bImpl = new LendingBroker(address(moolah), address(0));
     // Use 6-param initialize (no relayer/oracle) by encoding only the original params
     // and leaving RELAYER/ORACLE as address(0)
     ERC1967Proxy bProxy = new ERC1967Proxy(
