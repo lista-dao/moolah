@@ -10,9 +10,8 @@ import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 contract MoolahVaultConfigDeploy is DeployBase {
   using MarketParamsLib for MarketParams;
 
-  // todo update vault addresses after step 3 deployment
-  MoolahVault usdtVault = MoolahVault(address(0));
-  MoolahVault usdcVault = MoolahVault(address(0));
+  MoolahVault usdtVault = MoolahVault(0x28643FFD79256719D6AcbCF25Cb44576cAeBCf12);
+  MoolahVault usdcVault = MoolahVault(0x9651Ae50a5763c6f9B883f9d50e8116281CFcab2);
 
   uint256 fee = 0.1 ether;
   address feeRecipient = 0xd10a024602E042dcb9C19e21682c3b896c8B0d30;
