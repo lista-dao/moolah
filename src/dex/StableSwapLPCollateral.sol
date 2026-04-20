@@ -6,6 +6,9 @@ import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgrade
 import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 
 contract StableSwapLPCollateral is ERC20Upgradeable, UUPSUpgradeable, AccessControlEnumerableUpgradeable {
+  bytes32 public constant MANAGER = keccak256("MANAGER");
+  bytes32 public constant TRANSFERER = keccak256("TRANSFERER");
+
   address public immutable MOOLAH;
 
   /// @notice The address of the minter. Should be the smart provider contract.
@@ -17,13 +20,13 @@ contract StableSwapLPCollateral is ERC20Upgradeable, UUPSUpgradeable, AccessCont
     _;
   }
 
-  /// @notice Checks if the msg.sender is the moolah address.
-  modifier onlyMoolah() {
-    require(msg.sender == MOOLAH, "Not moolah");
+  modifier onlyMoolahOrTransferer() {
+    require(msg.sender == MOOLAH || hasRole(TRANSFERER, msg.sender), "Not moolah or transferer");
     _;
   }
 
   event SetMinter(address newMinter);
+  event SetTransferer(address indexed account, bool enabled);
 
   constructor(address _moolah) {
     require(_moolah != address(0), "Zero address");
@@ -57,6 +60,17 @@ contract StableSwapLPCollateral is ERC20Upgradeable, UUPSUpgradeable, AccessCont
     emit SetMinter(_newMinter);
   }
 
+  function setTransferer(address _account, bool _enabled) external onlyRole(MANAGER) {
+    require(_account != address(0), "Zero address");
+
+    if (_enabled) {
+      _grantRole(TRANSFERER, _account);
+    } else {
+      _revokeRole(TRANSFERER, _account);
+    }
+    emit SetTransferer(_account, _enabled);
+  }
+
   function mint(address _to, uint256 _amount) external onlyMinter {
     _mint(_to, _amount);
   }
@@ -65,18 +79,18 @@ contract StableSwapLPCollateral is ERC20Upgradeable, UUPSUpgradeable, AccessCont
     _burn(_from, _amount);
   }
 
-  /// @dev only Moolah can transfer
+  /// @dev only Moolah or TRANSFERER can transfer
   /// @param to The address of the recipient.
   /// @param value The amount to be transferred.
   /// @return bool Returns true on success, false otherwise.
-  function transfer(address to, uint256 value) public override onlyMoolah returns (bool) {
+  function transfer(address to, uint256 value) public override onlyMoolahOrTransferer returns (bool) {
     address owner = _msgSender();
     _transfer(owner, to, value);
     return true;
   }
 
-  /// @dev only Moolah can call transferFrom
-  function transferFrom(address from, address to, uint256 value) public override onlyMoolah returns (bool) {
+  /// @dev only Moolah or TRANSFERER can call transferFrom
+  function transferFrom(address from, address to, uint256 value) public override onlyMoolahOrTransferer returns (bool) {
     address spender = _msgSender();
     _spendAllowance(from, spender, value);
     _transfer(from, to, value);
