@@ -84,7 +84,7 @@ contract MarketFactoryTest is Test {
       address(brokerLiquidatorImpl),
       abi.encodeWithSelector(brokerLiquidatorImpl.initialize.selector, admin, manager, bot)
     );
-    brokerLiquidator = BrokerLiquidator(address(brokerLiquidatorProxy));
+    brokerLiquidator = BrokerLiquidator(payable(address(brokerLiquidatorProxy)));
 
     liquidator = new MockLiquidator();
     publicLiquidator = new MockLiquidator();
@@ -495,7 +495,7 @@ contract MarketFactoryTest is Test {
   }
 
   function newLendingBroker(address replayer) private returns (LendingBroker) {
-    LendingBroker lendingBrokerImpl = new LendingBroker(address(moolah), replayer, address(oracle), address(0));
+    LendingBroker lendingBrokerImpl = new LendingBroker(address(moolah), address(0));
     ERC1967Proxy lendingBrokerProxy = new ERC1967Proxy(
       address(lendingBrokerImpl),
       abi.encodeWithSelector(
@@ -505,7 +505,9 @@ contract MarketFactoryTest is Test {
         bot,
         pauser,
         address(rateCalculator),
-        100
+        100,
+        replayer,
+        address(oracle)
       )
     );
 

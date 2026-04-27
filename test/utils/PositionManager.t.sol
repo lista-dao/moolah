@@ -230,10 +230,20 @@ contract PositionManagerTest is Test {
     rateCalc = RateCalculator(address(rcProxy));
 
     // ── Deploy inBroker (LendingBroker for the fixed-term market) ────────────
-    LendingBroker bImpl = new LendingBroker(address(moolah), address(relayer), address(oracle), address(wbnb));
+    LendingBroker bImpl = new LendingBroker(address(moolah), address(wbnb));
     ERC1967Proxy bProxy = new ERC1967Proxy(
       address(bImpl),
-      abi.encodeWithSelector(LendingBroker.initialize.selector, admin, manager, bot, pauser, address(rateCalc), 100)
+      abi.encodeWithSelector(
+        LendingBroker.initialize.selector,
+        admin,
+        manager,
+        bot,
+        pauser,
+        address(rateCalc),
+        100,
+        address(relayer),
+        address(oracle)
+      )
     );
     inBroker = LendingBroker(payable(address(bProxy)));
 
@@ -312,10 +322,20 @@ contract PositionManagerTest is Test {
 
     // ── Deploy inBrokerSlis ───────────────────────────────────────────────────
     {
-      LendingBroker bSlisImpl = new LendingBroker(address(moolah), address(relayer), address(oracle), address(wbnb));
+      LendingBroker bSlisImpl = new LendingBroker(address(moolah), address(wbnb));
       ERC1967Proxy bSlisProxy = new ERC1967Proxy(
         address(bSlisImpl),
-        abi.encodeWithSelector(LendingBroker.initialize.selector, admin, manager, bot, pauser, address(rateCalc), 100)
+        abi.encodeWithSelector(
+          LendingBroker.initialize.selector,
+          admin,
+          manager,
+          bot,
+          pauser,
+          address(rateCalc),
+          100,
+          address(relayer),
+          address(oracle)
+        )
       );
       inBrokerSlis = LendingBroker(payable(address(bSlisProxy)));
     }
@@ -399,10 +419,20 @@ contract PositionManagerTest is Test {
 
     // ── Deploy inBrokerNative ─────────────────────────────────────────────────
     {
-      LendingBroker bNativeImpl = new LendingBroker(address(moolah), address(relayer), address(oracle), address(wbnb));
+      LendingBroker bNativeImpl = new LendingBroker(address(moolah), address(wbnb));
       ERC1967Proxy bNativeProxy = new ERC1967Proxy(
         address(bNativeImpl),
-        abi.encodeWithSelector(LendingBroker.initialize.selector, admin, manager, bot, pauser, address(rateCalc), 10)
+        abi.encodeWithSelector(
+          LendingBroker.initialize.selector,
+          admin,
+          manager,
+          bot,
+          pauser,
+          address(rateCalc),
+          10,
+          address(relayer),
+          address(oracle)
+        )
       );
       inBrokerNative = LendingBroker(payable(address(bNativeProxy)));
     }

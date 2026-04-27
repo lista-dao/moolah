@@ -37,8 +37,8 @@ contract DeployLendingBroker is DeployBase {
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
 
-    // Deploy LendingBroker implementation
-    LendingBroker impl = new LendingBroker(moolah, interestRelayer, oracle, wbnb);
+    // Deploy LendingBroker implementation (single impl shared across all proxies)
+    LendingBroker impl = new LendingBroker(moolah, wbnb);
     console.log("LendingBroker implementation: ", address(impl));
 
     // Deploy LendingBroker proxy
@@ -51,7 +51,9 @@ contract DeployLendingBroker is DeployBase {
         bot,
         pauser,
         rateCalculator,
-        maxFixedLoanPositions
+        maxFixedLoanPositions,
+        interestRelayer,
+        oracle
       )
     );
     console.log("LendingBroker proxy: ", address(proxy));
