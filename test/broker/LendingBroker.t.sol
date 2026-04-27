@@ -1692,6 +1692,26 @@ contract LendingBrokerTest is Test {
     broker.repay{ value: 1 ether }(1 ether, borrower);
   }
 
+  function test_brokers_returnsRegisteredConfig() public {
+    (uint256 currentRate, uint256 ratePerSecond, uint256 maxRatePerSecond, uint256 lastUpdated) = rateCalc.brokers(
+      address(broker)
+    );
+    assertEq(currentRate, RATE_SCALE);
+    assertEq(ratePerSecond, RATE_SCALE + 1);
+    assertEq(maxRatePerSecond, RATE_SCALE + 2);
+    assertGt(lastUpdated, 0);
+  }
+
+  function test_brokers_unregisteredBroker_returnsZeroes() public view {
+    (uint256 currentRate, uint256 ratePerSecond, uint256 maxRatePerSecond, uint256 lastUpdated) = rateCalc.brokers(
+      address(0xdead)
+    );
+    assertEq(currentRate, 0);
+    assertEq(ratePerSecond, 0);
+    assertEq(maxRatePerSecond, 0);
+    assertEq(lastUpdated, 0);
+  }
+
   function test_borrowAndRepay_native_whenLoanTokenIsWBNB() public {
     vm.deal(borrower, 1000 ether);
     vm.deal(address(WBNB), 1000 ether);
