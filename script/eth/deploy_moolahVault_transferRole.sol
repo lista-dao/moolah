@@ -6,7 +6,9 @@ import { DeployBase } from "../DeployBase.sol";
 import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 
 contract MoolahVaultTransferRoleDeploy is DeployBase {
-  MoolahVault vault = MoolahVault(0x1A9BeE2F5c85F6b4a0221fB1C733246AF5306Ae3);
+  MoolahVault usdtVault = MoolahVault(0x28643FFD79256719D6AcbCF25Cb44576cAeBCf12);
+  MoolahVault usdcVault = MoolahVault(0x9651Ae50a5763c6f9B883f9d50e8116281CFcab2);
+
   address admin = 0xa18ae79AEDA3e711E0CD64cfe1Cd06402d400D61; // timelock
   address manager = 0x375fdA2Bf66f4CE85EAB29AB6407dCd4a4C428BA; // timelock
   address allocator = 0x85CE862C5BB61938FFcc97DA4A80C8aaE43C6A27;
@@ -14,17 +16,25 @@ contract MoolahVaultTransferRoleDeploy is DeployBase {
 
   bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
   bytes32 public constant MANAGER = keccak256("MANAGER");
-  bytes32 public constant PAUSER = keccak256("PAUSER");
-  bytes32 public constant CURATOR = keccak256("CURATOR"); // manager role
-  bytes32 public constant ALLOCATOR = keccak256("ALLOCATOR"); // manager role
+  bytes32 public constant CURATOR = keccak256("CURATOR");
+  bytes32 public constant ALLOCATOR = keccak256("ALLOCATOR");
 
   function run() public {
     uint256 deployerPrivateKey = _deployerKey();
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
+
     vm.startBroadcast(deployerPrivateKey);
 
-    // setup roles
+    _transferRoles(usdtVault, deployer);
+    _transferRoles(usdcVault, deployer);
+
+    vm.stopBroadcast();
+
+    console.log("setup role done!");
+  }
+
+  function _transferRoles(MoolahVault vault, address deployer) internal {
     vault.grantRole(DEFAULT_ADMIN_ROLE, admin);
     vault.grantRole(MANAGER, manager);
     vault.grantRole(ALLOCATOR, allocator);
@@ -34,9 +44,5 @@ contract MoolahVaultTransferRoleDeploy is DeployBase {
     vault.revokeRole(ALLOCATOR, deployer);
     vault.revokeRole(MANAGER, deployer);
     vault.revokeRole(DEFAULT_ADMIN_ROLE, deployer);
-
-    vm.stopBroadcast();
-
-    console.log("setup role done!");
   }
 }
