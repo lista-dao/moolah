@@ -81,4 +81,8 @@ interface IBrokerLiquidator {
   function brokerToMarketId(address broker) external view returns (bytes32);
 
   function tokenWhitelist(address token) external view returns (bool);
+
+  function smartProviders(address provider) external view returns (bool);
+
+  function batchSetSmartProviders(address[] calldata providers, bool status) external;
 }
