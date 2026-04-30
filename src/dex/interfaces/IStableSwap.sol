@@ -40,6 +40,10 @@ interface IStableSwap {
 
   function checkPriceDiff() external view;
 
+  function skipPriceDiff() external view returns (bool);
+
+  function setSkipPriceDiff(bool _skipPriceDiff) external;
+
   //  function get_D_mem(uint256[2] memory _balances, uint256 amp) external view returns (uint256);
 
   //  function get_y(uint256 i, uint256 j, uint256 x, uint256[2] memory xp_) external view returns (uint256);
