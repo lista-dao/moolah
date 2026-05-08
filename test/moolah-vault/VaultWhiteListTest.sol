@@ -13,12 +13,12 @@ contract VaultWhiteListTest is IntegrationTest {
 
   function testAddWhitelist() public {
     vm.startPrank(OWNER);
-    vault.addWhiteList(whitelist);
+    vault.setWhiteList(whitelist, true);
     assertEq(vault.getWhiteList().length, 1, "whitelist length");
     assertTrue(vault.isWhiteList(whitelist), "whitelist");
 
     vm.expectRevert(abi.encodeWithSelector(ErrorsLib.AlreadySet.selector));
-    vault.addWhiteList(whitelist);
+    vault.setWhiteList(whitelist, true);
 
     vm.stopPrank();
   }
@@ -26,13 +26,13 @@ contract VaultWhiteListTest is IntegrationTest {
   function testRemoveWhitelist() public {
     vm.startPrank(OWNER);
     vm.expectRevert(abi.encodeWithSelector(ErrorsLib.NotSet.selector));
-    vault.removeWhiteList(whitelist);
+    vault.setWhiteList(whitelist, false);
 
-    vault.addWhiteList(whitelist);
+    vault.setWhiteList(whitelist, true);
     assertEq(vault.getWhiteList().length, 1, "whitelist length");
     assertTrue(vault.isWhiteList(whitelist), "whitelist");
 
-    vault.removeWhiteList(whitelist);
+    vault.setWhiteList(whitelist, false);
     assertEq(vault.getWhiteList().length, 0, "whitelist length");
     assertTrue(vault.isWhiteList(whitelist), "whitelist");
     vm.stopPrank();
@@ -41,7 +41,7 @@ contract VaultWhiteListTest is IntegrationTest {
   function testNotWhiteListDeposit() public {
     vm.startPrank(OWNER);
 
-    vault.addWhiteList(whitelist);
+    vault.setWhiteList(whitelist, true);
     assertEq(vault.getWhiteList().length, 1, "whitelist length");
     assertTrue(vault.isWhiteList(whitelist), "whitelist");
 
@@ -54,7 +54,7 @@ contract VaultWhiteListTest is IntegrationTest {
   function testNotWhiteListMint() public {
     vm.startPrank(OWNER);
 
-    vault.addWhiteList(whitelist);
+    vault.setWhiteList(whitelist, true);
     assertEq(vault.getWhiteList().length, 1, "whitelist length");
     assertTrue(vault.isWhiteList(whitelist), "whitelist");
 
@@ -68,7 +68,7 @@ contract VaultWhiteListTest is IntegrationTest {
     loanToken.setBalance(SUPPLIER, 200 ether);
 
     vm.startPrank(OWNER);
-    vault.addWhiteList(SUPPLIER);
+    vault.setWhiteList(SUPPLIER, true);
     assertEq(vault.getWhiteList().length, 1, "whitelist length");
     assertTrue(vault.isWhiteList(SUPPLIER), "whitelist");
     vm.stopPrank();

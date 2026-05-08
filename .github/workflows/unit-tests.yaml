@@ -1,22 +1,32 @@
 name: Run foundry tests
 on: [push, pull_request]
 
+env:
+  FOUNDRY_PROFILE: ci
+
 jobs:
-  tests:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run install
+        uses: borales/actions-yarn@v4
+        with:
+          cmd: install
+
+      - name: Lint code
+        run: npm run check
+
+  unit-tests:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository and submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Run install
-        uses: borales/actions-yarn@v4
-        with:
-          cmd: install # will run `yarn install` command
-
-      - name: Lint code
-        run: npm run check
+          fetch-depth: 1
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
@@ -25,9 +35,54 @@ jobs:
         run: |
          cd lib/lista-dao-contracts.git
          yarn install
+      - name: Cache Foundry build
+        uses: actions/cache@v4
+        with:
+          path: |
+            out/
+            cache/
+          key: forge-build-${{ hashFiles('src/**/*.sol', 'test/**/*.sol', 'foundry.toml') }}
+          restore-keys: |
+            forge-build-
 
       - name: Run unit tests
-        run: forge test -vvv
+        run: forge test -vvv --no-match-contract "ETHProviderTest|BNBProviderTest|SmartProviderTest|SlisBNBxMinterTest|AlpahIrmMainnetTest|OracleAdaptorTest|PTLinearDiscount|MoolahVaultFactoryTest"
+        env:
+          ETH_RPC: ${{ secrets.ETH_RPC }}
+          BSC_RPC: ${{ secrets.BSC_RPC }}
+
+  fork-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Cache Foundry build
+        uses: actions/cache@v4
+        with:
+          path: |
+            out/
+            cache/
+          key: forge-build-${{ hashFiles('src/**/*.sol', 'test/**/*.sol', 'foundry.toml') }}
+          restore-keys: |
+            forge-build-
+
+      - name: Cache RPC responses
+        uses: actions/cache@v4
+        with:
+          path: ~/.foundry/cache/rpc
+          key: forge-rpc-${{ hashFiles('test/**/*.sol') }}
+          restore-keys: |
+            forge-rpc-
+
+      - name: Run fork tests
+        run: forge test -vvv --match-contract "ETHProviderTest|BNBProviderTest|SmartProviderTest|SlisBNBxMinterTest|AlpahIrmMainnetTest|OracleAdaptorTest|PTLinearDiscount|MoolahVaultFactoryTest"
         env:
           ETH_RPC: ${{ secrets.ETH_RPC }}
           BSC_RPC: ${{ secrets.BSC_RPC }}

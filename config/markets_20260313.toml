@@ -1,0 +1,24 @@
+[bsc]
+enendpoint_url = "${BSC_RPC_URL}"
+
+[bsc.address]
+loan = [
+    "${U}",
+]
+
+collateral = [
+    "${sUSDe}",
+]
+
+oracle = [
+  "${MULTI_ORACLE}",
+]
+
+irm = [
+    "${IRM}",
+]
+
+[bsc.uint]
+lltv = [
+    "${LLTV_915}",
+]
