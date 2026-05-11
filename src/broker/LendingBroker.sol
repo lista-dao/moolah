@@ -13,6 +13,7 @@ import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { IBroker, FixedLoanPosition, DynamicLoanPosition, FixedTermAndRate, LiquidationContext } from "./interfaces/IBroker.sol";
 import { IRateCalculator } from "./interfaces/IRateCalculator.sol";
 import { BrokerMath, RATE_SCALE } from "./libraries/BrokerMath.sol";
+import { LendingBrokerOperatorLib } from "./libraries/LendingBrokerOperatorLib.sol";
 import { IBrokerInterestRelayer } from "./interfaces/IBrokerInterestRelayer.sol";
 
 import { MarketParamsLib } from "../moolah/libraries/MarketParamsLib.sol";
@@ -43,9 +44,7 @@ contract LendingBroker is
   using EnumerableSet for EnumerableSet.AddressSet;
 
   // ------- Custom Errors -------
-  error ZeroAddressProvided();
   error ZeroAmount();
-  error AmountZero();
   error NativeNotSupported();
   error ZeroAddress();
   error NothingToRepay();
@@ -56,19 +55,20 @@ contract LendingBroker is
   error UnsupportedToken();
   error ZeroPositions();
   error InvalidBorrowedAmount();
+  error InsufficientAmount();
   error NativeTransferFailed();
   error InvalidMarket();
   error InvalidTermId();
   error InvalidDuration();
   error InvalidAPR();
   error SameValueProvided();
-  error TransferFailed();
   error TermNotFound();
   error PositionNotFound();
   error NotAuthorized();
   error NotMoolah();
   error MarketNotSet();
   error BorrowIsPaused();
+  error InvalidRepaidShares();
 
   // ------- Roles -------
   bytes32 public constant MANAGER = keccak256("MANAGER");
@@ -142,7 +142,7 @@ contract LendingBroker is
    * @param wbnb The address of the wrapped native token (e.g. WBNB). Pass address(0) to disable native support.
    */
   constructor(address moolah, address wbnb) {
-    if (moolah == address(0)) revert ZeroAddressProvided();
+    if (moolah == address(0)) revert ZeroAddress();
     MOOLAH = IMoolah(moolah);
     WBNB = wbnb;
     _disableInitializers();
@@ -178,7 +178,7 @@ contract LendingBroker is
       _maxFixedLoanPositions == 0 ||
       _relayer == address(0) ||
       _oracle == address(0)
-    ) revert ZeroAddressProvided();
+    ) revert ZeroAddress();
 
     __AccessControlEnumerable_init();
     __Pausable_init();
@@ -218,8 +218,8 @@ contract LendingBroker is
     _borrowFromMoolah(user, amount);
     // transfer loan token to user
     _transferLoanToken(payable(user), amount);
-    // validate positions
-    _validatePositions(user);
+    // validate the modified dynamic position
+    _validateDynamicPosition(user);
     // emit event
     emit DynamicLoanPositionBorrowed(user, amount, position.principal);
   }
@@ -235,7 +235,7 @@ contract LendingBroker is
     uint256 amount,
     uint256 termId
   ) external override marketIdSet whenNotPaused whenBorrowNotPaused nonReentrant {
-    if (amount == 0) revert AmountZero();
+    if (amount == 0) revert ZeroAmount();
     address user = msg.sender;
     _borrowFixed(user, amount, termId);
     // transfer loan token to user (unwraps to native BNB if supported)
@@ -248,82 +248,13 @@ contract LendingBroker is
    * @param onBehalf The address of the user whose position to repay
    */
   function repay(uint256 amount, address onBehalf) external payable override marketIdSet whenNotPaused nonReentrant {
-    bool isNative = msg.value > 0;
-    address user = msg.sender;
-    if (isNative) {
-      if (LOAN_TOKEN != WBNB) revert NativeNotSupported();
-      amount = msg.value;
-      IWBNB(WBNB).deposit{ value: amount }();
-    } else {
-      IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), amount);
-    }
-    if (amount == 0) revert ZeroAmount();
-    if (onBehalf == address(0)) revert ZeroAddress();
-    // get user's dynamic position
-    DynamicLoanPosition storage position = dynamicLoanPositions[onBehalf];
-    // get updated rate
-    uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
-    // get net accrued interest
-    uint256 accruedInterest = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate).zeroFloorSub(
-      position.principal
-    );
-    // calculate the amount we need to repay for interest and principal
-    uint256 repayInterestAmt = amount < accruedInterest ? amount : accruedInterest;
-    uint256 amountLeft = amount - repayInterestAmt;
-    uint256 repayPrincipalAmt = amountLeft > position.principal ? position.principal : amountLeft;
-
-    if (repayInterestAmt + repayPrincipalAmt == 0) revert NothingToRepay();
-
-    // record the actual repaid amount for event
-    uint256 totalRepaid = 0;
-
-    // (1) Repay interest first
-    // update position
-    position.normalizedDebt = position.normalizedDebt.zeroFloorSub(
-      BrokerMath.normalizeBorrowAmount(repayInterestAmt, rate, false)
-    );
-    // supply interest to moolah vault
-    _supplyToMoolahVault(repayInterestAmt);
-    totalRepaid += repayInterestAmt;
-
-    // has left to repay principal
-    if (repayPrincipalAmt > 0) {
-      uint256 principalRepaid;
-      principalRepaid = _repayToMoolah(onBehalf, repayPrincipalAmt);
-      if (principalRepaid > 0) {
-        // update position
-        position.principal = position.principal.zeroFloorSub(principalRepaid);
-        position.normalizedDebt = position.normalizedDebt.zeroFloorSub(
-          BrokerMath.normalizeBorrowAmount(principalRepaid, rate, false)
-        );
-        totalRepaid += principalRepaid;
-      }
-      // remove position if fully repaid
-      if (position.principal == 0) {
-        delete dynamicLoanPositions[onBehalf];
-      }
-    }
-
-    // refund excess native BNB to sender
-    uint256 excess = amount - totalRepaid;
-    if (excess > 0) {
-      if (isNative) {
-        _unwrapAndSend(payable(user), excess);
-      } else {
-        IERC20(LOAN_TOKEN).safeTransfer(user, excess);
-      }
-    }
-
-    // validate positions
-    _validatePositions(onBehalf);
-
-    emit DynamicLoanPositionRepaid(onBehalf, totalRepaid, position.principal);
+    LendingBrokerOperatorLib.repayDynamic(dynamicLoanPositions, _operatorCtx(), amount, onBehalf);
   }
 
   /**
    * @dev Repay a Fixed loan position
    * @notice repay interest first then principal, repay amount must larger than interest
-   * @param amount The amount to repay
+   * @param amount The amount to repay (overridden by msg.value when sending native BNB)
    * @param posId The ID of the fixed position to repay
    * @param onBehalf The address of the user whose position to repay
    */
@@ -332,98 +263,32 @@ contract LendingBroker is
     uint256 posId,
     address onBehalf
   ) external payable override marketIdSet whenNotPaused nonReentrant {
-    bool isNative = msg.value > 0;
-    address user = msg.sender;
-    if (isNative) {
-      if (LOAN_TOKEN != WBNB) revert NativeNotSupported();
-      amount = msg.value;
-      IWBNB(WBNB).deposit{ value: amount }();
-    } else {
-      IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), amount);
-    }
-    if (amount == 0) revert ZeroAmount();
-    if (onBehalf == address(0)) revert ZeroAddress();
+    LendingBrokerOperatorLib.repayFixed(fixedLoanPositions, _operatorCtx(), amount, posId, onBehalf);
+  }
 
-    // fetch position (will revert if not found)
-    FixedLoanPosition memory position = _getFixedPositionByPosId(onBehalf, posId);
-    // remaining principal before repayment
-    uint256 remainingPrincipal = position.principal - position.principalRepaid;
-    // get outstanding accrued interest
-    uint256 accruedInterest = _getAccruedInterestForFixedPosition(position) - position.interestRepaid;
+  /**
+   * @dev Emergency: fully repay every position (dynamic + all fixed) of `onBehalf` in one call.
+   *      Charges full early-repay penalty on fixed positions, identical to normal `repay`.
+   *      Skips per-position validation since every position is cleared.
+   * @notice For native BNB, send `msg.value >= totalDebt`; excess is refunded.
+   *         For ERC20, the contract pulls exactly `totalDebt` from `msg.sender`.
+   * @param onBehalf The address of the user whose positions to repay
+   */
+  function repayAll(address onBehalf) external payable override marketIdSet whenNotPaused nonReentrant {
+    LendingBrokerOperatorLib.repayAll(dynamicLoanPositions, fixedLoanPositions, _operatorCtx(), onBehalf);
+  }
 
-    // initialize repay amounts
-    uint256 repayInterestAmt = amount < accruedInterest ? amount : accruedInterest;
-    uint256 repayPrincipalAmt = amount - repayInterestAmt;
-
-    // repay interest first, it might be zero if user just repaid before
-    if (repayInterestAmt > 0) {
-      // update repaid interest amount
-      position.interestRepaid += repayInterestAmt;
-      // supply interest into vault as revenue
-      _supplyToMoolahVault(repayInterestAmt);
-    }
-
-    uint256 penalty = 0;
-    uint256 principalRepaid = 0;
-    // then repay principal if there is any amount left
-    if (repayPrincipalAmt > 0) {
-      // check penalty if user is repaying before expiration
-      penalty = _getPenaltyForFixedPosition(position, UtilsLib.min(repayPrincipalAmt, remainingPrincipal));
-      // supply penalty into vault as revenue
-      if (penalty > 0) {
-        repayPrincipalAmt -= penalty;
-        _supplyToMoolahVault(penalty);
-      }
-
-      // the rest will be used to repay partially
-      uint256 repayablePrincipal = UtilsLib.min(repayPrincipalAmt, remainingPrincipal);
-      if (repayablePrincipal > 0) {
-        principalRepaid = _repayToMoolah(onBehalf, repayablePrincipal);
-        position.principalRepaid += principalRepaid;
-        // reset repaid interest to zero (all accrued interest has been cleared)
-        position.interestRepaid = 0;
-        // reset last repay time to now
-        position.lastRepaidTime = block.timestamp;
-      }
-    }
-
-    // post repayment
-    if (position.principalRepaid >= position.principal) {
-      // removes it from user's fixed positions
-      _removeFixedPositionByPosId(onBehalf, posId);
-    } else {
-      // update position
-      _updateFixedPosition(onBehalf, position);
-    }
-
-    // refund excess native BNB to sender
-    uint256 used = repayInterestAmt + penalty + principalRepaid;
-    uint256 excess = amount - used;
-    if (excess > 0) {
-      if (isNative) {
-        _unwrapAndSend(payable(user), excess);
-      } else {
-        IERC20(LOAN_TOKEN).safeTransfer(user, excess);
-      }
-    }
-
-    // validate positions
-    _validatePositions(onBehalf);
-
-    // emit event
-    emit RepaidFixedLoanPosition(
-      onBehalf,
-      posId,
-      position.principal,
-      position.start,
-      position.end,
-      position.apr,
-      position.principalRepaid,
-      principalRepaid,
-      repayInterestAmt,
-      penalty,
-      position.interestRepaid
-    );
+  /// @dev Build the operator-library context. Internal helper, inlined.
+  function _operatorCtx() private view returns (LendingBrokerOperatorLib.OperatorContext memory) {
+    return
+      LendingBrokerOperatorLib.OperatorContext({
+        moolah: MOOLAH,
+        loanToken: LOAN_TOKEN,
+        wbnb: WBNB,
+        rateCalculator: rateCalculator,
+        relayer: RELAYER,
+        marketId: MARKET_ID
+      });
   }
 
   /**
@@ -438,16 +303,14 @@ contract LendingBroker is
     if (amount == 0) revert ZeroAmount();
     address user = msg.sender;
     DynamicLoanPosition storage position = dynamicLoanPositions[user];
-    if (fixedLoanPositions[user].length >= maxFixedLoanPositions) revert ExceedMaxFixedPositions();
     // accrue current rate so normalized debt reflects the latest interest
     uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
-    uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate);
-    uint256 totalInterest = actualDebt.zeroFloorSub(position.principal);
-
-    // prioritize clearing interest first, then principal
-    uint256 interestToRepay = UtilsLib.min(amount, totalInterest);
-    uint256 principalToMove = UtilsLib.min(amount - interestToRepay, position.principal);
-    amount = interestToRepay + principalToMove;
+    (uint256 interestToRepay, uint256 principalToMove, uint256 finalAmount) = BrokerMath.previewConvertDynamicToFixed(
+      position,
+      amount,
+      rate
+    );
+    if (finalAmount == 0) revert ZeroAmount();
 
     if (interestToRepay > 0) {
       // borrow from Moolah to increase user's actual debt at moolah
@@ -457,7 +320,7 @@ contract LendingBroker is
     }
 
     position.normalizedDebt = position.normalizedDebt.zeroFloorSub(
-      BrokerMath.normalizeBorrowAmount(amount, rate, false)
+      BrokerMath.normalizeBorrowAmount(finalAmount, rate, false)
     );
     position.principal -= principalToMove;
 
@@ -465,29 +328,8 @@ contract LendingBroker is
       delete dynamicLoanPositions[user];
     }
 
-    FixedTermAndRate memory term = _getTermById(termId);
-    uint256 start = block.timestamp;
-    uint256 end = start + term.duration;
-    // pos uuid increment
-    fixedPosUuid++;
-    // create new fixed position
-    fixedLoanPositions[user].push(
-      FixedLoanPosition({
-        posId: fixedPosUuid,
-        principal: amount,
-        apr: term.apr,
-        start: start,
-        end: end,
-        lastRepaidTime: start,
-        interestRepaid: 0,
-        principalRepaid: 0
-      })
-    );
-
-    // validate positions
-    _validatePositions(user);
-
-    emit FixedLoanPositionCreated(user, fixedPosUuid, amount, start, end, term.apr, termId);
+    _validateDynamicPosition(user);
+    _createFixedPosition(user, finalAmount, termId);
   }
 
   /**
@@ -505,7 +347,7 @@ contract LendingBroker is
     address user,
     address receiver
   ) external marketIdSet whenNotPaused whenBorrowNotPaused nonReentrant {
-    if (amount == 0) revert AmountZero();
+    if (amount == 0) revert ZeroAmount();
     if (receiver == address(0)) revert ZeroAddress();
     if (!MOOLAH.isAuthorized(user, msg.sender)) revert NotAuthorized();
     _borrowFixed(user, amount, termId);
@@ -522,10 +364,10 @@ contract LendingBroker is
   ///////////////////////////////////////
   /**
    * @dev Liquidate a borrower's debt by accruing interest and repaying the dynamic
-   *      position first, then settling fixed-rate positions sorted by APR and
-   *      remaining principal. The last fixed position absorbs any rounding delta.
+   *      position first, then settling fixed-rate positions in order of earliest end
+   *      time first. The last fixed position absorbs any rounding delta.
    *      the parameters are the same as normal liquidator calls moolah.liquidate()
-   * @notice Only `Liquidator.sol` and `PublicLiquidator.sol` contracts are allowed to call this function
+   * @notice Only contracts whitelisted via `toggleLiquidationWhitelist` (e.g. `BrokerLiquidator.sol`) can call this function
    * @param marketParams The market of the position.
    * @param borrower The owner of the position.
    * @param seizedAssets The amount of collateral to seize.
@@ -543,6 +385,7 @@ contract LendingBroker is
     if (!_checkLiquidationWhiteList(msg.sender)) revert NotLiquidationWhitelist();
     if (Id.unwrap(id) != Id.unwrap(MARKET_ID)) revert InvalidMarketId();
     if (!UtilsLib.exactlyOneZero(seizedAssets, repaidShares)) revert InvalidMarketId();
+    if (repaidShares > 0 && repaidShares % SharesMathLib.VIRTUAL_SHARES != 0) revert InvalidRepaidShares();
     if (borrower == address(0)) revert InvalidUser();
 
     // [1] init liquidation context for onMoolahLiquidate() Callback
@@ -616,26 +459,23 @@ contract LendingBroker is
         delete dynamicLoanPositions[borrower];
         delete fixedLoanPositions[borrower];
       } else {
-        // [9] deduct interest and principal from positions
-        // deduct from dynamic position and returns the leftover assets to deduct
-        (uint256 interestLeftover, uint256 principalLeftover) = _deductDynamicPositionDebt(
-          borrower,
-          dynamicPosition,
-          interestToBroker,
-          repaidAssets,
-          rate
-        );
-        // deduct from fixed positions
-        if ((principalLeftover > 0 || interestLeftover > 0) && fixedPositions.length > 0) {
-          // sort fixed positions from earliest end time to latest, filter out fully repaid positions
-          // positions with earlier end time will be deducted first
-          FixedLoanPosition[] memory sorted = BrokerMath.sortAndFilterFixedPositions(fixedPositions);
-          if (sorted.length > 0) {
-            _deductFixedPositionsDebt(borrower, sorted, interestLeftover, principalLeftover);
+        // [9] run the full cascade in one library call: deduct from the dynamic
+        // position, sort the fixed positions, then deduct from them in order
+        (
+          DynamicLoanPosition memory updatedDyn,
+          FixedLoanPosition[] memory touched,
+          bool[] memory shouldRemove
+        ) = BrokerMath.executeLiquidationCascade(dynamicPosition, fixedPositions, interestToBroker, repaidAssets, rate);
+        // apply dynamic update
+        dynamicLoanPositions[borrower] = updatedDyn;
+        // apply fixed-position updates
+        for (uint256 i = 0; i < touched.length; i++) {
+          if (shouldRemove[i]) {
+            _removeFixedPositionByPosId(borrower, touched[i].posId);
+          } else {
+            _updateFixedPosition(borrower, touched[i]);
           }
         }
-        // [10] validate every position after deduction meets minLoan
-        _validatePositions(borrower);
       }
     }
   }
@@ -649,68 +489,6 @@ contract LendingBroker is
       return true;
     }
     return liquidationWhitelist.contains(liquidator);
-  }
-
-  /**
-   * @dev deducts debt from the dynamic position and returns leftover assets
-   * @param position The dynamic loan position to modify
-   * @param interestToDeduct The amount of interest repaid during liquidation, leads to deduct from principal and interest
-   * @param principalToDeduct The amount of assets repaid during liquidation, leads to deduct from principal and interest
-   * @param rate The current interest rate
-   */
-  function _deductDynamicPositionDebt(
-    address user,
-    DynamicLoanPosition memory position,
-    uint256 interestToDeduct,
-    uint256 principalToDeduct,
-    uint256 rate
-  ) internal returns (uint256, uint256) {
-    // call BrokerMath to process deduction
-    // will return leftover interest/principal to deduct and the updated position
-    (interestToDeduct, principalToDeduct, position) = BrokerMath.deductDynamicPositionDebt(
-      position,
-      interestToDeduct,
-      principalToDeduct,
-      rate
-    );
-    // update position
-    dynamicLoanPositions[user] = position;
-    return (interestToDeduct, principalToDeduct);
-  }
-
-  /**
-   * @dev allocates repayments to fixed positions by APR and remaining principal
-   * @param user The address of the user
-   * @param sortedFixedPositions The sorted fixed loan positions
-   * @param interestToDeduct The amount of interest repaid during liquidation, leads to deduct from principal and interest
-   * @param principalToDeduct The amount of assets repaid during liquidation, leads to deduct from principal and interest
-   */
-  function _deductFixedPositionsDebt(
-    address user,
-    FixedLoanPosition[] memory sortedFixedPositions,
-    uint256 interestToDeduct,
-    uint256 principalToDeduct
-  ) internal {
-    uint256 len = sortedFixedPositions.length;
-    for (uint256 i = 0; i < len; i++) {
-      if (principalToDeduct == 0 && interestToDeduct == 0) break;
-      FixedLoanPosition memory p = sortedFixedPositions[i];
-      // call BrokerMath to process deduction one by one
-      // will return leftover interest/principal to deduct and the updated position
-      (interestToDeduct, principalToDeduct, p) = BrokerMath.deductFixedPositionDebt(
-        interestToDeduct,
-        principalToDeduct,
-        p
-      );
-      // post repayment
-      if (p.principalRepaid >= p.principal) {
-        // removes it from user's fixed positions
-        _removeFixedPositionByPosId(user, p.posId);
-      } else {
-        // update position
-        _updateFixedPosition(user, p);
-      }
-    }
   }
 
   ///////////////////////////////////////
@@ -853,25 +631,36 @@ contract LendingBroker is
    * @param termId The fixed-term product ID
    */
   function _borrowFixed(address user, uint256 amount, uint256 termId) private {
+    _createFixedPosition(user, amount, termId);
+    _borrowFromMoolah(user, amount);
+  }
+
+  /**
+   * @dev Create and push a new fixed-term position for `user`. Used by both `_borrowFixed`
+   *      (fresh fixed borrow) and `convertDynamicToFixed` (moves principal/interest from
+   *      a dynamic position). Validates the new position before returning.
+   * @param user The user the position belongs to
+   * @param amount The position's principal
+   * @param termId The fixed-term product ID
+   */
+  function _createFixedPosition(address user, uint256 amount, uint256 termId) private {
     if (fixedLoanPositions[user].length >= maxFixedLoanPositions) revert ExceedMaxFixedPositions();
     FixedTermAndRate memory term = _getTermById(termId);
     uint256 start = block.timestamp;
-    uint256 end = block.timestamp + term.duration;
+    uint256 end = start + term.duration;
     fixedPosUuid++;
-    fixedLoanPositions[user].push(
-      FixedLoanPosition({
-        posId: fixedPosUuid,
-        principal: amount,
-        apr: term.apr,
-        start: start,
-        end: end,
-        lastRepaidTime: start,
-        interestRepaid: 0,
-        principalRepaid: 0
-      })
-    );
-    _borrowFromMoolah(user, amount);
-    _validatePositions(user);
+    FixedLoanPosition memory newPos = FixedLoanPosition({
+      posId: fixedPosUuid,
+      principal: amount,
+      apr: term.apr,
+      start: start,
+      end: end,
+      lastRepaidTime: start,
+      interestRepaid: 0,
+      principalRepaid: 0
+    });
+    fixedLoanPositions[user].push(newPos);
+    _validateFixedPosition(newPos);
     emit FixedLoanPositionCreated(user, fixedPosUuid, amount, start, end, term.apr, termId);
   }
 
@@ -980,26 +769,6 @@ contract LendingBroker is
   }
 
   /**
-   * @dev Get the interest for a fixed loan position
-   * @param position The fixed loan position to get the interest for
-   */
-  function _getAccruedInterestForFixedPosition(FixedLoanPosition memory position) internal view returns (uint256) {
-    return BrokerMath.getAccruedInterestForFixedPosition(position);
-  }
-
-  /**
-   * @dev Get the penalty for a fixed loan position
-   * @param position The fixed loan position to get the penalty for
-   * @param repayAmt The actual repay amount (repay amount excluded accrued interest)
-   */
-  function _getPenaltyForFixedPosition(
-    FixedLoanPosition memory position,
-    uint256 repayAmt
-  ) internal view returns (uint256 penalty) {
-    return BrokerMath.getPenaltyForFixedPosition(position, repayAmt);
-  }
-
-  /**
    * @dev Transfer loan token to recipient. Unwraps to native BNB when supported.
    */
   function _transferLoanToken(address payable recipient, uint256 amount) internal {
@@ -1020,29 +789,26 @@ contract LendingBroker is
   }
 
   /**
-   * @dev Repay an amount on behalf of a user to Moolah
-   * @param onBehalf The address of the user to repay on behalf of
-   * @param amount The amount to repay
+   * @dev Validate that the user's dynamic position is either zero or meets the minimum loan
+   * @param user The address of the user
    */
-  function _repayToMoolah(address onBehalf, uint256 amount) internal returns (uint256 assetsRepaid) {
-    IERC20(LOAN_TOKEN).safeIncreaseAllowance(address(MOOLAH), amount);
-    Market memory market = MOOLAH.market(MARKET_ID);
-    // convert amount to shares
-    uint256 amountShares = amount.toSharesDown(market.totalBorrowAssets, market.totalBorrowShares);
-    // using `shares` to ensure full repayment
-    (assetsRepaid /* sharesRepaid */, ) = MOOLAH.repay(_getMarketParams(MARKET_ID), 0, amountShares, onBehalf, "");
-    IERC20(LOAN_TOKEN).forceApprove(address(MOOLAH), 0);
+  function _validateDynamicPosition(address user) internal view {
+    uint256 principal = dynamicLoanPositions[user].principal;
+    if (principal == 0) return;
+    uint256 minLoan = MOOLAH.minLoan(_getMarketParams(MARKET_ID));
+    require(principal >= minLoan, "broker/dynamic-below-min-loan");
   }
 
   /**
-   * @dev Validate that the user's positions meet the minimum loan requirement
-   * @param user The address of the user
+   * @dev Validate that a fixed position is either fully repaid or has remaining principal
+   *      at or above the minimum loan
+   * @param position The fixed loan position to validate
    */
-  function _validatePositions(address user) internal view {
-    require(
-      BrokerMath.checkPositionsMeetsMinLoan(user, address(MOOLAH), rateCalculator),
-      "broker/positions-below-min-loan"
-    );
+  function _validateFixedPosition(FixedLoanPosition memory position) internal view {
+    uint256 remaining = position.principal - position.principalRepaid;
+    if (remaining == 0) return;
+    uint256 minLoan = MOOLAH.minLoan(_getMarketParams(MARKET_ID));
+    require(remaining >= minLoan, "broker/fixed-below-min-loan");
   }
 
   ///////////////////////////////////////
@@ -1183,7 +949,7 @@ contract LendingBroker is
 
     if (token == address(0)) {
       (bool success, ) = msg.sender.call{ value: amount }("");
-      if (!success) revert TransferFailed();
+      if (!success) revert NativeTransferFailed();
     } else {
       IERC20(token).safeTransfer(msg.sender, amount);
     }

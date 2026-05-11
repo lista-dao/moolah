@@ -744,6 +744,28 @@ contract LendingBrokerTest is Test {
     assertLe(fixedPositions[0].principal, convertAmount, "fixed principal must be <= amount");
   }
 
+  /// @notice A user with no dynamic position (or with both principal and interest at zero) must
+  ///         not be able to spawn zero-principal fixed positions via convertDynamicToFixed.
+  ///         Without the post-clamp guard, repeated 1-wei calls would let an attacker fill
+  ///         maxFixedLoanPositions slots with empty entries to grief liquidation gas later.
+  function test_convertDynamicToFixed_revertsWhenNoDynamicDebt() public {
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: 55, duration: 30 days, apr: 105 * 1e25 });
+    vm.prank(BOT);
+    broker.updateFixedTermAndRate(term, false);
+
+    // user has never borrowed → no dynamic position
+    (uint256 principal, uint256 normalizedDebt) = broker.dynamicLoanPositions(borrower);
+    assertEq(principal, 0, "precondition: no dynamic principal");
+    assertEq(normalizedDebt, 0, "precondition: no dynamic normalizedDebt");
+
+    vm.prank(borrower);
+    vm.expectRevert(LendingBroker.ZeroAmount.selector);
+    broker.convertDynamicToFixed(1, 55);
+
+    // confirm: no fixed position was ever created
+    assertEq(broker.userFixedPositions(borrower).length, 0, "no fixed position should be created");
+  }
+
   // -----------------------------
   // Fixed borrow and repay (partial and full)
   // -----------------------------
@@ -1721,7 +1743,7 @@ contract LendingBrokerTest is Test {
     vm.stopPrank();
 
     vm.prank(borrower);
-    vm.expectRevert("broker/positions-below-min-loan");
+    vm.expectRevert("broker/dynamic-below-min-loan");
     broker.repay(minLoan / 2, borrower);
   }
 
@@ -1787,7 +1809,7 @@ contract LendingBrokerTest is Test {
     broker.emergencyWithdraw(address(LISUSD), amount);
   }
 
-  function test_checkPositionsMeetsMinLoan_allowsFullRepay() public {
+  function test_validateDynamicPosition_allowsFullRepay() public {
     vm.prank(MANAGER);
     moolah.setMinLoanValue(1e8);
     uint256 minLoan = moolah.minLoan(marketParams);
@@ -1795,7 +1817,7 @@ contract LendingBrokerTest is Test {
     vm.prank(borrower);
     broker.borrow(minLoan);
 
-    // full repayment leaves zero debt, which BrokerMath.checkPositionsMeetsMinLoan accepts
+    // full repayment leaves zero principal, which _validateDynamicPosition accepts
     vm.prank(borrower);
     broker.repay(minLoan, borrower);
 
@@ -2080,6 +2102,434 @@ contract LendingBrokerTest is Test {
       "",
       payload
     );
+  }
+
+  // =============================================
+  // repayAll tests
+  // =============================================
+
+  /// @notice repayAll clears a dynamic-only position and supplies accrued interest as revenue.
+  function test_repayAll_dynamicOnly() public {
+    uint256 borrowAmt = 1000 ether;
+    vm.prank(borrower);
+    broker.borrow(borrowAmt);
+
+    // bump rate so meaningful interest accrues
+    vm.prank(MANAGER);
+    rateCalc.setMaxRatePerSecond(address(broker), RATE_SCALE + 1e20);
+    vm.prank(BOT);
+    rateCalc.setRatePerSecond(address(broker), RATE_SCALE + 1e20);
+    skip(7 days);
+
+    uint256 rate = rateCalc.accrueRate(address(broker));
+    (, uint256 normalizedDebt) = broker.dynamicLoanPositions(borrower);
+    uint256 actualDebt = BrokerMath.denormalizeBorrowAmount(normalizedDebt, rate);
+    uint256 interestPortion = actualDebt - borrowAmt;
+    assertGt(interestPortion, 0, "interest did not accrue");
+
+    LISUSD.setBalance(borrower, actualDebt);
+    uint256 relayerBalBefore = LISUSD.balanceOf(address(relayer));
+    uint256 vaultSharesBefore = moolah.position(id, address(vault)).supplyShares;
+
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+
+    // dynamic position cleared
+    (uint256 principalAfter, uint256 normalizedAfter) = broker.dynamicLoanPositions(borrower);
+    assertEq(principalAfter, 0, "dynamic principal not cleared");
+    assertEq(normalizedAfter, 0, "dynamic normalized debt not cleared");
+
+    // borrow shares cleared at Moolah
+    Position memory posAfter = moolah.position(id, borrower);
+    assertEq(posAfter.borrowShares, 0, "borrow shares not cleared");
+
+    // borrower spent the entire budget
+    assertEq(LISUSD.balanceOf(borrower), 0, "borrower retained funds");
+
+    // revenue (interest) was supplied to relayer / vault
+    uint256 vaultSharesAfter = moolah.position(id, address(vault)).supplyShares;
+    bool revenueSupplied = vaultSharesAfter > vaultSharesBefore ||
+      LISUSD.balanceOf(address(relayer)) > relayerBalBefore;
+    assertTrue(revenueSupplied, "interest not supplied to vault/relayer");
+  }
+
+  /// @notice repayAll clears every fixed position and charges full early-repay penalty.
+  function test_repayAll_fixedOnly_chargesPenalty() public {
+    vm.startPrank(BOT);
+    broker.updateFixedTermAndRate(FixedTermAndRate({ termId: 1, duration: 30 days, apr: 110 * 1e25 }), false);
+    broker.updateFixedTermAndRate(FixedTermAndRate({ termId: 2, duration: 60 days, apr: 115 * 1e25 }), false);
+    vm.stopPrank();
+
+    vm.startPrank(borrower);
+    broker.borrow(500 ether, 1);
+    broker.borrow(700 ether, 2);
+    vm.stopPrank();
+
+    skip(5 days);
+    moolah.accrueInterest(marketParams);
+
+    // every position should have a non-zero penalty (early repay)
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    assertEq(positions.length, 2);
+    for (uint256 i = 0; i < positions.length; i++) {
+      uint256 remaining = positions[i].principal - positions[i].principalRepaid;
+      assertGt(BrokerMath.getPenaltyForFixedPosition(positions[i], remaining), 0, "penalty not charged");
+    }
+
+    LISUSD.setBalance(borrower, 5_000 ether);
+    uint256 relayerBefore = LISUSD.balanceOf(address(relayer));
+    uint256 vaultSharesBefore = moolah.position(id, address(vault)).supplyShares;
+
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+
+    // every fixed position cleared
+    assertEq(broker.userFixedPositions(borrower).length, 0, "fixed positions not cleared");
+    Position memory posAfter = moolah.position(id, borrower);
+    assertEq(posAfter.borrowShares, 0, "borrow shares not cleared");
+
+    // revenue (interest + penalty) reached relayer/vault
+    uint256 vaultSharesAfter = moolah.position(id, address(vault)).supplyShares;
+    bool revenueSupplied = vaultSharesAfter > vaultSharesBefore || LISUSD.balanceOf(address(relayer)) > relayerBefore;
+    assertTrue(revenueSupplied, "no revenue supplied");
+  }
+
+  /// @notice repayAll clears dynamic and fixed positions in a single call.
+  function test_repayAll_dynamicAndFixed() public {
+    vm.prank(BOT);
+    broker.updateFixedTermAndRate(FixedTermAndRate({ termId: 1, duration: 30 days, apr: 105 * 1e25 }), false);
+
+    vm.startPrank(borrower);
+    broker.borrow(800 ether);
+    broker.borrow(400 ether, 1);
+    vm.stopPrank();
+
+    vm.prank(MANAGER);
+    rateCalc.setMaxRatePerSecond(address(broker), RATE_SCALE + 1e20);
+    vm.prank(BOT);
+    rateCalc.setRatePerSecond(address(broker), RATE_SCALE + 1e20);
+    skip(3 days);
+
+    LISUSD.setBalance(borrower, 10_000 ether);
+
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+
+    (uint256 dynPrincipal, uint256 dynNormalized) = broker.dynamicLoanPositions(borrower);
+    assertEq(dynPrincipal, 0, "dynamic not cleared");
+    assertEq(dynNormalized, 0, "dynamic normalized not cleared");
+    assertEq(broker.userFixedPositions(borrower).length, 0, "fixed not cleared");
+
+    Position memory posAfter = moolah.position(id, borrower);
+    assertEq(posAfter.borrowShares, 0, "borrow shares not cleared");
+  }
+
+  /// @notice repayAll emits AllPositionsRepaid with the total amount charged.
+  function test_repayAll_emitsEvent() public {
+    vm.prank(borrower);
+    broker.borrow(500 ether);
+
+    skip(1 hours);
+
+    LISUSD.setBalance(borrower, 1_000 ether);
+
+    // we don't pin the totalRepaid amount precisely (interest tiny but non-deterministic);
+    // assert event topic + emitter, then check positions cleared after
+    vm.expectEmit(true, false, false, false, address(broker));
+    emit IBroker.AllPositionsRepaid(borrower, 0); // value not checked
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+  }
+
+  /// @notice repayAll emits FixedLoanPositionRemoved for every cleared fixed position
+  ///         and DynamicLoanPositionRepaid for the cleared dynamic position.
+  function test_repayAll_emitsPerPositionEvents() public {
+    vm.startPrank(BOT);
+    broker.updateFixedTermAndRate(FixedTermAndRate({ termId: 1, duration: 30 days, apr: 105 * 1e25 }), false);
+    broker.updateFixedTermAndRate(FixedTermAndRate({ termId: 2, duration: 60 days, apr: 110 * 1e25 }), false);
+    vm.stopPrank();
+
+    vm.startPrank(borrower);
+    broker.borrow(300 ether);
+    broker.borrow(200 ether, 1);
+    broker.borrow(150 ether, 2);
+    vm.stopPrank();
+
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    assertEq(positions.length, 2);
+
+    LISUSD.setBalance(borrower, 5_000 ether);
+
+    // Expect: dynamic repaid event + a removed event for each fixed pos + the all-repaid event.
+    // Don't pin amount in the dynamic repaid event (interest is tiny but non-deterministic).
+    vm.expectEmit(true, false, false, false, address(broker));
+    emit IBroker.DynamicLoanPositionRepaid(borrower, 0, 0);
+    vm.expectEmit(true, false, false, true, address(broker));
+    emit IBroker.FixedLoanPositionRemoved(borrower, positions[0].posId);
+    vm.expectEmit(true, false, false, true, address(broker));
+    emit IBroker.FixedLoanPositionRemoved(borrower, positions[1].posId);
+    vm.expectEmit(true, false, false, false, address(broker));
+    emit IBroker.AllPositionsRepaid(borrower, 0);
+
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+  }
+
+  /// @notice A third party may repayAll on behalf of any borrower.
+  function test_repayAll_byThirdParty() public {
+    vm.prank(borrower);
+    broker.borrow(300 ether);
+
+    address helper = address(0x707);
+    LISUSD.setBalance(helper, 1_000 ether);
+    vm.startPrank(helper);
+    IERC20(address(LISUSD)).approve(address(broker), type(uint256).max);
+    broker.repayAll(borrower);
+    vm.stopPrank();
+
+    (uint256 p, ) = broker.dynamicLoanPositions(borrower);
+    assertEq(p, 0, "dynamic not cleared");
+    Position memory posAfter = moolah.position(id, borrower);
+    assertEq(posAfter.borrowShares, 0, "borrow shares not cleared");
+    assertLt(LISUSD.balanceOf(helper), 1_000 ether, "helper balance unchanged");
+  }
+
+  /// @notice repayAll with native BNB clears the position and refunds excess.
+  function test_repayAll_native_refundsExcess() public {
+    // bootstrap WBNB totalSupply so the burn-then-mint sequence in withdraw/deposit
+    // does not underflow→overflow (WBNBMock uses OZ ERC20; deal() does not adjust totalSupply)
+    vm.deal(address(this), 10_000 ether);
+    WBNB.deposit{ value: 10_000 ether }();
+
+    vm.deal(borrower, 1_000 ether);
+    vm.deal(address(WBNB), 10_000 ether);
+
+    vm.startPrank(borrower);
+    bnbBroker.borrow(500 ether);
+    vm.stopPrank();
+
+    uint256 budget = 600 ether; // overpay
+    vm.deal(borrower, borrower.balance + budget);
+    uint256 balBefore = borrower.balance;
+
+    vm.prank(borrower);
+    bnbBroker.repayAll{ value: budget }(borrower);
+
+    (uint256 p, ) = bnbBroker.dynamicLoanPositions(borrower);
+    assertEq(p, 0, "dynamic not cleared");
+    Position memory posAfter = moolah.position(bnbId, borrower);
+    assertEq(posAfter.borrowShares, 0, "borrow shares not cleared");
+
+    uint256 balAfter = borrower.balance;
+    assertGt(balAfter, balBefore - budget, "no native refund issued");
+  }
+
+  /// @notice repayAll reverts when called with native value on a non-WBNB market.
+  function test_repayAll_revertsNativeOnNonWBNB() public {
+    vm.prank(borrower);
+    broker.borrow(100 ether);
+
+    vm.deal(borrower, 1 ether);
+    vm.expectRevert(LendingBroker.NativeNotSupported.selector);
+    vm.prank(borrower);
+    broker.repayAll{ value: 1 ether }(borrower);
+  }
+
+  /// @notice repayAll reverts when msg.value < totalDebt on the WBNB broker.
+  function test_repayAll_revertsInsufficientNativeValue() public {
+    vm.deal(borrower, 1_000 ether);
+    vm.deal(address(WBNB), 10_000 ether);
+
+    vm.startPrank(borrower);
+    bnbBroker.borrow(500 ether);
+    vm.stopPrank();
+
+    // send a tiny fraction — must revert with InsufficientAmount
+    vm.expectRevert(LendingBroker.InsufficientAmount.selector);
+    vm.prank(borrower);
+    bnbBroker.repayAll{ value: 1 wei }(borrower);
+  }
+
+  /// @notice repayAll reverts on zero onBehalf address.
+  function test_repayAll_revertsZeroAddress() public {
+    vm.expectRevert(LendingBroker.ZeroAddress.selector);
+    vm.prank(borrower);
+    broker.repayAll(address(0));
+  }
+
+  /// @notice repayAll reverts when the user has no debt.
+  function test_repayAll_revertsNothingToRepay() public {
+    vm.expectRevert(LendingBroker.NothingToRepay.selector);
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+  }
+
+  // =============================================
+  // Per-position validation tests
+  // =============================================
+
+  /// @notice partial repay of a fixed position to below minLoan reverts with the per-fixed error.
+  ///         A second (large) position keeps Moolah's own debt above minLoan so the broker-level
+  ///         validation is the one that fires.
+  function test_repayFixed_belowMin_reverts() public {
+    vm.prank(MANAGER);
+    moolah.setMinLoanValue(100 * 1e8); // minLoan = 100 ether
+    uint256 minLoan = moolah.minLoan(marketParams);
+    assertEq(minLoan, 100 ether);
+
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: 100, duration: 30 days, apr: 105 * 1e25 });
+    vm.prank(BOT);
+    broker.updateFixedTermAndRate(term, false);
+
+    vm.startPrank(borrower);
+    broker.borrow(500 ether); // dynamic — keeps total Moolah debt well above minLoan
+    broker.borrow(minLoan, term.termId);
+    vm.stopPrank();
+
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    uint256 posId = positions[0].posId;
+
+    LISUSD.setBalance(borrower, 1_000 ether);
+    vm.expectRevert("broker/fixed-below-min-loan");
+    vm.prank(borrower);
+    broker.repay(minLoan / 2, posId, borrower);
+  }
+
+  /// @notice "validate current" isolation: an unrelated below-min fixed position does not block
+  ///         a dynamic borrow on the same user. Old "validate all" would have reverted here.
+  function test_validation_isolation_borrowDynamicWhenFixedBelowMin() public {
+    // initial minLoan = 15 ether (set in setUp via Moolah.initialize(_minLoanValue=15e8))
+    assertEq(moolah.minLoan(marketParams), 15 ether);
+
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: 200, duration: 30 days, apr: 105 * 1e25 });
+    vm.prank(BOT);
+    broker.updateFixedTermAndRate(term, false);
+
+    // borrow 50 dynamic + 50 fixed (both above the 15-ether minLoan)
+    vm.startPrank(borrower);
+    broker.borrow(50 ether);
+    broker.borrow(50 ether, term.termId);
+    vm.stopPrank();
+
+    // raise minLoan so the existing fixed position (50) is now below the new floor (100)
+    vm.prank(MANAGER);
+    moolah.setMinLoanValue(100 * 1e8);
+    assertEq(moolah.minLoan(marketParams), 100 ether);
+
+    // borrow more dynamic — only the dynamic position (which becomes 150) is validated
+    vm.prank(borrower);
+    broker.borrow(100 ether);
+
+    (uint256 dynPrincipal, ) = broker.dynamicLoanPositions(borrower);
+    assertEq(dynPrincipal, 150 ether);
+    // unrelated below-min fixed position remains untouched
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    assertEq(positions.length, 1);
+    assertEq(positions[0].principal, 50 ether);
+  }
+
+  // =============================================
+  // Liquidation runs even when leaving below-min
+  // =============================================
+
+  /// @notice After my change, liquidation no longer validates positions, so it succeeds even
+  ///         when the resulting principal falls below minLoan.
+  function test_liquidation_noRevertWhenLeavesPositionBelowMin() public {
+    _prepareLiquidatablePosition(false);
+
+    // raise minLoan above what each position will end up with after a 50% liquidation.
+    // setUp creates 40000 dyn + 40000 fixed; ~50% liquidation leaves ~20000 each.
+    vm.prank(MANAGER);
+    moolah.setMinLoanValue(25_000 * 1e8); // minLoan = 25,000 ether
+
+    Position memory posBefore = moolah.position(marketParams.id(), borrower);
+    uint256 userRepayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, 50 * 1e8, 100 * 1e8);
+
+    LISUSD.setBalance(address(liquidator), 1_000_000 ether);
+
+    // old code would have reverted with broker/positions-below-min-loan; the new code must succeed
+    vm.prank(BOT);
+    liquidator.liquidate(Id.unwrap(id), borrower, 0, userRepayShares);
+
+    Position memory posAfter = moolah.position(marketParams.id(), borrower);
+    assertLt(posAfter.borrowShares, posBefore.borrowShares, "shares should decrease");
+  }
+
+  /// @notice Regression: after a partial liquidation, a position can be left in the
+  ///         "interest-only residual" state — `principal == 0` while `normalizedDebt > 0`
+  ///         (because liquidation paid the principal but only a fraction of the broker's
+  ///         accrued interest). This test exercises that path through repayAll:
+  ///           (1) liquidation completes (no broker validation)
+  ///           (2) repayAll's `dynamicInterest > 0` guard fires and clears the residual
+  ///           (3) DynamicLoanPositionRepaid event still emits for the residual
+  ///           (4) no leftover broker tracking, no Moolah debt
+  function test_liquidation_postResidual_repayAllClearsCleanly() public {
+    _prepareLiquidatablePosition(false);
+
+    // 50% liquidation of 40k dyn + 40k fixed: dynamic absorbs all 40k principal first,
+    // leaving dynamic with only an interest residual (principal == 0, normalizedDebt > 0).
+    Position memory posBefore = moolah.position(marketParams.id(), borrower);
+    uint256 userRepayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, 50 * 1e8, 100 * 1e8);
+    LISUSD.setBalance(address(liquidator), 1_000_000 ether);
+
+    vm.prank(BOT);
+    liquidator.liquidate(Id.unwrap(id), borrower, 0, userRepayShares);
+
+    // confirm the residual: principal cleared but interest still tracked
+    (uint256 dynPrincipal, uint256 dynNormDebt) = broker.dynamicLoanPositions(borrower);
+    assertEq(dynPrincipal, 0, "dynamic principal should be cleared");
+    assertGt(dynNormDebt, 0, "dynamic should retain interest residual");
+
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    assertEq(positions.length, 1, "expected one fixed position remaining");
+    uint256 fixedPosId = positions[0].posId;
+
+    // repayAll should: charge the residual interest, fire DynamicLoanPositionRepaid (via the
+    // `dynamicInterest > 0` guard), remove the fixed position, and clear all state.
+    LISUSD.setBalance(borrower, 1_000_000 ether);
+
+    vm.expectEmit(true, false, false, false, address(broker));
+    emit IBroker.DynamicLoanPositionRepaid(borrower, 0, 0);
+    vm.expectEmit(true, false, false, true, address(broker));
+    emit IBroker.FixedLoanPositionRemoved(borrower, fixedPosId);
+    vm.expectEmit(true, false, false, false, address(broker));
+    emit IBroker.AllPositionsRepaid(borrower, 0);
+
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+
+    (uint256 dynAfter, uint256 normAfter) = broker.dynamicLoanPositions(borrower);
+    assertEq(dynAfter, 0, "dynamic principal not cleared");
+    assertEq(normAfter, 0, "dynamic normalized debt not cleared (interest residual leaked)");
+    assertEq(broker.userFixedPositions(borrower).length, 0, "fixed not cleared");
+    Position memory moolahAfter = moolah.position(id, borrower);
+    assertEq(moolahAfter.borrowShares, 0, "moolah debt not cleared");
+  }
+
+  /// @notice Broker market runs 0% Moolah-side IRM, so totalBorrowAssets/totalBorrowShares stays
+  ///         locked at 1:VIRTUAL_SHARES across the market's lifetime. A liquidation that passes a
+  ///         repaidShares value not divisible by VIRTUAL_SHARES would have toAssetsUp ceiling round
+  ///         the asset deduction up by 1 wei, drifting the ratio and corrupting later repayments
+  ///         for every borrower in the market. The guard rejects this at the broker layer.
+  function test_liquidation_revertsOnNonDivisibleRepaidShares() public {
+    _prepareLiquidatablePosition(false);
+
+    Position memory posBefore = moolah.position(marketParams.id(), borrower);
+    // 50% clamped to a clean multiple, then add 1 to force non-divisible
+    uint256 cleanShares = (posBefore.borrowShares / 2 / SharesMathLib.VIRTUAL_SHARES) * SharesMathLib.VIRTUAL_SHARES;
+    uint256 dirtyShares = cleanShares + 1;
+
+    LISUSD.setBalance(address(liquidator), 1_000_000 ether);
+
+    vm.prank(BOT);
+    vm.expectRevert(LendingBroker.InvalidRepaidShares.selector);
+    liquidator.liquidate(Id.unwrap(id), borrower, 0, dirtyShares);
+
+    // clean multiple still succeeds
+    vm.prank(BOT);
+    liquidator.liquidate(Id.unwrap(id), borrower, 0, cleanShares);
+    Position memory posAfter = moolah.position(marketParams.id(), borrower);
+    assertLt(posAfter.borrowShares, posBefore.borrowShares, "clean shares should liquidate");
   }
 }
 
