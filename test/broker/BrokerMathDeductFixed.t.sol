@@ -7,8 +7,11 @@ import { FixedLoanPosition } from "../../src/broker/interfaces/IBroker.sol";
 import { UtilsLib } from "../../src/moolah/libraries/UtilsLib.sol";
 
 /// @title Tests for BrokerMath.deductFixedPositionDebt
-/// @notice Validates that partial liquidation preserves exact outstanding interest,
-///         accounting for the reduced principal effect on the interest formula.
+/// @notice The current implementation deliberately resets `interestRepaid` and
+///         `lastRepaidTime` on any positive principal payment — the audit-acknowledged
+///         simplified semantic. Outstanding interest is only preserved when the call
+///         is interest-only. These tests validate that reset behaviour and the
+///         interest-only preservation path.
 contract BrokerMathDeductFixedTest is Test {
   uint256 constant DURATION = 365 days;
   // 10% APR -> RATE_SCALE * 1.10
@@ -41,12 +44,13 @@ contract BrokerMathDeductFixedTest is Test {
   }
 
   // ====================================================================
-  //  Core fix: partial liquidation preserves EXACT outstanding interest
+  //  Any principal payment resets interest tracking
   // ====================================================================
 
-  /// @notice principal=100e18, interest~10e18, liquidation pays half interest + half principal.
-  ///         Outstanding interest must be exactly (accruedInterest - paidInterest).
-  function test_partialLiquidation_preservesExactOutstanding() public {
+  /// @notice principal=100e18, interest~10e18, partial-interest + partial-principal.
+  ///         After the call: interestRepaid = 0, lastRepaidTime = now, outstanding = 0
+  ///         (no time has elapsed since the reset).
+  function test_partialLiquidation_resetsInterestOnPrincipalPayment() public {
     FixedLoanPosition memory pos = _makePosition(100 ether);
     skip(DURATION);
 
@@ -64,14 +68,14 @@ contract BrokerMathDeductFixedTest is Test {
     assertEq(principalLeft, 0, "principal budget consumed");
     assertEq(updated.principalRepaid, principalBudget, "principalRepaid correct");
 
-    // Core invariant: outstanding = accruedInterest - paidInterest (exact)
-    uint256 expectedOutstanding = accruedInterest - interestBudget;
-    uint256 actualOutstanding = _outstanding(updated);
-    assertEq(actualOutstanding, expectedOutstanding, "outstanding interest must be exact");
+    // Simplified reset semantic: any positive principal payment wipes interest tracking
+    assertEq(updated.interestRepaid, 0, "interestRepaid reset to 0");
+    assertEq(updated.lastRepaidTime, block.timestamp, "lastRepaidTime reset to now");
+    assertEq(_outstanding(updated), 0, "no outstanding immediately after reset");
   }
 
   // ====================================================================
-  //  Full interest payment resets correctly
+  //  Full interest + principal: reset (same as core path)
   // ====================================================================
 
   function test_fullInterestPayment_resetsTracking() public {
@@ -91,7 +95,7 @@ contract BrokerMathDeductFixedTest is Test {
   }
 
   // ====================================================================
-  //  Interest only, no principal deduction
+  //  Interest-only path: preserves exact outstanding (no principal => no reset)
   // ====================================================================
 
   function test_interestOnlyPartial_preservesOutstanding() public {
@@ -114,7 +118,7 @@ contract BrokerMathDeductFixedTest is Test {
   }
 
   // ====================================================================
-  //  Full principal with partial interest -> fallback (position filtered out)
+  //  Full principal with partial interest -> reset + filtered out
   // ====================================================================
 
   function test_fullPrincipalPartialInterest_fallback() public {
@@ -155,36 +159,41 @@ contract BrokerMathDeductFixedTest is Test {
   }
 
   // ====================================================================
-  //  Sequential partial liquidations preserve cumulative outstanding
+  //  Sequential partial liquidations: each principal payment resets,
+  //  new interest accrues between calls based on elapsed time + reduced principal.
   // ====================================================================
 
-  function test_sequentialPartialLiquidations_preserveOutstanding() public {
+  function test_sequentialPartialLiquidations_resetEachTime() public {
     FixedLoanPosition memory pos = _makePosition(100 ether);
-    skip(DURATION);
+    // Move part-way through the term so interest can still accrue between calls.
+    skip(DURATION / 3);
 
     uint256 originalAccrued = _outstanding(pos);
+    assertGt(originalAccrued, 0, "precondition: interest accrued");
 
-    // First partial: 1/4 interest + 20 principal
+    // First partial: 1/4 interest + 20 principal -> reset triggered
     uint256 firstInterest = originalAccrued / 4;
     (, , FixedLoanPosition memory after1) = BrokerMath.deductFixedPositionDebt(firstInterest, 20 ether, pos);
 
-    uint256 expectedAfter1 = originalAccrued - firstInterest;
-    assertEq(_outstanding(after1), expectedAfter1, "first: outstanding exact");
+    // Reset semantic: interestRepaid wiped, lastRepaidTime = now, outstanding = 0 in this block
+    assertEq(after1.interestRepaid, 0, "first: interest tracking reset");
+    assertEq(after1.lastRepaidTime, block.timestamp, "first: lastRepaidTime = now");
     assertEq(after1.principalRepaid, 20 ether, "first: principal tracked");
+    assertEq(_outstanding(after1), 0, "first: no outstanding immediately after reset");
 
-    // Second partial: another chunk of interest + 30 principal
+    // Let time elapse — still within the term — so new interest accrues on the reduced principal
+    skip(DURATION / 3);
     uint256 outstandingAfter1 = _outstanding(after1);
-    uint256 secondInterest = outstandingAfter1 / 3;
+    assertGt(outstandingAfter1, 0, "new interest accrued after reset");
 
+    // Second partial: another chunk of interest + 30 principal -> reset again
+    uint256 secondInterest = outstandingAfter1 / 3;
     (, , FixedLoanPosition memory after2) = BrokerMath.deductFixedPositionDebt(secondInterest, 30 ether, after1);
 
-    uint256 expectedAfter2 = outstandingAfter1 - secondInterest;
-    // allow 1 wei tolerance due to Ceil rounding in interest formula
-    assertApproxEqAbs(_outstanding(after2), expectedAfter2, 1, "second: outstanding exact");
+    assertEq(after2.interestRepaid, 0, "second: interest tracking reset");
+    assertEq(after2.lastRepaidTime, block.timestamp, "second: lastRepaidTime = now");
     assertEq(after2.principalRepaid, 50 ether, "second: cumulative principal");
-
-    // Outstanding still positive
-    assertGt(_outstanding(after2), 0, "interest still outstanding");
+    assertEq(_outstanding(after2), 0, "second: no outstanding immediately after reset");
   }
 
   // ====================================================================
@@ -227,10 +236,11 @@ contract BrokerMathDeductFixedTest is Test {
   }
 
   // ====================================================================
-  //  1 wei short of full interest -> no reset, exact outstanding
+  //  1-wei-short interest + principal: principal still triggers reset
+  //  (the 1 wei of unpaid interest is forgiven — the simplified semantic).
   // ====================================================================
 
-  function test_oneWeiShort_preservesExactOutstanding() public {
+  function test_oneWeiShort_stillResetsOnPrincipalPayment() public {
     FixedLoanPosition memory pos = _makePosition(100 ether);
     skip(DURATION);
 
@@ -241,15 +251,18 @@ contract BrokerMathDeductFixedTest is Test {
 
     (, , FixedLoanPosition memory updated) = BrokerMath.deductFixedPositionDebt(interestBudget, 50 ether, pos);
 
-    // 1 wei unpaid -> must preserve exactly
-    assertEq(_outstanding(updated), 1, "exactly 1 wei outstanding preserved");
+    // Simplified semantic: the principal payment resets tracking regardless of the 1-wei gap.
+    assertEq(updated.interestRepaid, 0, "interest tracking reset");
+    assertEq(updated.lastRepaidTime, block.timestamp, "lastRepaidTime reset");
+    assertEq(_outstanding(updated), 0, "outstanding = 0 right after the reset");
   }
 
   // ====================================================================
-  //  Zero interest budget with principal deduction -> maximize preserved
+  //  Zero interest budget + positive principal -> principal triggers reset
+  //  (the entire accrued interest is forgiven — the simplified semantic).
   // ====================================================================
 
-  function test_zeroInterestBudget_principalOnly_maximizesOutstanding() public {
+  function test_zeroInterestBudget_principalOnly_resetsInterest() public {
     FixedLoanPosition memory pos = _makePosition(100 ether);
     skip(DURATION);
 
@@ -263,25 +276,20 @@ contract BrokerMathDeductFixedTest is Test {
     assertEq(principalLeft, 0, "principal consumed");
     assertEq(updated.principalRepaid, 50 ether, "principal repaid");
 
-    // newTotalAccrued = (100-50)*10%*1year = 5e18, unpaidInterest = 10e18
-    // newTotalAccrued < unpaidInterest -> fallback: outstanding = newTotalAccrued
-    // This is the maximum the formula can represent (better than reset which gives 0)
-    uint256 newTotalAccrued = BrokerMath.getAccruedInterestForFixedPosition(updated);
-    assertEq(_outstanding(updated), newTotalAccrued, "fallback preserves maximum possible");
-    assertGt(_outstanding(updated), 0, "outstanding > 0 (not reset to zero)");
-    // Verify: lastRepaidTime was NOT reset (preserves historical accrual)
-    assertEq(updated.lastRepaidTime, startTs, "lastRepaidTime not reset in fallback");
+    // Simplified semantic: the principal payment resets all interest tracking,
+    // even though the budget did not include any interest.
+    assertEq(updated.interestRepaid, 0, "interest tracking reset");
+    assertEq(updated.lastRepaidTime, block.timestamp, "lastRepaidTime reset");
+    assertEq(_outstanding(updated), 0, "outstanding = 0 right after the reset");
   }
 
   // ====================================================================
-  //  Small principal + large interest -> fallback maximizes preserved
+  //  Tiny interest budget + small principal: same reset behaviour.
   // ====================================================================
 
-  function test_smallPrincipal_largeInterest_maximizesOutstanding() public {
+  function test_smallPrincipal_largeInterest_resetsOnPrincipalPayment() public {
     FixedLoanPosition memory pos = _makePosition(100 ether);
     skip(DURATION);
-
-    uint256 accruedInterest = _outstanding(pos);
 
     // Tiny interest budget + small principal
     uint256 interestBudget = 1;
@@ -289,20 +297,19 @@ contract BrokerMathDeductFixedTest is Test {
 
     (, , FixedLoanPosition memory updated) = BrokerMath.deductFixedPositionDebt(interestBudget, principalBudget, pos);
 
-    // newTotalAccrued = (100-5)*10%*1year = 9.5e18, unpaidInterest ~= 10e18
-    // newTotalAccrued < unpaidInterest -> fallback: maximize outstanding
-    uint256 newTotalAccrued = BrokerMath.getAccruedInterestForFixedPosition(updated);
-    assertEq(_outstanding(updated), newTotalAccrued, "fallback preserves max possible");
-    assertGt(_outstanding(updated), 0, "outstanding > 0");
-    // Verify: better than old code which would give outstanding = 0
-    assertGt(_outstanding(updated), accruedInterest / 2, "preserves majority of interest");
+    // Simplified semantic: principal payment resets tracking regardless of how much interest was left.
+    assertEq(updated.interestRepaid, 0, "interest tracking reset");
+    assertEq(updated.lastRepaidTime, block.timestamp, "lastRepaidTime reset");
+    assertEq(updated.principalRepaid, principalBudget, "principal repaid");
+    assertEq(_outstanding(updated), 0, "outstanding = 0 right after the reset");
   }
 
   // ====================================================================
-  //  After reset, new interest accrues correctly
+  //  After reset, new interest accrues correctly; a subsequent
+  //  partial-with-principal call resets again.
   // ====================================================================
 
-  function test_resetThenNewAccrual_worksCorrectly() public {
+  function test_resetThenNewAccrual_resetsAgainOnSecondPrincipalPayment() public {
     FixedLoanPosition memory pos = _makePosition(100 ether);
     skip(DURATION / 2);
 
@@ -315,18 +322,19 @@ contract BrokerMathDeductFixedTest is Test {
     assertEq(after1.lastRepaidTime, block.timestamp, "lastRepaidTime reset");
     assertEq(_outstanding(after1), 0, "no outstanding after reset");
 
-    // More time passes -> new interest accrues on reduced principal
+    // More time passes -> new interest accrues on the reduced (80e18) principal
     skip(DURATION / 2);
 
     uint256 accrued2 = _outstanding(after1);
     assertGt(accrued2, 0, "new interest accrued after reset");
 
-    // Partial interest + 30 principal -> should NOT reset, preserve exact
+    // Partial interest + 30 principal -> resets again per the simplified semantic
     uint256 partialInterest = accrued2 / 2;
     (, , FixedLoanPosition memory after2) = BrokerMath.deductFixedPositionDebt(partialInterest, 30 ether, after1);
 
-    uint256 expectedOutstanding = accrued2 - partialInterest;
-    assertEq(_outstanding(after2), expectedOutstanding, "exact after second partial");
+    assertEq(after2.interestRepaid, 0, "second: interest tracking reset");
+    assertEq(after2.lastRepaidTime, block.timestamp, "second: lastRepaidTime = now");
     assertEq(after2.principalRepaid, 50 ether, "cumulative 50 principal");
+    assertEq(_outstanding(after2), 0, "no outstanding immediately after reset");
   }
 }
