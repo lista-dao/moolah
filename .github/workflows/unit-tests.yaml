@@ -63,6 +63,10 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
+      - name: Install submodule node_modules
+        run: |
+         cd lib/lista-dao-contracts.git
+         yarn install
       - name: Cache Foundry build
         uses: actions/cache@v4
         with:
