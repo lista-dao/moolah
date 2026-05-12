@@ -104,6 +104,7 @@ interface IBroker is IBrokerBase {
   event MaxFixedLoanPositionsUpdated(uint256 oldMax, uint256 newMax);
   event FixedTermAndRateUpdated(uint256 termId, uint256 duration, uint256 apr);
   event Liquidated(address indexed user, uint256 principalCleared, uint256 interestCleared);
+  event AllPositionsRepaid(address indexed user, uint256 totalRepaid);
   event MarketIdSet(Id marketId);
   event BorrowPaused(bool paused);
   event RelayerSet(address indexed relayer);
@@ -156,6 +157,11 @@ interface IBroker is IBrokerBase {
   /// @param posIdx The index of the fixed position to repay
   /// @param onBehalf The address of the user whose position to repay
   function repay(uint256 amount, uint256 posIdx, address onBehalf) external payable;
+
+  /// @dev emergency: fully repay every position (dynamic + all fixed) of a user in one call.
+  ///      Charges full early-repay penalty on fixed positions.
+  /// @param onBehalf The address of the user whose positions to repay
+  function repayAll(address onBehalf) external payable;
 
   /// @dev refinance expired fixed positions to dynamic
   /// @param user The address of the user to refinance
