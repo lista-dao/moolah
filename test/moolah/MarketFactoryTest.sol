@@ -476,7 +476,7 @@ contract MarketFactoryTest is Test {
     vm.stopPrank();
 
     vm.startPrank(operator);
-    Id id = marketFactory.createFixedTermMarket(params);
+    Id id = marketFactory.createFixedTermMarket(params, false);
     vm.stopPrank();
 
     assertEq(Id.unwrap(id), Id.unwrap(broker.MARKET_ID()), "Market ID mismatch between broker and market factory");
@@ -494,7 +494,235 @@ contract MarketFactoryTest is Test {
     );
   }
 
+  function testCreateFixedTermMarketWithBNBLoan() public {
+    address relayer = makeAddr("relayer");
+    uint256 ratePerSecond = 1000000000195993755570992534;
+    uint256 maxRatePerSecond = 1000000008319516284844716199;
+    ERC20Mock collateralToken = new ERC20Mock();
+    LendingBroker broker = newLendingBroker(relayer);
+
+    MarketFactory.FixedTermMarketParams memory params = MarketFactory.FixedTermMarketParams({
+      broker: address(broker),
+      loanToken: address(WBNB),
+      collateralToken: address(collateralToken),
+      irm: address(irm),
+      lltv: lltv80,
+      ratePerSecond: ratePerSecond,
+      maxRatePerSecond: maxRatePerSecond
+    });
+    oracle.setPrice(address(WBNB), 1e8);
+    oracle.setPrice(address(collateralToken), 1e8);
+
+    vm.startPrank(admin);
+    broker.grantRole(broker.MANAGER(), address(marketFactory));
+    vm.stopPrank();
+
+    vm.startPrank(operator);
+    Id id = marketFactory.createFixedTermMarket(params, false);
+    vm.stopPrank();
+
+    assertEq(
+      moolah.providers(id, address(WBNB)),
+      address(bnbProvider),
+      "BNBProvider not set for fixed term BNB loan market"
+    );
+  }
+
+  function testCreateFixedTermMarketWithBNBCollateral() public {
+    address relayer = makeAddr("relayer");
+    uint256 ratePerSecond = 1000000000195993755570992534;
+    uint256 maxRatePerSecond = 1000000008319516284844716199;
+    ERC20Mock loanToken = new ERC20Mock();
+    LendingBroker broker = newLendingBroker(relayer);
+
+    MarketFactory.FixedTermMarketParams memory params = MarketFactory.FixedTermMarketParams({
+      broker: address(broker),
+      loanToken: address(loanToken),
+      collateralToken: address(WBNB),
+      irm: address(irm),
+      lltv: lltv80,
+      ratePerSecond: ratePerSecond,
+      maxRatePerSecond: maxRatePerSecond
+    });
+    oracle.setPrice(address(loanToken), 1e8);
+    oracle.setPrice(address(WBNB), 1e8);
+
+    vm.startPrank(admin);
+    broker.grantRole(broker.MANAGER(), address(marketFactory));
+    vm.stopPrank();
+
+    vm.startPrank(operator);
+    Id id = marketFactory.createFixedTermMarket(params, false);
+    vm.stopPrank();
+
+    assertEq(
+      moolah.providers(id, address(WBNB)),
+      address(bnbProvider),
+      "BNBProvider not set for fixed term BNB collateral market"
+    );
+  }
+
+  function testCreateFixedTermMarketWithSmartProvider() public {
+    address relayer = makeAddr("relayer");
+    uint256 ratePerSecond = 1000000000195993755570992534;
+    uint256 maxRatePerSecond = 1000000008319516284844716199;
+    ERC20Mock loanToken = new ERC20Mock();
+    ERC20Mock collateralToken = new ERC20Mock();
+    ERC20Mock token0 = new ERC20Mock();
+    ERC20Mock token1 = new ERC20Mock();
+
+    MockSmartProvider smartOracle = new MockSmartProvider(address(collateralToken));
+    smartOracle.setPrice(address(loanToken), 1e8);
+    smartOracle.setPrice(address(collateralToken), 1e8);
+    smartOracle.addToken(address(token0));
+    smartOracle.addToken(address(token1));
+
+    LendingBroker broker = newLendingBrokerWithOracle(relayer, address(smartOracle));
+
+    MarketFactory.FixedTermMarketParams memory params = MarketFactory.FixedTermMarketParams({
+      broker: address(broker),
+      loanToken: address(loanToken),
+      collateralToken: address(collateralToken),
+      irm: address(irm),
+      lltv: lltv80,
+      ratePerSecond: ratePerSecond,
+      maxRatePerSecond: maxRatePerSecond
+    });
+
+    vm.startPrank(admin);
+    broker.grantRole(broker.MANAGER(), address(marketFactory));
+    vm.stopPrank();
+
+    vm.startPrank(operator);
+    Id id = marketFactory.createFixedTermMarket(params, true);
+    vm.stopPrank();
+
+    // verify smart provider is set as provider on moolah
+    assertEq(
+      moolah.providers(id, address(collateralToken)),
+      address(smartOracle),
+      "Smart provider not set for fixed term market"
+    );
+    // verify flashloan blacklist
+    assertTrue(
+      moolah.flashLoanTokenBlacklist(address(collateralToken)),
+      "Collateral token should be blacklisted for flash loan"
+    );
+    // verify brokerLiquidator gets smart provider config (not liquidator/publicLiquidator)
+    assertTrue(
+      brokerLiquidator.smartProviders(address(smartOracle)),
+      "Smart provider whitelist not set for broker liquidator"
+    );
+    assertTrue(brokerLiquidator.tokenWhitelist(address(token0)), "Token0 whitelist not set for broker liquidator");
+    assertTrue(brokerLiquidator.tokenWhitelist(address(token1)), "Token1 whitelist not set for broker liquidator");
+    // verify liquidator/publicLiquidator are NOT configured (fixed term uses brokerLiquidator)
+    assertFalse(
+      liquidator.smartProviders(address(smartOracle)),
+      "Smart provider should NOT be set for common liquidator in fixed term"
+    );
+    assertFalse(
+      publicLiquidator.smartProviders(address(smartOracle)),
+      "Smart provider should NOT be set for public liquidator in fixed term"
+    );
+  }
+
+  function testBatchCreateFixedTermMarkets() public {
+    address relayer = makeAddr("relayer");
+    uint256 ratePerSecond = 1000000000195993755570992534;
+    uint256 maxRatePerSecond = 1000000008319516284844716199;
+
+    // market 1: WBNB loan, normal collateral
+    ERC20Mock collateralToken1 = new ERC20Mock();
+    LendingBroker broker1 = newLendingBroker(relayer);
+
+    // market 2: smart provider collateral
+    ERC20Mock loanToken2 = new ERC20Mock();
+    ERC20Mock collateralToken2 = new ERC20Mock();
+    ERC20Mock token0 = new ERC20Mock();
+    ERC20Mock token1 = new ERC20Mock();
+    MockSmartProvider smartOracle2 = new MockSmartProvider(address(collateralToken2));
+    smartOracle2.setPrice(address(loanToken2), 1e8);
+    smartOracle2.setPrice(address(collateralToken2), 1e8);
+    smartOracle2.addToken(address(token0));
+    smartOracle2.addToken(address(token1));
+    LendingBroker broker2 = newLendingBrokerWithOracle(relayer, address(smartOracle2));
+
+    oracle.setPrice(address(WBNB), 1e8);
+    oracle.setPrice(address(collateralToken1), 1e8);
+
+    MarketFactory.FixedTermMarketParams[] memory params = new MarketFactory.FixedTermMarketParams[](2);
+    params[0] = MarketFactory.FixedTermMarketParams({
+      broker: address(broker1),
+      loanToken: address(WBNB),
+      collateralToken: address(collateralToken1),
+      irm: address(irm),
+      lltv: lltv80,
+      ratePerSecond: ratePerSecond,
+      maxRatePerSecond: maxRatePerSecond
+    });
+    params[1] = MarketFactory.FixedTermMarketParams({
+      broker: address(broker2),
+      loanToken: address(loanToken2),
+      collateralToken: address(collateralToken2),
+      irm: address(irm),
+      lltv: lltv80,
+      ratePerSecond: ratePerSecond,
+      maxRatePerSecond: maxRatePerSecond
+    });
+
+    bool[] memory liquidatorSmartProviders = new bool[](2);
+    liquidatorSmartProviders[0] = false;
+    liquidatorSmartProviders[1] = true;
+
+    vm.startPrank(admin);
+    broker1.grantRole(broker1.MANAGER(), address(marketFactory));
+    broker2.grantRole(broker2.MANAGER(), address(marketFactory));
+    vm.stopPrank();
+
+    vm.startPrank(operator);
+    Id[] memory ids = marketFactory.batchCreateFixedTermMarkets(params, liquidatorSmartProviders);
+    vm.stopPrank();
+
+    assertEq(ids.length, 2, "Should create 2 markets");
+
+    // market 1: WBNB loan → BNBProvider should be set
+    assertEq(
+      moolah.providers(ids[0], address(WBNB)),
+      address(bnbProvider),
+      "BNBProvider not set for batch fixed term BNB market"
+    );
+    assertEq(moolah.brokers(ids[0]), address(broker1), "Broker1 not set for market");
+
+    // market 2: smart provider collateral → brokerLiquidator should be configured
+    assertEq(moolah.brokers(ids[1]), address(broker2), "Broker2 not set for market");
+    assertEq(
+      moolah.providers(ids[1], address(collateralToken2)),
+      address(smartOracle2),
+      "Smart provider not set for batch fixed term smart collateral market"
+    );
+    assertTrue(
+      moolah.flashLoanTokenBlacklist(address(collateralToken2)),
+      "Collateral token should be blacklisted for flash loan in batch"
+    );
+    assertTrue(
+      brokerLiquidator.smartProviders(address(smartOracle2)),
+      "Smart provider whitelist not set for broker liquidator in batch"
+    );
+    assertTrue(
+      brokerLiquidator.tokenWhitelist(address(token0)),
+      "Token0 whitelist not set for broker liquidator in batch"
+    );
+    assertTrue(
+      brokerLiquidator.tokenWhitelist(address(token1)),
+      "Token1 whitelist not set for broker liquidator in batch"
+    );
+  }
+
   function newLendingBroker(address replayer) private returns (LendingBroker) {
+    return newLendingBrokerWithOracle(replayer, address(oracle));
+  }
+
+  function newLendingBrokerWithOracle(address replayer, address _oracle) private returns (LendingBroker) {
     LendingBroker lendingBrokerImpl = new LendingBroker(address(moolah), address(0));
     ERC1967Proxy lendingBrokerProxy = new ERC1967Proxy(
       address(lendingBrokerImpl),
@@ -507,7 +735,7 @@ contract MarketFactoryTest is Test {
         address(rateCalculator),
         100,
         replayer,
-        address(oracle)
+        _oracle
       )
     );
 

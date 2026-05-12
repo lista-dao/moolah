@@ -2,6 +2,7 @@
 pragma solidity 0.8.34;
 
 import { Id, MarketParams, IMoolah } from "moolah/interfaces/IMoolah.sol";
+import { IOracle } from "moolah/interfaces/IOracle.sol";
 
 struct FixedTermAndRate {
   uint256 termId;
@@ -192,4 +193,7 @@ interface IBroker is IBrokerBase {
   /// @param account The address of the account
   /// @param isAddition Whether to add or remove the account from the whitelist
   function toggleLiquidationWhitelist(address account, bool isAddition) external;
+
+  /// @dev the oracle used by the broker for price feeds
+  function ORACLE() external view returns (IOracle);
 }

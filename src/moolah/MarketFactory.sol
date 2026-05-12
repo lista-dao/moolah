@@ -177,15 +177,18 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
   /**
    * @dev Creates new fixed term markets with the given parameters and configures the related contracts
    * @param params An array of FixedTermMarketParams for the markets to be created
+   * @param liquidatorSmartProviders An array of booleans indicating whether the market is a smart collateral market that requires special provider configuration for each market
    */
   function batchCreateFixedTermMarkets(
-    FixedTermMarketParams[] calldata params
+    FixedTermMarketParams[] calldata params,
+    bool[] calldata liquidatorSmartProviders
   ) external onlyRole(OPERATOR) returns (Id[] memory) {
     require(params.length > 0, "empty market params");
+    require(params.length == liquidatorSmartProviders.length, "array length mismatch");
 
     Id[] memory ids = new Id[](params.length);
     for (uint256 i = 0; i < params.length; i++) {
-      ids[i] = _createFixedTermMarket(params[i]);
+      ids[i] = _createFixedTermMarket(params[i], liquidatorSmartProviders[i]);
     }
     return ids;
   }
@@ -193,9 +196,13 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
   /**
    * @dev Creates a new fixed term market with the given parameters and configures the related contracts
    * @param param The FixedTermMarketParams for the market to be created
+   * @param liquidatorSmartProvider A boolean indicating whether the market is a smart collateral market that requires special provider configuration
    */
-  function createFixedTermMarket(FixedTermMarketParams calldata param) external onlyRole(OPERATOR) returns (Id) {
-    return _createFixedTermMarket(param);
+  function createFixedTermMarket(
+    FixedTermMarketParams calldata param,
+    bool liquidatorSmartProvider
+  ) external onlyRole(OPERATOR) returns (Id) {
+    return _createFixedTermMarket(param, liquidatorSmartProvider);
   }
 
   function _createMarket(
@@ -258,13 +265,23 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
 
     // if market is smart collateral
     if (liquidatorSmartProvider) {
-      _configSmartProvider(id, param.oracle, param.collateralToken);
+      _configSmartProvider(id, param.oracle, param.collateralToken, false);
     }
 
     emit CommonMarketDeployed(param, id);
   }
 
-  function _createFixedTermMarket(FixedTermMarketParams memory param) private whenNotPaused returns (Id) {
+  /**
+   * @dev Creates a new fixed term market with broker configuration
+   * @param param The FixedTermMarketParams for the market to be created
+   * @param liquidatorSmartProvider A boolean indicating whether the market is a smart collateral market
+   *        that requires special provider configuration (e.g. SmartProvider / V3Provider)
+   * @return id The Id of the newly created market
+   */
+  function _createFixedTermMarket(
+    FixedTermMarketParams memory param,
+    bool liquidatorSmartProvider
+  ) private whenNotPaused returns (Id) {
     IBroker broker = IBroker(param.broker);
     require(param.broker != address(0), "Zero broker address");
 
@@ -293,6 +310,10 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     // broker set liquidator whitelist
     broker.toggleLiquidationWhitelist(address(brokerLiquidator), true);
 
+    // set BNBProvider for BNB markets
+    if (param.loanToken == WBNB || param.collateralToken == WBNB) {
+      moolah.setProvider(id, BNBProvider, true);
+    }
     // set slisBNBProvider for sliBNB markets
     if (param.collateralToken == sliBNB) {
       moolah.setProvider(id, slisBNBProvider, true);
@@ -315,11 +336,25 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     // broker liquidator set market whitelist
     brokerLiquidator.setMarketToBroker(Id.unwrap(id), param.broker, true);
 
+    // if market is smart collateral
+    if (liquidatorSmartProvider) {
+      _configSmartProvider(id, address(broker.ORACLE()), param.collateralToken, true);
+    }
+
     emit BrokerMarketDeployed(param, id, param.broker);
     return id;
   }
 
-  function _configSmartProvider(Id id, address provider, address collateral) private {
+  /**
+   * @dev Configures smart provider settings for a market, including provider registration,
+   *      flashloan blacklist, and liquidator whitelist setup
+   * @param id The market Id to configure
+   * @param provider The smart provider address (oracle address for common markets, broker.ORACLE() for fixed term markets)
+   * @param collateral The collateral token address to blacklist from flashloans
+   * @param fixedTerm If true, configures brokerLiquidator for fixed term markets;
+   *        if false, configures liquidator and publicLiquidator for common markets
+   */
+  function _configSmartProvider(Id id, address provider, address collateral, bool fixedTerm) private {
     // moolah set provider
     moolah.setProvider(id, provider, true);
     // moolah set flashloan blacklist
@@ -329,20 +364,35 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     // liquidator and public liquidator set smart provider whitelist
     address[] memory smartProviders = new address[](1);
     smartProviders[0] = provider;
-    if (!liquidator.smartProviders(provider)) {
-      liquidator.batchSetSmartProviders(smartProviders, true);
-    }
-    if (!publicLiquidator.smartProviders(provider)) {
-      publicLiquidator.batchSetSmartProviders(smartProviders, true);
-    }
-    // set token whitelist for liquidator if not set
+
     address token0 = ISmartProvider(provider).token(0);
     address token1 = ISmartProvider(provider).token(1);
-    if (!liquidator.tokenWhitelist(token0)) {
-      liquidator.setTokenWhitelist(token0, true);
-    }
-    if (!liquidator.tokenWhitelist(token1)) {
-      liquidator.setTokenWhitelist(token1, true);
+
+    if (fixedTerm) {
+      // broker liquidator set smart provider whitelist and token whitelist for fixed term markets
+      if (!brokerLiquidator.smartProviders(provider)) {
+        brokerLiquidator.batchSetSmartProviders(smartProviders, true);
+      }
+      if (!brokerLiquidator.tokenWhitelist(token0)) {
+        brokerLiquidator.setTokenWhitelist(token0, true);
+      }
+      if (!brokerLiquidator.tokenWhitelist(token1)) {
+        brokerLiquidator.setTokenWhitelist(token1, true);
+      }
+    } else {
+      // liquidator and public liquidator set smart provider whitelist and token whitelist for common markets
+      if (!liquidator.smartProviders(provider)) {
+        liquidator.batchSetSmartProviders(smartProviders, true);
+      }
+      if (!publicLiquidator.smartProviders(provider)) {
+        publicLiquidator.batchSetSmartProviders(smartProviders, true);
+      }
+      if (!liquidator.tokenWhitelist(token0)) {
+        liquidator.setTokenWhitelist(token0, true);
+      }
+      if (!liquidator.tokenWhitelist(token1)) {
+        liquidator.setTokenWhitelist(token1, true);
+      }
     }
   }
 
