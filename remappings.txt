@@ -11,3 +11,8 @@ forge-std=lib/forge-std/src
 timelock=src/timelock
 revenue=src/revenue
 murky=lib/murky
+@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol=lib/lista-dao-contracts.git/node_modules/@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol
+@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol=lib/lista-dao-contracts.git/node_modules/@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol
+@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol=lib/lista-dao-contracts.git/node_modules/@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol
+
+lib/lista-dao-contracts.git/:@openzeppelin/contracts-upgradeable/=lib/lista-dao-contracts.git/node_modules/@openzeppelin/contracts-upgradeable/
