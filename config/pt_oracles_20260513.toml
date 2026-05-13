@@ -1,0 +1,34 @@
+[bsc]
+enendpoint_url = "${BSC_RPC_URL}"
+
+[bsc.address]
+### PT-stcUSD-23JUL2026 × {USDT, USD1, U}, PT-sUSDai-15OCT2026 × {USDT, USD1, U}
+ptCollateral = [
+  "${ptStcUSD23JUL2026}",
+  "${ptStcUSD23JUL2026}",
+  "${ptStcUSD23JUL2026}",
+  "${ptSUSDai15OTC2026}",
+  "${ptSUSDai15OTC2026}",
+  "${ptSUSDai15OTC2026}",
+]
+
+ptLoan = [
+  "${USDT}",
+  "${USD1}",
+  "${U}",
+  "${USDT}",
+  "${USD1}",
+  "${U}",
+]
+
+ptOracle = [
+  "${ptStcUSD23JUL2026BaseOracle}",
+  "${ptStcUSD23JUL2026BaseOracle}",
+  "${ptStcUSD23JUL2026BaseOracle}",
+  "${ptSUSDai15OTC2026BaseOracle}",
+  "${ptSUSDai15OTC2026BaseOracle}",
+  "${ptSUSDai15OTC2026BaseOracle}",
+]
+
+multiOracle = "${MULTI_ORACLE}"
+admin = "${ADMIN}"
