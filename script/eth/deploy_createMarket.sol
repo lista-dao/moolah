@@ -50,52 +50,12 @@ contract CreateMarketDeploy is DeployBase {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams[] memory params = new MarketParams[](6);
-    params[0] = MarketParams({
-      loanToken: USD1,
-      collateralToken: ETH_wstETH,
-      oracle: ETH_wstETHSmartProvider,
-      irm: irm,
-      lltv: lltv86
-    });
-    params[1] = MarketParams({
-      loanToken: USD1,
-      collateralToken: USDT_USDC,
-      oracle: USDT_USDCSmartProvider,
-      irm: irm,
-      lltv: lltv86
-    });
-    params[2] = MarketParams({
-      loanToken: USD1,
-      collateralToken: USDT_USD1,
-      oracle: USDT_USD1SmartProvider,
-      irm: irm,
-      lltv: lltv965
-    });
-    params[3] = MarketParams({
-      loanToken: USD1,
-      collateralToken: WBTC_cbBTC,
-      oracle: WBTC_cbBTCSmartProvider,
-      irm: irm,
-      lltv: lltv965
-    });
-    params[4] = MarketParams({
-      loanToken: USD1,
-      collateralToken: USDT_USDe,
-      oracle: USDT_USDeSmartProvider,
-      irm: irm,
-      lltv: lltv945
-    });
-    params[5] = MarketParams({
-      loanToken: USD1,
-      collateralToken: USDC_USDe,
-      oracle: USDC_USDeSmartProvider,
-      irm: irm,
-      lltv: lltv945
-    });
+    MarketParams[] memory params = new MarketParams[](2);
+    params[0] = MarketParams({ loanToken: USDT, collateralToken: WETH, oracle: multiOracle, irm: irm, lltv: lltv86 });
+    params[1] = MarketParams({ loanToken: USDC, collateralToken: WETH, oracle: multiOracle, irm: irm, lltv: lltv86 });
 
     vm.startBroadcast(deployerPrivateKey);
-    for (uint256 i = 0; i < 6; i++) {
+    for (uint256 i = 0; i < params.length; i++) {
       Id id = params[i].id();
       console.log("market id:");
       console.logBytes32(Id.unwrap(id));
