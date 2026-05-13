@@ -1,0 +1,14 @@
+[bsc]
+enendpoint_url = "${BSC_RPC_URL}"
+
+[bsc.address]
+### PT-stcUSD-23JUL2026
+pt = [
+  "${ptStcUSD23JUL2026}",
+]
+
+[bsc.uint]
+### Linear discounted rate: 25%
+discount = [
+  "${discount_25}",
+]
