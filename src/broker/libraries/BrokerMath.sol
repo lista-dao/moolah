@@ -95,43 +95,6 @@ library BrokerMath {
   }
 
   /**
-   * @dev Ensure every position's principal either cleared or larger than Moolah.minLoan
-   * @param user The address of the user
-   * @param moolah The address of the Moolah contract
-   * @param rateCalculator The address of the rate calculator
-   */
-  function checkPositionsMeetsMinLoan(
-    address user,
-    address moolah,
-    address rateCalculator
-  ) public view returns (bool isValid) {
-    // get current rate
-    uint256 currentRate = IRateCalculator(rateCalculator).getRate(address(this));
-    // get positions
-    IBroker broker = IBroker(address(this));
-    FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(user);
-    DynamicLoanPosition memory dynamicPosition = broker.userDynamicPosition(user);
-    // assume valid first
-    isValid = true;
-    IMoolah _moolah = IMoolah(moolah);
-    uint256 minLoan = _moolah.minLoan(_moolah.idToMarketParams(IBroker(address(this)).MARKET_ID()));
-    // ensure each position either zero or larger than minLoan
-    // check dynamic position
-    uint256 dynamicDebt = dynamicPosition.principal;
-    if (dynamicDebt > 0 && dynamicDebt < minLoan) {
-      isValid = false;
-    }
-    // check fixed positions
-    for (uint256 i = 0; i < fixedPositions.length; i++) {
-      FixedLoanPosition memory _fixedPos = fixedPositions[i];
-      uint256 fixedPosDebt = _fixedPos.principal - _fixedPos.principalRepaid;
-      if (fixedPosDebt > 0 && fixedPosDebt < minLoan) {
-        isValid = false;
-      }
-    }
-  }
-
-  /**
    * @dev Get the total debt for a user
    * @param fixedPositions The fixed loan positions of the user
    * @param dynamicPosition The dynamic loan position of the user
@@ -588,5 +551,123 @@ library BrokerMath {
       mstore(filtered, count)
     }
     return filtered;
+  }
+
+  /**
+   * @dev Compute the interest/principal split for convertDynamicToFixed.
+   * @param position The dynamic loan position (memory copy)
+   * @param amount The amount the user wants to convert
+   * @param rate The current dynamic-loan rate
+   * @return interestToRepay The interest portion (paid to vault)
+   * @return principalToMove The principal portion (moved to the new fixed position)
+   * @return finalAmount The total of interestToRepay + principalToMove
+   */
+  function previewConvertDynamicToFixed(
+    DynamicLoanPosition memory position,
+    uint256 amount,
+    uint256 rate
+  ) public pure returns (uint256 interestToRepay, uint256 principalToMove, uint256 finalAmount) {
+    uint256 actualDebt = denormalizeBorrowAmount(position.normalizedDebt, rate);
+    uint256 totalInterest = UtilsLib.zeroFloorSub(actualDebt, position.principal);
+    interestToRepay = UtilsLib.min(amount, totalInterest);
+    principalToMove = UtilsLib.min(amount - interestToRepay, position.principal);
+    finalAmount = interestToRepay + principalToMove;
+  }
+
+  /**
+   * @dev Compute every amount needed by repayAll: dynamic interest, fixed interest + early-repay
+   *      penalty, Moolah-side principal, and the grand total. Lets the broker delegate the
+   *      iteration + math to the library instead of duplicating it inline.
+   * @param onBehalf The user whose positions are being repaid
+   * @param dynPos The user's dynamic loan position (memory copy)
+   * @param fixedPositions The user's full fixed-position array
+   * @param rate The current dynamic-loan rate
+   * @return dynamicInterest The dynamic position's accrued interest
+   * @return fixedInterestAndPenalty The sum of accrued interest and early-repay penalty across fixed positions
+   * @return debtAtMoolah The principal owed to Moolah for `onBehalf`
+   * @return totalDebt debtAtMoolah + dynamicInterest + fixedInterestAndPenalty
+   */
+  function previewRepayAllAmounts(
+    address onBehalf,
+    DynamicLoanPosition memory dynPos,
+    FixedLoanPosition[] memory fixedPositions,
+    uint256 rate
+  )
+    public
+    view
+    returns (uint256 dynamicInterest, uint256 fixedInterestAndPenalty, uint256 debtAtMoolah, uint256 totalDebt)
+  {
+    dynamicInterest = UtilsLib.zeroFloorSub(denormalizeBorrowAmount(dynPos.normalizedDebt, rate), dynPos.principal);
+    for (uint256 i = 0; i < fixedPositions.length; i++) {
+      FixedLoanPosition memory p = fixedPositions[i];
+      uint256 remainingPrincipal = p.principal - p.principalRepaid;
+      uint256 accruedInterest = getAccruedInterestForFixedPosition(p) - p.interestRepaid;
+      uint256 penalty = getPenaltyForFixedPosition(p, remainingPrincipal);
+      fixedInterestAndPenalty += accruedInterest + penalty;
+    }
+    debtAtMoolah = getDebtAtMoolah(onBehalf);
+    totalDebt = debtAtMoolah + dynamicInterest + fixedInterestAndPenalty;
+  }
+
+  /**
+   * @dev Run the full liquidation cascade in one call: deduct from the dynamic position,
+   *      then sort and filter fixed positions, then deduct from them in order. Returns the
+   *      updated dynamic position plus parallel arrays describing what the caller should do
+   *      with each touched fixed position. The caller is responsible for writing the dynamic
+   *      update back to storage and applying the fixed-position actions.
+   * @param dynPos The dynamic loan position to deduct from (memory copy)
+   * @param fixedPositions The user's full fixed-position array (unfiltered)
+   * @param interestToDeduct The interest budget for the cascade
+   * @param principalToDeduct The principal budget for the cascade
+   * @param rate The current dynamic-loan rate
+   * @return updatedDyn The dynamic position after the cascade
+   * @return touched Fixed positions that were modified (trimmed to actual count)
+   * @return shouldRemove Parallel flags indicating which entries should be removed
+   */
+  function executeLiquidationCascade(
+    DynamicLoanPosition memory dynPos,
+    FixedLoanPosition[] memory fixedPositions,
+    uint256 interestToDeduct,
+    uint256 principalToDeduct,
+    uint256 rate
+  )
+    public
+    returns (DynamicLoanPosition memory updatedDyn, FixedLoanPosition[] memory touched, bool[] memory shouldRemove)
+  {
+    // deduct from dynamic position first
+    (interestToDeduct, principalToDeduct, dynPos) = deductDynamicPositionDebt(
+      dynPos,
+      interestToDeduct,
+      principalToDeduct,
+      rate
+    );
+    updatedDyn = dynPos;
+
+    // nothing left or no fixed positions → return empty action arrays
+    if ((interestToDeduct == 0 && principalToDeduct == 0) || fixedPositions.length == 0) {
+      return (updatedDyn, new FixedLoanPosition[](0), new bool[](0));
+    }
+
+    // sort by end-time ascending and drop fully-repaid entries
+    FixedLoanPosition[] memory sorted = sortAndFilterFixedPositions(fixedPositions);
+    uint256 len = sorted.length;
+    touched = new FixedLoanPosition[](len);
+    shouldRemove = new bool[](len);
+    uint256 count;
+
+    for (uint256 i = 0; i < len; i++) {
+      if (principalToDeduct == 0 && interestToDeduct == 0) break;
+      FixedLoanPosition memory p = sorted[i];
+      (interestToDeduct, principalToDeduct, p) = deductFixedPositionDebt(interestToDeduct, principalToDeduct, p);
+      touched[count] = p;
+      shouldRemove[count] = p.principalRepaid >= p.principal;
+      count++;
+    }
+
+    // trim arrays to actual touched count
+    assembly {
+      mstore(touched, count)
+      mstore(shouldRemove, count)
+    }
   }
 }
