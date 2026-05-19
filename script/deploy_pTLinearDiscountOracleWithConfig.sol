@@ -81,6 +81,6 @@ contract PTLinearDiscountOracleWithConfigDeploy is DeployBase, Config {
       vm.setEnv(walletNames[i], vm.toString(wallets[i]));
     }
 
-    _loadConfig("./config/pt_oracles_20260415.toml", true);
+    _loadConfig("./config/pt_oracles_20260513.toml", true);
   }
 }

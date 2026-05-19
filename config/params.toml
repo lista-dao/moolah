@@ -71,6 +71,7 @@ tokens = [
   "0x54a8F370575fe98c305640D7D11B8aa2df451B13",
   "0x721105716Ab5419f1aAADbbC7835e3eaBd7e067d",
   "0x3d383503fc6df144a1cbf0CD588a78835f54672c",
+  "0x9E9093A12b343C0f4d519Ab093BEF989b1936F73",
 ]
 
 ### Oracles
@@ -129,6 +130,7 @@ ptBaseOracles = [
   "0x9f025f958A93BB71982949Cb6B499052EE23956b",
   "0x94a5A1BB09dfA5b92Ef3F1d8596C5c47b1F06326",
   "0xC7DFE519dfC714fE745Bb2348c8cb117080dD5e0",
+  "0x9412D51e8DD8dcB648FEeFdf03214305bdb15C78",
 ]
 
 wallets = [
@@ -159,6 +161,7 @@ discounts = [
   270000000000000000,
   250000000000000000,
   150000000000000000,
+  200000000000000000,
 ]
 
 [bsc.string]
@@ -230,6 +233,7 @@ tokenNames = [
   "ptReUSD25JUN2026",
   "ptSUSDe7MAY2026ETH",
   "ptSUSDe18JUN2026Plasma",
+  "ptStcUSD23JUL2026",
 ]
 
 ptBaseOracleNames = [
@@ -243,6 +247,7 @@ ptBaseOracleNames = [
   "ptReUSD25JUN2026BaseOracle",
   "ptSUSDe7MAY2026ETHBaseOracle",
   "ptSUSDe18JUN2026PlasmaBaseOracle",
+  "ptStcUSD23JUL2026BaseOracle",
 ]
 
 oracleNames = [
@@ -309,6 +314,7 @@ discountNames = [
   "discount_27",
   "discount_25",
   "discount_15",
+  "discount_20",
 ]
 
 walletNames = [

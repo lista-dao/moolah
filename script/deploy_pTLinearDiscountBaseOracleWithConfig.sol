@@ -55,6 +55,6 @@ contract PTLinearDiscountBaseOracleWithConfigDeploy is DeployBase, Config {
       vm.setEnv(_discountNames[i], vm.toString(_discounts[i]));
     }
 
-    _loadConfig("./config/pt_discount_oracle_20260415.toml", true);
+    _loadConfig("./config/pt_discount_oracle_20260513.toml", true);
   }
 }
