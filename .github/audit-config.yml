@@ -1,14 +1,7 @@
-# Per-repo audit configuration for lista-dao/moolah.
-# Schema: modules/cloud-auditor/PLAN.md §17.7
-# Phase 9 cutover values per .planning/phases/09-production-cutover/09-CONTEXT.md D-09-01.
-
 audit_doc_paths:
   - docs/audits/*.pdf
 
 actor_allowlist:
-  # Source: @lista-dao/sc team members (4 as of 2026-05-21).
-  # Team handle in allowlist requires GH App members:read scope + Worker expansion
-  # logic — deferred to v2. Sync this list manually when team membership changes.
   - lawson-ccy
   - razww
   - qingyang-lista
