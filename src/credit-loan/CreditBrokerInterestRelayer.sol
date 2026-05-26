@@ -12,6 +12,8 @@ import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import { Id, IMoolah, MarketParams, Market, Position } from "../moolah/interfaces/IMoolah.sol";
 import { ICreditBrokerBase } from "./interfaces/ICreditBroker.sol";
 import { ICreditBrokerInterestRelayer } from "./interfaces/ICreditBrokerInterestRelayer.sol";
+import { IMoolahVault } from "../moolah-vault/interfaces/IMoolahVault.sol";
+import { IBrokerInterestLockBuffer } from "../utils/interfaces/IBrokerInterestLockBuffer.sol";
 
 /// @title Credit Broker Interest Relayer
 /// @author Lista DAO
@@ -132,6 +134,9 @@ contract CreditBrokerInterestRelayer is
       IERC20(token).safeIncreaseAllowance(address(MOOLAH), _supplyToVault);
       // supply to moolah vault
       MOOLAH.supply(MOOLAH.idToMarketParams(ICreditBrokerBase(msg.sender).MARKET_ID()), _supplyToVault, 0, vault, "");
+      // audit #08: atomic notify so totalAssets smooths the flush; no-op when vault has no buffer set.
+      address buf = IMoolahVault(vault).lockBuffer();
+      if (buf != address(0)) IBrokerInterestLockBuffer(buf).notifyBrokerInterest(_supplyToVault);
       // records supplied to vault event
       emit SuppliedToMoolahVault(_supplyToVault);
     }

@@ -22,6 +22,7 @@ import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { MoolahBalancesLib } from "moolah/libraries/periphery/MoolahBalancesLib.sol";
 import { IProvider } from "../provider/interfaces/IProvider.sol";
+import { IBrokerInterestLockBuffer } from "../utils/interfaces/IBrokerInterestLockBuffer.sol";
 
 /// @title MoolahVault
 /// @author Lista DAO
@@ -86,6 +87,9 @@ contract MoolahVault is
 
   /// @notice Custom symbol override for the vault token.
   string private _symbol;
+
+  /// @notice Optional smoothing companion for brokered-interest flushes (audit #08).
+  address public lockBuffer;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant CURATOR = keccak256("CURATOR"); // curator role
@@ -173,6 +177,18 @@ contract MoolahVault is
     feeRecipient = newFeeRecipient;
 
     emit EventsLib.SetFeeRecipient(newFeeRecipient);
+  }
+
+  /// @notice Set (or unset, with `address(0)`) the broker-interest smoothing buffer.
+  function setLockBuffer(address buf) external onlyRole(MANAGER) {
+    if (buf != address(0)) {
+      if (IBrokerInterestLockBuffer(buf).vault() != address(this) || IBrokerInterestLockBuffer(buf).asset() != asset())
+        revert ErrorsLib.LockBufferMismatch();
+    }
+    // Accrue fee under the OLD curve before swapping the pointer.
+    _updateLastTotalAssets(_accrueFee());
+    lockBuffer = buf;
+    emit EventsLib.SetLockBuffer(buf);
   }
 
   /// @notice Add or remove an account from the whitelist.
@@ -499,6 +515,11 @@ contract MoolahVault is
   function totalAssets() public view override returns (uint256 assets) {
     for (uint256 i; i < withdrawQueue.length; ++i) {
       assets += MOOLAH.expectedSupplyAssets(_marketParams(withdrawQueue[i]), address(this));
+    }
+    address buf = lockBuffer;
+    if (buf != address(0)) {
+      uint256 locked = IBrokerInterestLockBuffer(buf).currentLocked();
+      assets = assets > locked ? assets - locked : 0;
     }
   }
 

@@ -95,4 +95,7 @@ library ErrorsLib {
   error TokenMismatch();
 
   error NotWhiteList();
+
+  /// @notice Thrown when the supplied lock buffer is bound to a different vault or asset.
+  error LockBufferMismatch();
 }
