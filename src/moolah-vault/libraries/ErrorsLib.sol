@@ -98,4 +98,7 @@ library ErrorsLib {
 
   /// @notice Thrown when the supplied lock buffer is bound to a different vault or asset.
   error LockBufferMismatch();
+
+  /// @notice Thrown when attaching a lock buffer that still holds residual locked balance.
+  error LockBufferNotEmpty();
 }
