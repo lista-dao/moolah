@@ -3,6 +3,7 @@ pragma solidity 0.8.34;
 
 import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+import { IERC4626 } from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 import { IBrokerInterestLockBuffer } from "./interfaces/IBrokerInterestLockBuffer.sol";
 
@@ -31,6 +32,7 @@ contract BrokerInterestLockBuffer is UUPSUpgradeable, AccessControlEnumerableUpg
   error ZeroAddress();
   error InvalidDuration();
   error LockedOverflow();
+  error AmountExceedsVaultAssets();
 
   constructor() {
     _disableInitializers();
@@ -67,6 +69,10 @@ contract BrokerInterestLockBuffer is UUPSUpgradeable, AccessControlEnumerableUpg
 
   /// @dev Combine-and-reset: clock restarts each notify; duration unchanged here.
   function notifyBrokerInterest(uint256 amount) external override onlyRole(RELAYER) {
+    // Cap the flush at vault.totalAssets() so a miswired notify cannot drive lockedAmount past
+    // the vault's holdings and collapse NAV / enable an inflation attack.
+    if (amount > IERC4626(vault).totalAssets()) revert AmountExceedsVaultAssets();
+
     uint256 newLocked = currentLocked() + amount;
     if (newLocked > type(uint128).max) revert LockedOverflow();
 

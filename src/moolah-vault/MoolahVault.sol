@@ -184,6 +184,8 @@ contract MoolahVault is
     if (buf != address(0)) {
       if (IBrokerInterestLockBuffer(buf).vault() != address(this) || IBrokerInterestLockBuffer(buf).asset() != asset())
         revert ErrorsLib.LockBufferMismatch();
+      // Refuse a buffer with residual locked — would create a NAV discontinuity at attach.
+      if (IBrokerInterestLockBuffer(buf).currentLocked() != 0) revert ErrorsLib.LockBufferNotEmpty();
     }
     // Accrue fee under the OLD curve before swapping the pointer.
     _updateLastTotalAssets(_accrueFee());

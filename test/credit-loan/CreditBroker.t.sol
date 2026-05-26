@@ -20,6 +20,7 @@ import { MoolahVault } from "../../src/moolah-vault/MoolahVault.sol";
 import { MarketAllocation } from "../../src/moolah-vault/interfaces/IMoolahVault.sol";
 import { BrokerInterestLockBuffer } from "../../src/utils/BrokerInterestLockBuffer.sol";
 import { IBrokerInterestLockBuffer } from "../../src/utils/interfaces/IBrokerInterestLockBuffer.sol";
+import { ErrorsLib as VaultErrorsLib } from "../../src/moolah-vault/libraries/ErrorsLib.sol";
 
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
@@ -1825,5 +1826,30 @@ contract CreditBrokerTest is Test {
     _triggerInterestFlush(5 ether);
     assertEq(relayer.supplyAmount(), 0);
     assertEq(lockBuffer.currentLocked(), 15 ether);
+  }
+
+  /// @dev notifyBrokerInterest reverts when amount exceeds vault.totalAssets().
+  function test_lockBuffer_notifyExceedingTotalAssetsReverts() public {
+    bytes32 relayerRole = lockBuffer.RELAYER();
+    vm.startPrank(ADMIN);
+    lockBuffer.grantRole(relayerRole, address(this));
+    vm.stopPrank();
+
+    vm.expectRevert(BrokerInterestLockBuffer.AmountExceedsVaultAssets.selector);
+    lockBuffer.notifyBrokerInterest(1);
+  }
+
+  /// @dev setLockBuffer refuses a buffer with residual locked balance.
+  function test_lockBuffer_setLockBufferNonZeroLockedReverts() public {
+    _enableLockBuffer();
+    _depositToVault(address(0xA), 10_000 ether);
+    _triggerInterestFlush(50 ether); // pins 50 in the buffer
+
+    vm.prank(MANAGER);
+    vault.setLockBuffer(address(0));
+
+    vm.expectRevert(VaultErrorsLib.LockBufferNotEmpty.selector);
+    vm.prank(MANAGER);
+    vault.setLockBuffer(address(lockBuffer));
   }
 }
