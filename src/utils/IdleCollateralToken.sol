@@ -50,6 +50,8 @@ contract IdleCollateralToken is IERC20, IERC20Metadata {
     revert IdleCollateralNonTransferable();
   }
 
+  /// @dev Not part of IERC20. Kept as defense in depth: makes the no-mint invariant explicit at
+  ///      the selector level for any custom integration that bypasses the IERC20 interface.
   function mint(address, uint256) external pure {
     revert IdleCollateralNonMintable();
   }

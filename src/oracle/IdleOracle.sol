@@ -20,6 +20,8 @@ contract IdleOracle is IOracle {
 
   function peek(address asset) external view returns (uint256) {
     if (asset == IDLE_COLLATERAL) return 0;
+    // Intentional: loanToken must return a real, non-zero price so Moolah._getPrice does not
+    // divide by zero. Misuse (assigning this oracle to a non-idle market) is OPERATOR-gated.
     return IOracle(RESILIENT_ORACLE).peek(asset);
   }
 

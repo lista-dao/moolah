@@ -2,6 +2,7 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Test.sol";
+import { stdError } from "forge-std/StdError.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -144,6 +145,75 @@ contract IdleMarketForkTest is Test {
     // Moolah wraps the transferFrom revert in SafeTransferLib's TRANSFER_FROM_REVERTED string.
     vm.expectRevert(bytes("transferFrom reverted"));
     MOOLAH.supplyCollateral(idleMarket, 1, address(this), hex"");
+  }
+
+  function test_borrowFromIdle_reverts() public {
+    // Seed the idle market with supply so the borrow path is not blocked by INSUFFICIENT_LIQUIDITY.
+    deal(LISUSD, address(this), 100 ether);
+    IERC20(LISUSD).approve(address(MOOLAH), type(uint256).max);
+    MOOLAH.supply(idleMarket, 100 ether, 0, address(this), hex"");
+
+    // Borrow must fail at the health check: position.collateral == 0 → maxBorrow == 0.
+    vm.expectRevert(bytes("insufficient collateral"));
+    MOOLAH.borrow(idleMarket, 1 ether, 0, address(this), address(this));
+  }
+
+  function test_withdrawCollateralFromIdle_reverts() public {
+    // position.collateral is uint128(0); subtracting any positive amount underflows.
+    vm.expectRevert(stdError.arithmeticError);
+    MOOLAH.withdrawCollateral(idleMarket, 1, address(this), address(this));
+  }
+
+  function test_liquidateOnIdle_reverts() public {
+    // No one can ever be unhealthy on idle (no collateral, no borrow). Liquidate must revert
+    // with HEALTHY_POSITION because borrowShares == 0 short-circuits _isHealthy to true.
+    vm.expectRevert(bytes("position is healthy"));
+    MOOLAH.liquidate(idleMarket, address(this), 0, 1, hex"");
+  }
+
+  function test_repayOnIdle_reverts() public {
+    // No one has any borrow shares; subtraction in position[id].borrowShares -= ... underflows.
+    deal(LISUSD, address(this), 1 ether);
+    IERC20(LISUSD).approve(address(MOOLAH), type(uint256).max);
+    vm.expectRevert(stdError.arithmeticError);
+    MOOLAH.repay(idleMarket, 1, 0, address(this), hex"");
+  }
+
+  function test_vaultMint_routesByQueue() public {
+    // mint(shares, receiver) rounds assets up. Supply queue starts with real; idle stays empty.
+    uint256 shares = vault.previewDeposit(50_000 ether);
+    vm.prank(SUPPLIER);
+    uint256 assetsPaid = vault.mint(shares, SUPPLIER);
+
+    assertGt(assetsPaid, 0, "mint pulled assets");
+    assertApproxEqAbs(_vaultAssetsIn(realMarket), assetsPaid, 2, "real market took mint");
+    assertEq(_vaultAssetsIn(idleMarket), 0, "idle untouched by mint");
+  }
+
+  function test_vaultRedeem_drainsIdleFirst() public {
+    uint256 amount = 80_000 ether;
+    vm.prank(SUPPLIER);
+    vault.deposit(amount, SUPPLIER);
+
+    // Park 30k in idle; rest in real.
+    MarketAllocation[] memory split = new MarketAllocation[](2);
+    split[0] = MarketAllocation({ marketParams: realMarket, assets: amount - 30_000 ether });
+    split[1] = MarketAllocation({ marketParams: idleMarket, assets: type(uint256).max });
+    vault.reallocate(split);
+
+    uint256 idleBefore = _vaultAssetsIn(idleMarket);
+    uint256 realBefore = _vaultAssetsIn(realMarket);
+
+    // Redeem half the supplier's shares. Floor rounding may yield < idleBefore assets, so the
+    // entire redemption should resolve from idle without touching real.
+    uint256 sharesHalf = vault.balanceOf(SUPPLIER) / 4;
+    vm.prank(SUPPLIER);
+    uint256 assetsOut = vault.redeem(sharesHalf, SUPPLIER, SUPPLIER);
+
+    assertGt(assetsOut, 0, "redeem returned assets");
+    assertLe(assetsOut, idleBefore, "redeem must not exceed idle balance for this size");
+    assertApproxEqAbs(_vaultAssetsIn(idleMarket), idleBefore - assetsOut, 2, "idle drained by redeem");
+    assertApproxEqAbs(_vaultAssetsIn(realMarket), realBefore, 2, "real untouched by redeem");
   }
 
   function test_vaultDeposit_routesByQueue() public {
