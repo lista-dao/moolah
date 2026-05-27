@@ -95,13 +95,12 @@ contract MoolahVaultManager is UUPSUpgradeable, AccessControlEnumerableUpgradeab
       IERC20(marketParams.loanToken).forceApprove(address(MOOLAH), 0);
     }
 
-    // reallocate all assets to another markets
+    // scan supplyQueue: record supplyIdx (may be absent) and pick the reallocate destination
+    uint256 supplyQueueLength = IMoolahVault(vault).supplyQueueLength();
     uint256 supplyIdx = type(uint256).max;
     MarketAllocation[] memory allocations = new MarketAllocation[](2);
     allocations[0] = MarketAllocation({ marketParams: marketParams, assets: 0 });
-    uint256 supplyQueueLength = IMoolahVault(vault).supplyQueueLength();
-    Id[] memory newSupplyQueue = new Id[](supplyQueueLength - 1);
-    for ((uint256 i, uint256 j) = (0, 0); i < supplyQueueLength; i++) {
+    for (uint256 i = 0; i < supplyQueueLength; i++) {
       Id marketId = IMoolahVault(vault).supplyQueue(i);
       if (Id.unwrap(id) == Id.unwrap(marketId)) {
         supplyIdx = i;
@@ -113,10 +112,7 @@ contract MoolahVaultManager is UUPSUpgradeable, AccessControlEnumerableUpgradeab
           assets: type(uint256).max
         });
       }
-      newSupplyQueue[j] = marketId;
-      j++;
     }
-    require(supplyIdx != type(uint256).max, "Not in supply queue");
     if (vaultSupplyAssets > 0) {
       require(allocations[1].assets > 0, "No market has enough cap");
       IMoolahVault(vault).reallocate(allocations);
@@ -125,21 +121,41 @@ contract MoolahVaultManager is UUPSUpgradeable, AccessControlEnumerableUpgradeab
     // set cap to 0 to disable the market
     IMoolahVault(vault).setCap(marketParams, 0);
 
-    // remove from withdraw queue
+    // If vault still holds supplyShares (e.g. assets rounded to 0 after bad debt, or reallocate dust),
+    // mark the market for removal so updateWithdrawQueue can clean it up in the same tx.
+    if (MOOLAH.position(id, vault).supplyShares != 0) {
+      IMoolahVault(vault).setMarketRemoval(marketParams);
+    }
+
+    // withdrawQueue must contain the target market; otherwise the vault cannot drop it via this path
     uint256 withdrawQueueLength = IMoolahVault(vault).withdrawQueueLength();
+    uint256 withdrawIdx = type(uint256).max;
+    for (uint256 i = 0; i < withdrawQueueLength; i++) {
+      if (Id.unwrap(id) == Id.unwrap(IMoolahVault(vault).withdrawQueue(i))) {
+        withdrawIdx = i;
+        break;
+      }
+    }
+    require(withdrawIdx != type(uint256).max, "Not in withdraw queue");
+
     uint256[] memory withdrawIdxs = new uint256[](withdrawQueueLength - 1);
     for ((uint256 i, uint256 j) = (0, 0); i < withdrawQueueLength; i++) {
-      Id marketId = IMoolahVault(vault).withdrawQueue(i);
-      if (Id.unwrap(id) == Id.unwrap(marketId)) {
-        continue;
-      }
+      if (i == withdrawIdx) continue;
       withdrawIdxs[j] = i;
       j++;
     }
     IMoolahVault(vault).updateWithdrawQueue(withdrawIdxs);
 
-    // remove from supply queue
-    IMoolahVault(vault).setSupplyQueue(newSupplyQueue);
+    // Only rebuild supplyQueue when the target market is in it; otherwise it is already absent.
+    if (supplyIdx != type(uint256).max) {
+      Id[] memory newSupplyQueue = new Id[](supplyQueueLength - 1);
+      for ((uint256 i, uint256 j) = (0, 0); i < supplyQueueLength; i++) {
+        if (i == supplyIdx) continue;
+        newSupplyQueue[j] = IMoolahVault(vault).supplyQueue(i);
+        j++;
+      }
+      IMoolahVault(vault).setSupplyQueue(newSupplyQueue);
+    }
 
     emit MarketRemovedFromVault(vault, id, actualSupplyAssets, actualSupplyShares);
   }
