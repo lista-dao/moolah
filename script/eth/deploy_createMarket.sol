@@ -51,8 +51,20 @@ contract CreateMarketDeploy is DeployBase {
     console.log("Deployer: ", deployer);
 
     MarketParams[] memory params = new MarketParams[](2);
-    params[0] = MarketParams({ loanToken: USDT, collateralToken: WETH, oracle: multiOracle, irm: irm, lltv: lltv86 });
-    params[1] = MarketParams({ loanToken: USDC, collateralToken: WETH, oracle: multiOracle, irm: irm, lltv: lltv86 });
+    params[0] = MarketParams({
+      loanToken: USDT,
+      collateralToken: USDT_USDC,
+      oracle: USDT_USDCSmartProvider,
+      irm: irm,
+      lltv: lltv965
+    });
+    params[1] = MarketParams({
+      loanToken: USDC,
+      collateralToken: USDT_USDC,
+      oracle: USDT_USDCSmartProvider,
+      irm: irm,
+      lltv: lltv965
+    });
 
     vm.startBroadcast(deployerPrivateKey);
     for (uint256 i = 0; i < params.length; i++) {
