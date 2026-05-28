@@ -168,6 +168,31 @@ contract BatchManagementUtilsTest is Test {
     b = LendingBroker(payable(address(proxy)));
   }
 
+  /// @dev Deploy a broker, create a fresh market with it as oracle, bind, and register as the market's canonical broker.
+  uint256 internal _brokerMarketSeed;
+
+  function _deployAndRegisterBroker() internal returns (LendingBroker b) {
+    b = _deployBroker();
+    // unique LLTV per registered broker to avoid Id collisions across calls
+    uint256 lltv = LTV - (++_brokerMarketSeed) * 1e14;
+    vm.prank(MANAGER);
+    Moolah(address(moolah)).enableLltv(lltv);
+    MarketParams memory mp = MarketParams({
+      loanToken: address(LOAN),
+      collateralToken: address(COL),
+      oracle: address(b),
+      irm: address(irm),
+      lltv: lltv
+    });
+    Id mid = mp.id();
+    Moolah(address(moolah)).createMarket(mp);
+    vm.startPrank(MANAGER);
+    b.setMarketId(mid);
+    rateCalc.registerBroker(address(b), RATE_SCALE + 1, RATE_SCALE + 2);
+    Moolah(address(moolah)).setMarketBroker(mid, address(b), true);
+    vm.stopPrank();
+  }
+
   // -------------------------------------------------------------------
   //                  batchUpdateFixedTermAndRate
   // -------------------------------------------------------------------
@@ -233,8 +258,8 @@ contract BatchManagementUtilsTest is Test {
   }
 
   function test_batchUpdateFixedTermAndRate_callerHasBotOnSomeNotAll_reverts() public {
-    // BOT holds the role on broker1 (from initialize) but not on a fresh broker3
-    LendingBroker broker3 = _deployBroker();
+    // BOT holds the role on broker1 (from initialize) but we'll strip it on broker3
+    LendingBroker broker3 = _deployAndRegisterBroker();
 
     address[] memory brokers = new address[](2);
     brokers[0] = address(broker1);
@@ -255,6 +280,36 @@ contract BatchManagementUtilsTest is Test {
 
     // and broker1 should not have been mutated (whole tx reverted)
     assertEq(broker1.getFixedTerms().length, 0);
+  }
+
+  function test_batchUpdateFixedTermAndRate_unregisteredBroker_reverts() public {
+    // freshly deployed broker, never bound to a market or registered in Moolah
+    LendingBroker rogue = _deployBroker();
+
+    address[] memory brokers = new address[](1);
+    brokers[0] = address(rogue);
+    FixedTermAndRate[] memory terms = new FixedTermAndRate[](1);
+    terms[0] = FixedTermAndRate({ termId: 1, duration: 30 days, apr: 105 * 1e25 });
+    bool[] memory removes = new bool[](1);
+
+    vm.prank(BOT);
+    vm.expectRevert(bytes("Invalid broker"));
+    batch.batchUpdateFixedTermAndRate(brokers, terms, removes);
+  }
+
+  function test_batchUpdateFixedTermAndRate_maliciousBroker_reverts() public {
+    // attacker contract that faks MARKET_ID() to broker1's market and hasRole() to true
+    MaliciousBroker rogue = new MaliciousBroker(broker1.MARKET_ID());
+
+    address[] memory brokers = new address[](1);
+    brokers[0] = address(rogue);
+    FixedTermAndRate[] memory terms = new FixedTermAndRate[](1);
+    terms[0] = FixedTermAndRate({ termId: 1, duration: 30 days, apr: 105 * 1e25 });
+    bool[] memory removes = new bool[](1);
+
+    // moolah.brokers(broker1's id) == broker1, not rogue ⇒ revert before role check or dispatch
+    vm.expectRevert(bytes("Invalid broker"));
+    batch.batchUpdateFixedTermAndRate(brokers, terms, removes);
   }
 
   function test_batchUpdateFixedTermAndRate_lengthMismatch_reverts() public {
@@ -389,5 +444,18 @@ contract BatchManagementUtilsTest is Test {
     vm.prank(BOT);
     vm.expectRevert(bytes("Broker/position-not-expired"));
     batch.batchRefinance(brokers, users, posIds);
+  }
+}
+
+/// @dev Pretends to be a LendingBroker: returns a chosen MARKET_ID and reports hasRole=true for anyone.
+contract MaliciousBroker {
+  Id public MARKET_ID;
+
+  constructor(Id _marketId) {
+    MARKET_ID = _marketId;
+  }
+
+  function hasRole(bytes32, address) external pure returns (bool) {
+    return true;
   }
 }
