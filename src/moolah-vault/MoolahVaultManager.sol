@@ -6,10 +6,11 @@ import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgrade
 import { IERC20, SafeERC20 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
-import { Id, IMoolah, Position, MarketParams } from "../moolah/interfaces/IMoolah.sol";
+import { Id, IMoolah, Market, Position, MarketParams } from "../moolah/interfaces/IMoolah.sol";
 import { IMoolahVault, MarketAllocation, MarketConfig } from "./interfaces/IMoolahVault.sol";
 import { IOracle } from "../moolah/interfaces/IOracle.sol";
 import { MathLib } from "../moolah/libraries/MathLib.sol";
+import { SharesMathLib } from "../moolah/libraries/SharesMathLib.sol";
 
 import { MoolahBalancesLib } from "../moolah/libraries/periphery/MoolahBalancesLib.sol";
 
@@ -17,6 +18,7 @@ contract MoolahVaultManager is UUPSUpgradeable, AccessControlEnumerableUpgradeab
   using MathLib for uint256;
   using MoolahBalancesLib for IMoolah;
   using SafeERC20 for IERC20;
+  using SharesMathLib for uint256;
 
   /// @dev Mapping to track whitelisted vaults. Only whitelisted vaults can have markets removed.
   mapping(address => bool) public vaultWhitelist;
@@ -88,14 +90,21 @@ contract MoolahVaultManager is UUPSUpgradeable, AccessControlEnumerableUpgradeab
     uint256 actualSupplyAssets;
     uint256 actualSupplyShares;
     if (supplyAssets > 0) {
-      // Top up at least minLoan so MOOLAH.supply's _checkSupplyAssets does not revert when the
-      // deficit alone would leave vaultManager with a sub-minLoan position. Any surplus stays as
-      // vaultManager's supplyShares and can be drained later via withdrawFromMoolah.
+      // Supply enough to (1) fill the vault-side liquidity deficit and (2) satisfy Moolah's
+      // _checkSupplyAssets, which evaluates the resulting position with toAssetsDown. Supplying
+      // by assets has two layers of rounding (toSharesDown then toAssetsDown) so the position can
+      // be valued at target - 1 after share-price drift; use by-shares supply with a +1 share
+      // buffer to deterministically land above the threshold. Any surplus stays as vaultManager
+      // supplyShares and can be drained later via withdrawFromMoolah.
       uint256 minSupply = MOOLAH.minLoan(marketParams);
-      uint256 supplyToCall = supplyAssets + 1 < minSupply ? minSupply : supplyAssets + 1;
-      require(getValue(marketParams, supplyToCall) <= maxSupplyValue, "Exceed max supply value");
-      IERC20(marketParams.loanToken).safeIncreaseAllowance(address(MOOLAH), supplyToCall);
-      (actualSupplyAssets, actualSupplyShares) = MOOLAH.supply(marketParams, supplyToCall, 0, address(this), "");
+      uint256 target = supplyAssets + 1 < minSupply ? minSupply : supplyAssets + 1;
+      MOOLAH.accrueInterest(marketParams);
+      Market memory m = MOOLAH.market(id);
+      uint256 sharesToSupply = target.toSharesUp(m.totalSupplyAssets, m.totalSupplyShares) + 1;
+      uint256 assetsToTransfer = sharesToSupply.toAssetsUp(m.totalSupplyAssets, m.totalSupplyShares);
+      require(getValue(marketParams, assetsToTransfer) <= maxSupplyValue, "Exceed max supply value");
+      IERC20(marketParams.loanToken).safeIncreaseAllowance(address(MOOLAH), assetsToTransfer);
+      (actualSupplyAssets, actualSupplyShares) = MOOLAH.supply(marketParams, 0, sharesToSupply, address(this), "");
       IERC20(marketParams.loanToken).forceApprove(address(MOOLAH), 0);
     }
 

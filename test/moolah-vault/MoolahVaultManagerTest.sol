@@ -561,4 +561,68 @@ contract MoolahVaultManagerTest is Test {
     (uint184 cap, bool enabled, ) = vault.config(marketParams1.id());
     assertTrue(cap == 0 && !enabled, "market1 should be disabled with cap 0");
   }
+
+  // Bug 3 refined: even when supplyToCall == minLoan exactly, the by-assets path can value the
+  // resulting position at minLoan - 1 after accrued interest shifts the share price. The
+  // by-shares supply with a +1 share buffer must clear that boundary.
+  function test_removeMarketTopUpBelowMinLoanAfterInterest() public {
+    ERC20Mock loanToken = ERC20Mock(marketParams1.loanToken);
+    ERC20Mock collateralToken = ERC20Mock(marketParams1.collateralToken);
+
+    vm.startPrank(curator);
+    vault.setCap(marketParams1, 100 ether);
+    vault.setCap(marketParams2, 200 ether);
+    vault.setCap(marketParams3, 300 ether);
+    vm.stopPrank();
+
+    Id[] memory supplyQueue = new Id[](3);
+    supplyQueue[0] = marketParams1.id();
+    supplyQueue[1] = marketParams2.id();
+    supplyQueue[2] = marketParams3.id();
+    vm.startPrank(allocator);
+    vault.setSupplyQueue(supplyQueue);
+    vm.stopPrank();
+
+    address[] memory vaults = new address[](1);
+    vaults[0] = address(vault);
+    vm.startPrank(manager);
+    vaultManager.batchSetVaultWhitelist(vaults, true);
+    vm.stopPrank();
+
+    loanToken.setBalance(address(vaultManager), 100 ether);
+    loanToken.setBalance(address(this), 100 ether);
+    loanToken.approve(address(vault), 100 ether);
+    vault.deposit(100 ether, address(this));
+
+    address borrower = makeAddr("borrower");
+    collateralToken.setBalance(borrower, 100 ether);
+    vm.startPrank(borrower);
+    collateralToken.approve(address(moolah), 100 ether);
+    moolah.supplyCollateral(marketParams1, 100 ether, borrower, "");
+    moolah.borrow(marketParams1, 0.5 ether, 0, borrower, borrower);
+    vm.stopPrank();
+
+    // Let interest accrue for a year so share-price drifts off 1:1, then sync state.
+    vm.warp(block.timestamp + 365 days);
+    moolah.accrueInterest(marketParams1);
+
+    // Raise minLoanValue so minLoan(market1) = 1 ether, well above the ~0.5 ether deficit.
+    vm.prank(manager);
+    moolah.setMinLoanValue(1e8);
+    assertEq(moolah.minLoan(marketParams1), 1 ether, "minLoan should be 1 ether");
+
+    // Sanity: share price is no longer 1:1 (TSA grew via interest, TSS did not since fee == 0).
+    (uint128 tsa, uint128 tss, , , , ) = moolah.market(marketParams1.id());
+    assertGt(uint256(tsa), 100 ether, "TSA must exceed initial deposit after interest");
+    assertEq(uint256(tss), 1e26, "TSS unchanged when market fee is zero");
+
+    vm.startPrank(bot);
+    vaultManager.removeMarketFromVault(address(vault), marketParams1.id());
+    vm.stopPrank();
+
+    assertEq(vault.withdrawQueueLength(), 2, "withdraw queue length should be 2");
+    assertEq(vault.supplyQueueLength(), 2, "supply queue length should be 2");
+    (uint184 cap, bool enabled, ) = vault.config(marketParams1.id());
+    assertTrue(cap == 0 && !enabled, "market1 should be disabled with cap 0");
+  }
 }
