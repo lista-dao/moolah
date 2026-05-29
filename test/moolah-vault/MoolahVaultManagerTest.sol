@@ -501,4 +501,64 @@ contract MoolahVaultManagerTest is Test {
     (uint184 cap, bool enabled, ) = vault.config(marketParams1.id());
     assertTrue(cap == 0 && !enabled, "market1 should be disabled with cap 0");
   }
+
+  // Bug 3 fix: when the vault-side deficit (supplyAssets) is smaller than the market's minLoan,
+  // calling MOOLAH.supply(supplyAssets + 1) reverts with "remain supply too low" because the
+  // resulting vaultManager position falls under minLoan. Fix: top up with at least minLoan.
+  function test_removeMarketTopUpBelowMinLoan() public {
+    ERC20Mock loanToken = ERC20Mock(marketParams1.loanToken);
+    ERC20Mock collateralToken = ERC20Mock(marketParams1.collateralToken);
+
+    vm.startPrank(curator);
+    vault.setCap(marketParams1, 100 ether);
+    vault.setCap(marketParams2, 200 ether);
+    vault.setCap(marketParams3, 300 ether);
+    vm.stopPrank();
+
+    Id[] memory supplyQueue = new Id[](3);
+    supplyQueue[0] = marketParams1.id();
+    supplyQueue[1] = marketParams2.id();
+    supplyQueue[2] = marketParams3.id();
+    vm.startPrank(allocator);
+    vault.setSupplyQueue(supplyQueue);
+    vm.stopPrank();
+
+    address[] memory vaults = new address[](1);
+    vaults[0] = address(vault);
+    vm.startPrank(manager);
+    vaultManager.batchSetVaultWhitelist(vaults, true);
+    vm.stopPrank();
+
+    // Fund vaultManager so it can top up.
+    loanToken.setBalance(address(vaultManager), 100 ether);
+
+    // Vault deposits 100 ether → vault sole supplier of market1.
+    loanToken.setBalance(address(this), 100 ether);
+    loanToken.approve(address(vault), 100 ether);
+    vault.deposit(100 ether, address(this));
+
+    // Borrow 0.5 ether against 100 ether of collateral while minLoanValue == 0.
+    address borrower = makeAddr("borrower");
+    collateralToken.setBalance(borrower, 100 ether);
+    vm.startPrank(borrower);
+    collateralToken.approve(address(moolah), 100 ether);
+    moolah.supplyCollateral(marketParams1, 100 ether, borrower, "");
+    moolah.borrow(marketParams1, 0.5 ether, 0, borrower, borrower);
+    vm.stopPrank();
+
+    // Raise minLoanValue so minLoan(market1) = 1 ether (price 1e8, 18 decimals → 1e8 * 1e18 / 1e8).
+    // Now the vault-side deficit (~0.5 ether) is below minLoan, exercising Bug 3.
+    vm.prank(manager);
+    moolah.setMinLoanValue(1e8);
+    assertEq(moolah.minLoan(marketParams1), 1 ether, "minLoan should be 1 ether");
+
+    vm.startPrank(bot);
+    vaultManager.removeMarketFromVault(address(vault), marketParams1.id());
+    vm.stopPrank();
+
+    assertEq(vault.withdrawQueueLength(), 2, "withdraw queue length should be 2");
+    assertEq(vault.supplyQueueLength(), 2, "supply queue length should be 2");
+    (uint184 cap, bool enabled, ) = vault.config(marketParams1.id());
+    assertTrue(cap == 0 && !enabled, "market1 should be disabled with cap 0");
+  }
 }

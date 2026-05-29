@@ -85,13 +85,17 @@ contract MoolahVaultManager is UUPSUpgradeable, AccessControlEnumerableUpgradeab
     uint256 availableAssets = MOOLAH.expectedTotalSupplyAssets(marketParams) -
       MOOLAH.expectedTotalBorrowAssets(marketParams);
     uint256 supplyAssets = vaultSupplyAssets > availableAssets ? vaultSupplyAssets - availableAssets : 0;
-    require(getValue(marketParams, supplyAssets) <= maxSupplyValue, "Exceed max supply value");
     uint256 actualSupplyAssets;
     uint256 actualSupplyShares;
     if (supplyAssets > 0) {
-      // supply loan token to moolah
-      IERC20(marketParams.loanToken).safeIncreaseAllowance(address(MOOLAH), supplyAssets + 1);
-      (actualSupplyAssets, actualSupplyShares) = MOOLAH.supply(marketParams, supplyAssets + 1, 0, address(this), "");
+      // Top up at least minLoan so MOOLAH.supply's _checkSupplyAssets does not revert when the
+      // deficit alone would leave vaultManager with a sub-minLoan position. Any surplus stays as
+      // vaultManager's supplyShares and can be drained later via withdrawFromMoolah.
+      uint256 minSupply = MOOLAH.minLoan(marketParams);
+      uint256 supplyToCall = supplyAssets + 1 < minSupply ? minSupply : supplyAssets + 1;
+      require(getValue(marketParams, supplyToCall) <= maxSupplyValue, "Exceed max supply value");
+      IERC20(marketParams.loanToken).safeIncreaseAllowance(address(MOOLAH), supplyToCall);
+      (actualSupplyAssets, actualSupplyShares) = MOOLAH.supply(marketParams, supplyToCall, 0, address(this), "");
       IERC20(marketParams.loanToken).forceApprove(address(MOOLAH), 0);
     }
 
