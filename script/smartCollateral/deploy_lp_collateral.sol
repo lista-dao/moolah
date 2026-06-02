@@ -18,7 +18,7 @@ contract StableSwapLPCollateralDeploy is DeployBase {
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
 
-    deployCollateral("USD1 & USDT-SmartLP", deployer);
+    // "USD1 & USDT-SmartLP" already deployed — only redeploy the failed one
     deployCollateral("lisUSD & USDT-SmartLP", deployer);
 
     vm.stopBroadcast();
