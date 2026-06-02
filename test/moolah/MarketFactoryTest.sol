@@ -84,7 +84,7 @@ contract MarketFactoryTest is Test {
       address(brokerLiquidatorImpl),
       abi.encodeWithSelector(brokerLiquidatorImpl.initialize.selector, admin, manager, bot)
     );
-    brokerLiquidator = BrokerLiquidator(address(brokerLiquidatorProxy));
+    brokerLiquidator = BrokerLiquidator(payable(address(brokerLiquidatorProxy)));
 
     liquidator = new MockLiquidator();
     publicLiquidator = new MockLiquidator();

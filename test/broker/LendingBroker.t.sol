@@ -248,7 +248,7 @@ contract LendingBrokerTest is Test {
       address(mockLiqImpl),
       abi.encodeWithSelector(BrokerLiquidator.initialize.selector, ADMIN, MANAGER, BOT)
     );
-    liquidator = BrokerLiquidator(address(mockLiqProxy));
+    liquidator = BrokerLiquidator(payable(address(mockLiqProxy)));
 
     // whitelist lendingbroker as liquidator in moolah
     Id[] memory ids = new Id[](2);

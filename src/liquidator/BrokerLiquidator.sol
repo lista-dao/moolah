@@ -285,4 +285,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+
+  /// @dev allows the contract to receive native BNB, e.g. when redeeming slisBNB/BNB LP.
+  receive() external payable {}
 }

@@ -39,8 +39,8 @@ contract DeployBrokerLiquidator is DeployBase {
     // grant roles to manager and admin
     bytes32 MANAGER = keccak256("MANAGER");
     bytes32 DEFAULT_ADMIN_ROLE = 0x0000000000000000000000000000000000000000000000000000000000000000;
-    BrokerLiquidator(address(proxy)).grantRole(MANAGER, manager);
-    BrokerLiquidator(address(proxy)).grantRole(DEFAULT_ADMIN_ROLE, timelock);
+    BrokerLiquidator(payable(address(proxy))).grantRole(MANAGER, manager);
+    BrokerLiquidator(payable(address(proxy))).grantRole(DEFAULT_ADMIN_ROLE, timelock);
 
     vm.stopBroadcast();
   }
