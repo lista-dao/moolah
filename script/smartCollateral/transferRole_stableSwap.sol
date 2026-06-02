@@ -23,7 +23,7 @@ contract TransferRole is DeployBase {
     StableSwapPool pool2 = StableSwapPool(DEX_LISUSD_USDT);
 
     pool1.grantRole(DEFAULT_ADMIN_ROLE, ADMIN_ADDR);
-    pool1.grantRole(MANAGER, ADMIN_ADDR);
+    pool1.grantRole(MANAGER, MANAGER_ADDR);
     pool1.grantRole(PAUSER, PAUSER_ADDR);
     pool1.revokeRole(PAUSER, deployer);
     pool1.revokeRole(MANAGER, deployer);
@@ -31,7 +31,7 @@ contract TransferRole is DeployBase {
     console.log("Transferred role for DEX_USD1_USDT: ", DEX_USD1_USDT);
 
     pool2.grantRole(DEFAULT_ADMIN_ROLE, ADMIN_ADDR);
-    pool2.grantRole(MANAGER, ADMIN_ADDR);
+    pool2.grantRole(MANAGER, MANAGER_ADDR);
     pool2.grantRole(PAUSER, PAUSER_ADDR);
     pool2.revokeRole(PAUSER, deployer);
     pool2.revokeRole(MANAGER, deployer);

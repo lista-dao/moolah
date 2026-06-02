@@ -23,10 +23,12 @@ contract TransferRole is DeployBase {
     SmartProvider provider2 = SmartProvider(payable(SMART_PROVIDER_LISUSD_USDT));
 
     provider1.grantRole(DEFAULT_ADMIN_ROLE, ADMIN_ADDR);
+    provider1.grantRole(MANAGER, MANAGER_ADDR);
     provider1.revokeRole(DEFAULT_ADMIN_ROLE, deployer);
     console.log("Transferred role for SMART_PROVIDER_USD1_USDT: ", SMART_PROVIDER_USD1_USDT);
 
     provider2.grantRole(DEFAULT_ADMIN_ROLE, ADMIN_ADDR);
+    provider2.grantRole(MANAGER, MANAGER_ADDR);
     provider2.revokeRole(DEFAULT_ADMIN_ROLE, deployer);
     console.log("Transferred role for SMART_PROVIDER_LISUSD_USDT: ", SMART_PROVIDER_LISUSD_USDT);
 
