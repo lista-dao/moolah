@@ -34,15 +34,15 @@ address constant SMART_PROVIDER_BNB_SLISBNB = 0xC3be83DE4b19aFC4F6021Ea5011B75a3
 // BTCB/solvBTC SmartProvider
 address constant SMART_PROVIDER_BTCB_SOLVBTC = 0xA5F53ca56d87d7d4fEC508665D23f29bfb2749DB;
 
-// ===== USD1 / USDT (new — fill each after its deploy step) =====
-address constant DEX_USD1_USDT = address(0); // TODO step 1 (StableSwapPool)
-address constant COLLATERAL_USD1_USDT = address(0); // TODO step 2 (StableSwapLPCollateral)
-address constant SMART_PROVIDER_USD1_USDT = address(0); // TODO step 3 (SmartProvider = oracle)
+// ===== USD1 / USDT (new) =====
+address constant DEX_USD1_USDT = 0x723ccd2FB5897673Ad108706578886baA15d7242; // StableSwapPool
+address constant COLLATERAL_USD1_USDT = 0x091e6Ed7794d74b73081D32cAb59fa47ff15418d; // StableSwapLPCollateral
+address constant SMART_PROVIDER_USD1_USDT = address(0); // TODO step 4 (SmartProvider = oracle)
 
-// ===== lisUSD / USDT (new — fill each after its deploy step) =====
-address constant DEX_LISUSD_USDT = address(0); // TODO step 1 (StableSwapPool)
-address constant COLLATERAL_LISUSD_USDT = address(0); // TODO step 2 (StableSwapLPCollateral)
-address constant SMART_PROVIDER_LISUSD_USDT = address(0); // TODO step 3 (SmartProvider = oracle)
+// ===== lisUSD / USDT (new) =====
+address constant DEX_LISUSD_USDT = 0x8df7891fb2Cb3e98C7AB3cfB4d9A59FbCC63c956; // StableSwapPool
+address constant COLLATERAL_LISUSD_USDT = 0x6c7EbA17dDB5D0435FCFb9053BB3087c1d10beB3; // StableSwapLPCollateral
+address constant SMART_PROVIDER_LISUSD_USDT = address(0); // TODO step 4 (SmartProvider = oracle)
 
 // ADMIN
 address constant ADMIN_ADDR = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253;
