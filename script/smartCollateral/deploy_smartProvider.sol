@@ -8,6 +8,8 @@ import { StableSwapLPCollateral } from "src/dex/StableSwapLPCollateral.sol";
 import { SmartProvider } from "src/provider/SmartProvider.sol";
 import "./SCAddress.sol";
 
+// Step 3 — deploy a SmartProvider for each pool and point the LP-collateral minter at it.
+// Fill DEX_* (step 1) and COLLATERAL_* (step 2) in SCAddress.sol before running.
 contract SmartProviderDeploy is DeployBase {
   function run() public {
     uint256 deployerPrivateKey = _deployerKey();
@@ -15,22 +17,23 @@ contract SmartProviderDeploy is DeployBase {
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
 
-    address smartLp = 0x627B5567458A76e6B6a6a6BBe3FcFF7f81821a58;
-    address dex = 0xd77e86779022227226377Dc30D03CF1C78439AcF;
+    deployProvider(COLLATERAL_USD1_USDT, DEX_USD1_USDT, deployer);
+    deployProvider(COLLATERAL_LISUSD_USDT, DEX_LISUSD_USDT, deployer);
 
-    // Deploy SmartProvider
+    vm.stopBroadcast();
+  }
+
+  function deployProvider(address smartLp, address dex, address deployer) internal {
+    require(smartLp != address(0) && dex != address(0), "fill DEX_*/COLLATERAL_* in SCAddress");
+
     SmartProvider impl = new SmartProvider(MOOLAH, smartLp);
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
       abi.encodeWithSelector(impl.initialize.selector, deployer, dex, SS_INFO, RESILIENT_ORACLE)
     );
-
     console.log("SmartProvider deployed at: ", address(proxy));
 
-    // set minter to smart provider
     StableSwapLPCollateral(smartLp).setMinter(address(proxy));
-    console.log("Minter set to SmartProvider");
-
-    vm.stopBroadcast();
+    console.log("  minter set; lp collateral: ", smartLp);
   }
 }

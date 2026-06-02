@@ -3,17 +3,20 @@ pragma solidity 0.8.34;
 import "forge-std/Script.sol";
 import { DeployBase } from "../DeployBase.sol";
 
-import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-
 import { StableSwapFactory } from "src/dex/StableSwapFactory.sol";
-import { StableSwapLP } from "src/dex/StableSwapLP.sol";
-import { StableSwapLPCollateral } from "src/dex/StableSwapLPCollateral.sol";
 import { StableSwapPool } from "src/dex/StableSwapPool.sol";
 
 import "./SCAddress.sol";
 
+// Step 1 — create the two new StableSwap pools (USD1/USDT, lisUSD/USDT).
+// Params match the live USDC/USDT smart pool: fee 0.1bp (1e5), admin_fee 20% (2e9), priceDiff 5%.
+// A per PRD: USD1/USDT = 10000, lisUSD/USDT = 5000. Requires deployer DEPLOYER role on the factory.
 contract StableSwapPairDeploy is DeployBase {
   StableSwapFactory factory = StableSwapFactory(SS_FACTORY);
+
+  uint256 constant FEE = 100000; // 0.1bp = fee / 1e10
+  uint256 constant ADMIN_FEE = 2e9; // 20% of swap fee to admin
+  uint256 constant PRICE_DIFF = 5e16; // 5%
 
   function run() public {
     uint256 deployerPrivateKey = _deployerKey();
@@ -21,97 +24,31 @@ contract StableSwapPairDeploy is DeployBase {
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
 
-    createPair_u(deployer);
+    createPair(USD1, USDT, "USD1 & USDT-LP", 10000, deployer);
+    createPair(LISUSD, USDT, "lisUSD & USDT-LP", 5000, deployer);
+
+    vm.stopBroadcast();
   }
 
-  function createPair_u(address deployer) public {
-    // Create $U & USDT
-    uint _A = 5000;
-    uint _fee = 1000000; // 0.01%; swap fee
-    uint _adminFee = 2e9; // 20% swap fee goes to admin
-    uint _priceDiffThreshold = 5e16; // 5%
-    string memory name = "USDC & USDT-LP";
-
+  function createPair(address t0, address t1, string memory name, uint256 _A, address deployer) internal {
     (address _lp, address _pool) = factory.createSwapPair(
-      USDC,
-      USDT,
+      t0,
+      t1,
       name,
       name,
       _A,
-      _fee,
-      _adminFee,
-      deployer, // admin
+      FEE,
+      ADMIN_FEE,
+      deployer, // admin (transferred in step 4)
       deployer, // manager
       deployer, // pauser
       RESILIENT_ORACLE
     );
-
     console.log("Created pool: ", name);
-    console.log("StableSwapPool LP token: ", _lp);
-    console.log("StableSwapPool: ", _pool);
+    console.log("  LP token: ", _lp);
+    console.log("  Pool:     ", _pool);
 
-    // set price diff limit to 5%
-    StableSwapPool(_pool).changePriceDiffThreshold(5e16, 5e16);
-    console.log("Set price diff limit to 5%");
-  }
-
-  function createPairBNB(address deployer) public {
-    require(factory.lpImpl() != address(0), "LP impl not set");
-    require(factory.swapImpl() != address(0), "Swap impl not set");
-
-    // Create slisBnb <> Bnb pool
-    uint _A = 100;
-    uint _fee = 1000000; // 0.01%; swap fee
-    uint _adminFee = 1e9; // 10% swap fee goes to admin
-
-    (address _lp, address _pool) = factory.createSwapPair(
-      SLISBNB,
-      BNB_ADDRESS,
-      "slisBNB & BNB-LP",
-      "slisBNB & BNB-LP",
-      _A,
-      _fee,
-      _adminFee,
-      deployer, // admin
-      deployer, // manager
-      deployer, // pauser
-      RESILIENT_ORACLE
-    );
-
-    console.log("Created slisBNB <> BNB pool");
-    console.log("StableSwapPool LP token: ", _lp);
-    console.log("StableSwapPool: ", _pool);
-
-    // set price diff limit to 5%
-    StableSwapPool(_pool).changePriceDiffThreshold(5e16, 5e16);
-    console.log("Set price diff limit to 5%");
-  }
-
-  // create solvBTC / BTCB pool
-  function createPairBTCB(address deployer) public {
-    require(factory.lpImpl() != address(0), "LP impl not set");
-    require(factory.swapImpl() != address(0), "Swap impl not set");
-
-    uint _A = 50;
-    uint _fee = 1000000; // 0.01%; swap fee
-    uint _adminFee = 0;
-
-    (address _lp, address _pool) = factory.createSwapPair(
-      SOLVBTC,
-      BTCB,
-      "BTCB & solvBTC-LP",
-      "BTCB & solvBTC-LP",
-      _A,
-      _fee,
-      _adminFee,
-      deployer, // admin
-      deployer, // manager
-      deployer, // pauser
-      RESILIENT_ORACLE
-    );
-
-    console.log("Created solvBTC <> BTCB pool");
-    console.log("StableSwapPool LP token: ", _lp);
-    console.log("StableSwapPool: ", _pool);
+    StableSwapPool(_pool).changePriceDiffThreshold(PRICE_DIFF, PRICE_DIFF);
+    console.log("  priceDiffThreshold set to 5%");
   }
 }

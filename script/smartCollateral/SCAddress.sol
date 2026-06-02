@@ -34,6 +34,16 @@ address constant SMART_PROVIDER_BNB_SLISBNB = 0xC3be83DE4b19aFC4F6021Ea5011B75a3
 // BTCB/solvBTC SmartProvider
 address constant SMART_PROVIDER_BTCB_SOLVBTC = 0xA5F53ca56d87d7d4fEC508665D23f29bfb2749DB;
 
+// ===== USD1 / USDT (new — fill each after its deploy step) =====
+address constant DEX_USD1_USDT = address(0); // TODO step 1 (StableSwapPool)
+address constant COLLATERAL_USD1_USDT = address(0); // TODO step 2 (StableSwapLPCollateral)
+address constant SMART_PROVIDER_USD1_USDT = address(0); // TODO step 3 (SmartProvider = oracle)
+
+// ===== lisUSD / USDT (new — fill each after its deploy step) =====
+address constant DEX_LISUSD_USDT = address(0); // TODO step 1 (StableSwapPool)
+address constant COLLATERAL_LISUSD_USDT = address(0); // TODO step 2 (StableSwapLPCollateral)
+address constant SMART_PROVIDER_LISUSD_USDT = address(0); // TODO step 3 (SmartProvider = oracle)
+
 // ADMIN
 address constant ADMIN_ADDR = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253;
 
@@ -63,3 +73,9 @@ address constant DOLLAR_U = 0xDa182944E84092e11370CA521f10AEF488888888;
 address constant USDT = 0x55d398326f99059fF775485246999027B3197955;
 
 address constant USDC = 0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d;
+
+// lisUSD token
+address constant LISUSD = 0x0782b6d8c4551B9760e74c0545a9bCD90bdc41E5;
+
+// U (United Stables) — loan token of the existing USDT&USDC/U market
+address constant U = 0xcE24439F2D9C6a2289F741120FE202248B666666;
