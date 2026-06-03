@@ -10,9 +10,19 @@ contract DeployBrokerLiquidatorImpl is DeployBase {
   // constructed with the same Moolah the target proxy already uses.
   address moolah;
 
+  // BSC mainnet Moolah
+  address constant MOOLAH_BSC = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
+  // BSC testnet Moolah (matches BrokerLiquidator proxy 0xeAe8EaB31E7299Cc4c7C6F08f3C1AA8eF08dC175)
+  address constant MOOLAH_BSC_TESTNET = 0x4c26397D4ef9EEae55735a1631e69Da965eBC41A;
+
   function setUp() public {
-    // BSC testnet Moolah (matches BrokerLiquidator proxy 0xeAe8EaB31E7299Cc4c7C6F08f3C1AA8eF08dC175)
-    moolah = block.chainid == 97 ? 0x4c26397D4ef9EEae55735a1631e69Da965eBC41A : vm.envAddress("MOOLAH");
+    if (block.chainid == 56) {
+      moolah = MOOLAH_BSC;
+    } else if (block.chainid == 97) {
+      moolah = MOOLAH_BSC_TESTNET;
+    } else {
+      moolah = vm.envAddress("MOOLAH");
+    }
   }
 
   function run() public {
