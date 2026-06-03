@@ -23,10 +23,12 @@ contract TransferRole is DeployBase {
     StableSwapLPCollateral collateral2 = StableSwapLPCollateral(COLLATERAL_LISUSD_USDT);
 
     collateral1.grantRole(DEFAULT_ADMIN_ROLE, ADMIN_ADDR);
+    collateral1.grantRole(MANAGER, MANAGER_ADDR);
     collateral1.revokeRole(DEFAULT_ADMIN_ROLE, deployer);
     console.log("Transferred role for COLLATERAL_USD1_USDT: ", COLLATERAL_USD1_USDT);
 
     collateral2.grantRole(DEFAULT_ADMIN_ROLE, ADMIN_ADDR);
+    collateral2.grantRole(MANAGER, MANAGER_ADDR);
     collateral2.revokeRole(DEFAULT_ADMIN_ROLE, deployer);
     console.log("Transferred role for COLLATERAL_LISUSD_USDT: ", COLLATERAL_LISUSD_USDT);
 
