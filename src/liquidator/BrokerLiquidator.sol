@@ -36,6 +36,8 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // manager role
+  /// @dev sentinel address representing native BNB
+  address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
   event TokenWhitelistChanged(address indexed token, bool added);
   event MarketWhitelistChanged(bytes32 id, address broker, bool added);
@@ -175,6 +177,41 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     SafeTransferLib.safeApprove(tokenIn, pair, 0);
 
     emit SellToken(pair, tokenIn, tokenOut, actualAmountIn, actualAmountOut);
+  }
+
+  /// @dev sell native BNB for a token.
+  /// @param pair The address of the pair.
+  /// @param tokenOut The address of the output token.
+  /// @param amountIn The amount of BNB to sell.
+  /// @param amountOutMin The minimum amount to receive.
+  /// @param swapData The swap data.
+  function sellBNB(
+    address pair,
+    address tokenOut,
+    uint256 amountIn,
+    uint256 amountOutMin,
+    bytes calldata swapData
+  ) external onlyRole(BOT) {
+    require(tokenWhitelist[BNB_ADDRESS], NotWhitelisted());
+    require(tokenWhitelist[tokenOut], NotWhitelisted());
+    require(pairWhitelist[pair], NotWhitelisted());
+    require(amountIn > 0, "amountIn zero");
+
+    require(address(this).balance >= amountIn, ExceedAmount());
+
+    uint256 beforeTokenIn = address(this).balance;
+    uint256 beforeTokenOut = SafeTransferLib.balanceOf(tokenOut, address(this));
+
+    (bool success, ) = pair.call{ value: amountIn }(swapData);
+    require(success, SwapFailed());
+
+    uint256 actualAmountIn = beforeTokenIn - address(this).balance;
+    uint256 actualAmountOut = SafeTransferLib.balanceOf(tokenOut, address(this)) - beforeTokenOut;
+
+    require(actualAmountIn <= amountIn, ExceedAmount());
+    require(actualAmountOut >= amountOutMin, NoProfit());
+
+    emit SellToken(pair, BNB_ADDRESS, tokenOut, actualAmountIn, actualAmountOut);
   }
 
   /// @dev flash liquidates a position.
