@@ -9,6 +9,8 @@ import { StableSwapLPCollateral } from "src/dex/StableSwapLPCollateral.sol";
 
 import "./SCAddress.sol";
 
+// Step 2 — deploy the StableSwapLPCollateral wrapper for each new pool.
+// Minter is set to the deployer here; it is re-pointed to the SmartProvider in step 3.
 contract StableSwapLPCollateralDeploy is DeployBase {
   function run() public {
     uint256 deployerPrivateKey = _deployerKey();
@@ -16,21 +18,25 @@ contract StableSwapLPCollateralDeploy is DeployBase {
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
 
-    string memory name = "USDC & USDT-SmartLP";
+    // "USD1 & USDT-SmartLP" already deployed — only redeploy the failed one
+    deployCollateral("lisUSD & USDT-SmartLP", deployer);
 
+    vm.stopBroadcast();
+  }
+
+  function deployCollateral(string memory name, address deployer) internal {
     StableSwapLPCollateral impl = new StableSwapLPCollateral(MOOLAH);
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
       abi.encodeWithSelector(
         impl.initialize.selector,
         deployer, // admin
-        deployer, // minter
+        deployer, // minter (re-set to SmartProvider in step 3)
         name,
         name
       )
     );
-    console.log("StableSwapLPCollateral proxy: ", address(proxy));
-
-    vm.stopBroadcast();
+    console.log("StableSwapLPCollateral: ", name);
+    console.log("  proxy: ", address(proxy));
   }
 }
