@@ -10,6 +10,8 @@ contract MockStakeManager is IStakeManager {
     exchangeRate = _exchangeRate;
   }
 
+  function deposit() external payable {}
+
   function convertBnbToSnBnb(uint256 _amount) external view returns (uint256) {
     return (_amount * exchangeRate) / 1e18;
   }
