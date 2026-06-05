@@ -62,6 +62,8 @@ contract RewardHarvester is UUPSUpgradeable, AccessControlEnumerableUpgradeable,
   /// @param minBNBOut Minimum total BNB balance required after claiming (anti-anomaly / sanity bound).
   function harvest(ClaimParams[] calldata claims, uint256 minBNBOut) external onlyRole(BOT) nonReentrant {
     for (uint256 i; i < claims.length; ++i) {
+      // The Merkle tree's `_account` is configured off-chain to this RewardHarvester, so the distributor pays the
+      // launchpool BNB to this contract — receiving it on behalf of the vault — and we then compound it in.
       // Skip already-claimed epochs to keep the batch idempotent.
       if (DISTRIBUTOR.claimed(claims[i].epochId, address(this))) continue;
       DISTRIBUTOR.claim(claims[i].epochId, address(this), claims[i].amount, claims[i].proof);
