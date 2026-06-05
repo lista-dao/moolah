@@ -29,6 +29,7 @@ import { MathLib, WAD } from "moolah/libraries/MathLib.sol";
 import { UtilsLib } from "moolah/libraries/UtilsLib.sol";
 import { IMoolahLiquidateCallback } from "../../src/moolah/interfaces/IMoolahCallbacks.sol";
 import { BrokerLiquidator } from "../../src/liquidator/BrokerLiquidator.sol";
+import { MockOneInch } from "../liquidator/mocks/MockOneInch.sol";
 import { ORACLE_PRICE_SCALE, LIQUIDATION_CURSOR, MAX_LIQUIDATION_INCENTIVE_FACTOR } from "moolah/libraries/ConstantsLib.sol";
 
 contract LendingBrokerTest is Test {
@@ -248,7 +249,7 @@ contract LendingBrokerTest is Test {
       address(mockLiqImpl),
       abi.encodeWithSelector(BrokerLiquidator.initialize.selector, ADMIN, MANAGER, BOT)
     );
-    liquidator = BrokerLiquidator(address(mockLiqProxy));
+    liquidator = BrokerLiquidator(payable(address(mockLiqProxy)));
 
     // whitelist lendingbroker as liquidator in moolah
     Id[] memory ids = new Id[](2);
@@ -1719,6 +1720,169 @@ contract LendingBrokerTest is Test {
     bnbBroker.borrow(1000 ether);
     bnbBroker.repay{ value: 1 ether }(1 ether, borrower);
     vm.stopPrank();
+  }
+
+  // -----------------------------
+  // sellToken / sellBNB (liquidator)
+  // -----------------------------
+
+  address constant LIQ_BNB = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+
+  /// @dev deploys an aggregator mock and whitelists BNB/BTCB/LISUSD + the pair on the liquidator.
+  function _setupLiquidatorSwap() internal returns (MockOneInch oneInch) {
+    oneInch = new MockOneInch();
+    vm.startPrank(MANAGER);
+    liquidator.setTokenWhitelist(LIQ_BNB, true);
+    liquidator.setTokenWhitelist(address(BTCB), true);
+    liquidator.setTokenWhitelist(address(LISUSD), true);
+    liquidator.setPairWhitelist(address(oneInch), true);
+    vm.stopPrank();
+  }
+
+  function test_sellBNB_swapsBnbToToken() public {
+    MockOneInch oneInch = _setupLiquidatorSwap();
+    uint256 amountIn = 1 ether;
+    uint256 amountOut = 300 ether;
+    vm.deal(address(liquidator), amountIn);
+
+    vm.prank(BOT);
+    liquidator.sellBNB(
+      address(oneInch),
+      address(LISUSD),
+      amountIn,
+      amountOut,
+      abi.encodeWithSelector(oneInch.swap.selector, LIQ_BNB, address(LISUSD), amountIn, amountOut)
+    );
+
+    assertEq(LISUSD.balanceOf(address(liquidator)), amountOut, "loanToken balance");
+    assertEq(address(liquidator).balance, 0, "BNB balance should be spent");
+  }
+
+  function test_sellBNB_revertsForNonBot() public {
+    MockOneInch oneInch = _setupLiquidatorSwap();
+    uint256 amountIn = 1 ether;
+    vm.deal(address(liquidator), amountIn);
+
+    vm.expectRevert();
+    liquidator.sellBNB(
+      address(oneInch),
+      address(LISUSD),
+      amountIn,
+      1 ether,
+      abi.encodeWithSelector(oneInch.swap.selector, LIQ_BNB, address(LISUSD), amountIn, uint256(1 ether))
+    );
+  }
+
+  function test_sellBNB_revertsWhenBnbNotWhitelisted() public {
+    MockOneInch oneInch = new MockOneInch();
+    vm.startPrank(MANAGER);
+    liquidator.setTokenWhitelist(address(LISUSD), true);
+    liquidator.setPairWhitelist(address(oneInch), true);
+    vm.stopPrank();
+
+    uint256 amountIn = 1 ether;
+    vm.deal(address(liquidator), amountIn);
+
+    vm.prank(BOT);
+    vm.expectRevert(BrokerLiquidator.NotWhitelisted.selector);
+    liquidator.sellBNB(
+      address(oneInch),
+      address(LISUSD),
+      amountIn,
+      1 ether,
+      abi.encodeWithSelector(oneInch.swap.selector, LIQ_BNB, address(LISUSD), amountIn, uint256(1 ether))
+    );
+  }
+
+  function test_sellBNB_revertsWhenPairNotWhitelisted() public {
+    MockOneInch oneInch = new MockOneInch();
+    vm.startPrank(MANAGER);
+    liquidator.setTokenWhitelist(LIQ_BNB, true);
+    liquidator.setTokenWhitelist(address(LISUSD), true);
+    vm.stopPrank();
+
+    uint256 amountIn = 1 ether;
+    vm.deal(address(liquidator), amountIn);
+
+    vm.prank(BOT);
+    vm.expectRevert(BrokerLiquidator.NotWhitelisted.selector);
+    liquidator.sellBNB(
+      address(oneInch),
+      address(LISUSD),
+      amountIn,
+      1 ether,
+      abi.encodeWithSelector(oneInch.swap.selector, LIQ_BNB, address(LISUSD), amountIn, uint256(1 ether))
+    );
+  }
+
+  function test_sellBNB_revertsOnZeroAmount() public {
+    MockOneInch oneInch = _setupLiquidatorSwap();
+    vm.prank(BOT);
+    vm.expectRevert("amountIn zero");
+    liquidator.sellBNB(
+      address(oneInch),
+      address(LISUSD),
+      0,
+      0,
+      abi.encodeWithSelector(oneInch.swap.selector, LIQ_BNB, address(LISUSD), uint256(0), uint256(0))
+    );
+  }
+
+  function test_sellBNB_revertsWhenBalanceInsufficient() public {
+    MockOneInch oneInch = _setupLiquidatorSwap();
+    uint256 amountIn = 1 ether;
+    // liquidator holds only half of amountIn
+    vm.deal(address(liquidator), amountIn / 2);
+
+    vm.prank(BOT);
+    vm.expectRevert(BrokerLiquidator.ExceedAmount.selector);
+    liquidator.sellBNB(
+      address(oneInch),
+      address(LISUSD),
+      amountIn,
+      1 ether,
+      abi.encodeWithSelector(oneInch.swap.selector, LIQ_BNB, address(LISUSD), amountIn, uint256(1 ether))
+    );
+  }
+
+  function test_sellBNB_revertsWhenOutputBelowMin() public {
+    MockOneInch oneInch = _setupLiquidatorSwap();
+    uint256 amountIn = 1 ether;
+    uint256 swapOut = 300 ether; // what the aggregator actually returns
+    uint256 amountOutMin = swapOut + 1; // require more than returned
+
+    vm.deal(address(liquidator), amountIn);
+
+    vm.prank(BOT);
+    vm.expectRevert(BrokerLiquidator.NoProfit.selector);
+    liquidator.sellBNB(
+      address(oneInch),
+      address(LISUSD),
+      amountIn,
+      amountOutMin,
+      abi.encodeWithSelector(oneInch.swap.selector, LIQ_BNB, address(LISUSD), amountIn, swapOut)
+    );
+  }
+
+  function test_sellToken_swapsTokenToToken() public {
+    MockOneInch oneInch = _setupLiquidatorSwap();
+    uint256 amountIn = 1 ether;
+    uint256 amountOut = 300 ether;
+    BTCB.setBalance(address(liquidator), amountIn);
+
+    vm.prank(BOT);
+    liquidator.sellToken(
+      address(oneInch),
+      address(BTCB),
+      address(LISUSD),
+      amountIn,
+      amountOut,
+      abi.encodeWithSelector(oneInch.swap.selector, address(BTCB), address(LISUSD), amountIn, amountOut)
+    );
+
+    assertEq(LISUSD.balanceOf(address(liquidator)), amountOut, "loanToken balance");
+    assertEq(BTCB.balanceOf(address(liquidator)), 0, "tokenIn spent");
+    assertEq(BTCB.allowance(address(liquidator), address(oneInch)), 0, "allowance reset");
   }
 }
 
