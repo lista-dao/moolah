@@ -92,12 +92,14 @@ contract CollateralYieldVault is
   event IncreaseVaultAssets(address indexed caller, uint256 bnbIn, uint256 slisDelta);
   event UpdateLastTotalAssets(uint256 lastTotalAssets);
   event AccrueInterest(uint256 newTotalAssets, uint256 feeShares);
+  event Swept(address indexed to, uint256 amount);
 
   /* ERRORS */
 
   error NotWhitelistedDelegate();
   error SlippageExceeded();
   error ZeroAmount();
+  error SharesOutstanding();
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor(address _provider) {
@@ -310,6 +312,23 @@ contract CollateralYieldVault is
     // Redirect 100% of the vault's slisBNBx to the chosen MPC (minter read from the provider).
     ISlisBNBxMinter(PROVIDER.slisBNBxMinter()).delegateAllTo(target);
     emit SetDelegateTarget(target);
+  }
+
+  /* MANAGER: SWEEP */
+
+  /// @notice Recover residual collateral left in the position once every share has been redeemed
+  ///         (last-redeemer rounding dust), and reset the vault to a clean empty state.
+  /// @dev Gated on `totalSupply() == 0`: with no shares outstanding nothing backs user value, so this can never
+  ///      touch share-backed funds. A deploy-time dead seed deposit keeps supply > 0 and prevents this state.
+  function sweep(address to) external onlyRole(MANAGER) nonReentrant returns (uint256 amount) {
+    if (totalSupply() != 0) revert SharesOutstanding();
+    if (to == address(0)) revert ErrorsLib.ZeroAddress();
+    amount = totalAssets();
+    if (amount > 0) {
+      PROVIDER.withdrawCollateral(marketParams, amount, address(this), to);
+      _updateLastTotalAssets(0);
+    }
+    emit Swept(to, amount);
   }
 
   /* ADMIN: DELEGATE WHITELIST + PAUSE */

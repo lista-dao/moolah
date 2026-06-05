@@ -325,6 +325,44 @@ contract CollateralYieldVaultTest is Test {
     assertGt(ISlisBNBx(slisBnbx).balanceOf(delegateMpc) - mpcBefore, 0, "donation also mints slisBNBx to MPC");
   }
 
+  function test_sweep_recoversDustOnlyWhenEmpty() public {
+    address treasury = makeAddr("treasury");
+    uint256 shares = _deposit(alice, 100 ether);
+
+    // compound so pricePerShare > 1 => redeem rounding will leave dust
+    uint256 reward = 10 ether;
+    deal(bot, reward);
+    vm.prank(bot);
+    vault.increaseVaultAssets{ value: reward }(0);
+
+    // sweep is blocked while shares are outstanding
+    vm.prank(vManager);
+    vm.expectRevert(CollateralYieldVault.SharesOutstanding.selector);
+    vault.sweep(treasury);
+
+    // alice redeems everything -> floor rounding leaves dust in the position
+    vm.prank(alice);
+    vault.redeem(shares, alice, alice);
+
+    uint256 dust = provider.userTotalDeposit(address(vault));
+    assertEq(vault.totalSupply(), 0, "no shares left");
+    assertGt(dust, 0, "dust remains");
+    assertEq(vault.totalAssets(), dust, "totalAssets == dust");
+
+    // only MANAGER can sweep
+    vm.prank(alice);
+    vm.expectRevert();
+    vault.sweep(treasury);
+
+    vm.prank(vManager);
+    uint256 swept = vault.sweep(treasury);
+
+    assertEq(swept, dust, "swept == dust");
+    assertEq(IERC20(slisBnb).balanceOf(treasury), dust, "dust to treasury");
+    assertEq(provider.userTotalDeposit(address(vault)), 0, "position cleared");
+    assertEq(vault.totalAssets(), 0, "clean empty state");
+  }
+
   /* -------------------------------- utils ---------------------------------- */
 
   function _deposit(address user, uint256 amount) internal returns (uint256 shares) {
