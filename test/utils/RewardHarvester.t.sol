@@ -114,12 +114,10 @@ contract RewardHarvesterTest is Test {
     );
     harvester = RewardHarvester(payable(address(hProxy)));
 
-    // vAdmin config: delegate whitelist + grant the harvester the vault BOT role
+    // grant the harvester the vault BOT role + set delegate target
     bytes32 botRole = vault.BOT();
-    vm.startPrank(vAdmin);
-    vault.addDelegateTarget(delegateMpc);
+    vm.prank(vAdmin);
     vault.grantRole(botRole, address(harvester));
-    vm.stopPrank();
     vm.prank(vManager);
     vault.setDelegateTarget(delegateMpc);
 
@@ -152,7 +150,7 @@ contract RewardHarvesterTest is Test {
     claims[1] = _claim(2, 5 ether);
 
     vm.prank(bot);
-    harvester.harvest(claims, 0, 0);
+    harvester.harvest(claims, 0);
 
     uint256 staked = IStakeManagerLike(stakeManager).convertBnbToSnBnb(15 ether);
 
@@ -170,7 +168,7 @@ contract RewardHarvesterTest is Test {
     RewardHarvester.ClaimParams[] memory first = new RewardHarvester.ClaimParams[](1);
     first[0] = _claim(1, 10 ether);
     vm.prank(bot);
-    harvester.harvest(first, 0, 0);
+    harvester.harvest(first, 0);
     uint256 distBalAfterFirst = address(distributor).balance;
 
     // second harvest: epoch 1 (already claimed, skipped) + epoch 2 (5 BNB)
@@ -178,7 +176,7 @@ contract RewardHarvesterTest is Test {
     second[0] = _claim(1, 10 ether);
     second[1] = _claim(2, 5 ether);
     vm.prank(bot);
-    harvester.harvest(second, 0, 0);
+    harvester.harvest(second, 0);
 
     // only epoch 2 paid out in the second call
     assertEq(distBalAfterFirst - address(distributor).balance, 5 ether, "epoch1 not double-claimed");
@@ -191,14 +189,14 @@ contract RewardHarvesterTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(RewardHarvester.InsufficientReward.selector);
-    harvester.harvest(claims, 20 ether, 0); // minBNBOut > claimable
+    harvester.harvest(claims, 20 ether); // minBNBOut > claimable
   }
 
   function test_harvest_revertsNothingToCompound() public {
     RewardHarvester.ClaimParams[] memory none = new RewardHarvester.ClaimParams[](0);
     vm.prank(bot);
     vm.expectRevert(RewardHarvester.NothingToCompound.selector);
-    harvester.harvest(none, 0, 0);
+    harvester.harvest(none, 0);
   }
 
   function test_harvest_onlyBot() public {
@@ -206,7 +204,7 @@ contract RewardHarvesterTest is Test {
     claims[0] = _claim(1, 10 ether);
     vm.prank(alice);
     vm.expectRevert();
-    harvester.harvest(claims, 0, 0);
+    harvester.harvest(claims, 0);
   }
 
   function test_rescue_managerOnly() public {

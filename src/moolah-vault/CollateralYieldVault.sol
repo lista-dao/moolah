@@ -23,7 +23,7 @@ import { ICollateralYieldVault } from "./interfaces/ICollateralYieldVault.sol";
 /// @title CollateralYieldVault
 /// @author Lista DAO
 /// @notice ERC4626 vault (asset = slisBNB). Deposited slisBNB is supplied as Moolah collateral (no borrow) via
-///         SlisBNBProvider; the minted slisBNBx is 100% delegated to a governance-whitelisted MPC (`delegateTarget`)
+///         SlisBNBProvider; the minted slisBNBx is 100% delegated to a MANAGER-set MPC (`delegateTarget`)
 ///         that participates in launchpool. Launchpool BNB rewards are injected back through `increaseVaultAssets`
 ///         (BOT-only) which stakes BNB->slisBNB, supplies it, and raises the share price. Performance fee follows the
 ///         MoolahVault model (fee-share dilution, high-water `lastTotalAssets`); `fee` is 0 at launch.
@@ -60,12 +60,10 @@ contract CollateralYieldVault is
   /* STORAGE */
 
   /// @notice The Moolah market params whose collateralToken == slisBNB (no borrow performed).
-  MarketParams public marketParams;
+  MarketParams public marketParams; //slisBNB/BNB market
 
-  /// @notice Current delegate target (MPC participating in launchpool); must be in `allowedDelegateTargets`.
+  /// @notice Current delegate target (MPC participating in launchpool); MANAGER-set, must be non-zero.
   address public delegateTarget;
-  /// @notice Governance-maintained whitelist of allowed delegate targets (MPCs).
-  mapping(address => bool) public allowedDelegateTargets;
 
   /// @notice User whitelist; if non-empty, only listed addresses may deposit/hold shares.
   EnumerableSet.AddressSet private userWhiteList;
@@ -77,27 +75,20 @@ contract CollateralYieldVault is
   /// @notice High-water snapshot of total assets for fee accrual.
   uint256 public lastTotalAssets;
 
-  // TODO: future — route launchpool rewards through a lock/linear-release buffer so they accrue into NAV
-  //       gradually instead of in one `increaseVaultAssets` step (smooths the step-up, mitigates JIT front-running).
-  // address public buffer; // BrokerInterestLockBuffer
-
   /* EVENTS */
 
   event SetFee(address indexed caller, uint256 fee);
   event SetFeeRecipient(address indexed feeRecipient);
   event SetWhiteList(address indexed account, bool enabled);
-  event AddDelegateTarget(address indexed target);
-  event RemoveDelegateTarget(address indexed target);
   event SetDelegateTarget(address indexed target);
   event IncreaseVaultAssets(address indexed caller, uint256 bnbIn, uint256 slisDelta);
   event UpdateLastTotalAssets(uint256 lastTotalAssets);
   event AccrueInterest(uint256 newTotalAssets, uint256 feeShares);
   event Swept(address indexed to, uint256 amount);
+  event EmergencyWithdraw(address indexed token, address indexed to, uint256 amount);
 
   /* ERRORS */
 
-  error NotWhitelistedDelegate();
-  error SlippageExceeded();
   error ZeroAmount();
   error SharesOutstanding();
 
@@ -221,20 +212,22 @@ contract CollateralYieldVault is
 
   /* COMPOUND (BOT == RewardHarvester) */
 
-  /// @notice Inject launchpool reward BNB: stake to slisBNB, supply to the position, then accrue fee on the increment.
-  ///         Mints no user shares => share price rises. Initial `fee` = 0 => increment fully accrues to holders.
-  function increaseVaultAssets(uint256 minSlisOut) external payable override onlyRole(BOT) nonReentrant whenNotPaused {
-    if (msg.value > 0) STAKE_MANAGER.deposit{ value: msg.value }();
-    // Compound the vault's entire slisBNB balance: freshly-staked slisBNB plus any reward slisBNB sent directly.
-    // The vault holds no slisBNB between operations (deposits pull-then-supply atomically), so this is the reward.
-    uint256 slisAmount = IERC20(SLIS_BNB).balanceOf(address(this));
-    if (slisAmount == 0 || slisAmount < minSlisOut) revert SlippageExceeded();
+  /// @notice Inject launchpool reward BNB (`msg.value`): stake to slisBNB, supply to the position, then accrue fee on
+  ///         the increment. Mints no user shares => share price rises. Initial `fee` = 0 => increment fully accrues
+  ///         to holders. Only the slisBNB minted from this call's `msg.value` is compounded (measured as a balance
+  ///         delta), so any unrelated slisBNB sitting in the vault is never swept into the position here.
+  function increaseVaultAssets() external payable override onlyRole(BOT) nonReentrant whenNotPaused {
+    if (msg.value == 0) revert ZeroAmount();
 
-    PROVIDER.supplyCollateral(marketParams, slisAmount, address(this), "");
+    uint256 balBefore = IERC20(SLIS_BNB).balanceOf(address(this));
+    STAKE_MANAGER.deposit{ value: msg.value }();
+    uint256 slisDelta = IERC20(SLIS_BNB).balanceOf(address(this)) - balBefore;
+
+    PROVIDER.supplyCollateral(marketParams, slisDelta, address(this), "");
     // Inject first, accrue after: the increment is booked as interest and charged `fee` (0 at launch).
     _updateLastTotalAssets(_accrueFee());
 
-    emit IncreaseVaultAssets(_msgSender(), msg.value, slisAmount);
+    emit IncreaseVaultAssets(_msgSender(), msg.value, slisDelta);
   }
 
   /// @notice Permissionlessly crystallize accrued performance fee into fee shares (no-op while `fee == 0`).
@@ -307,7 +300,6 @@ contract CollateralYieldVault is
 
   function setDelegateTarget(address target) external onlyRole(MANAGER) {
     if (target == address(0)) revert ErrorsLib.ZeroAddress();
-    if (!allowedDelegateTargets[target]) revert NotWhitelistedDelegate();
     delegateTarget = target;
     // Redirect 100% of the vault's slisBNBx to the chosen MPC (minter read from the provider).
     ISlisBNBxMinter(PROVIDER.slisBNBxMinter()).delegateAllTo(target);
@@ -331,18 +323,20 @@ contract CollateralYieldVault is
     emit Swept(to, amount);
   }
 
-  /* ADMIN: DELEGATE WHITELIST + PAUSE */
-
-  function addDelegateTarget(address target) external onlyRole(DEFAULT_ADMIN_ROLE) {
-    if (target == address(0)) revert ErrorsLib.ZeroAddress();
-    allowedDelegateTargets[target] = true;
-    emit AddDelegateTarget(target);
+  /// @notice Recover stray tokens / native BNB held by the vault (e.g. directly-donated slisBNB that
+  ///         `increaseVaultAssets` does not fold in). Does NOT touch the Moolah collateral position (which backs
+  ///         shares and is custodied by the provider/Moolah), so `totalAssets` is unaffected. MANAGER-only.
+  function emergencyWithdraw(uint256 amount, address token) external onlyRole(MANAGER) nonReentrant {
+    if (token == address(0)) {
+      (bool ok, ) = payable(_msgSender()).call{ value: amount }("");
+      require(ok, "BNB transfer failed");
+    } else {
+      IERC20(token).safeTransfer(_msgSender(), amount);
+    }
+    emit EmergencyWithdraw(token, _msgSender(), amount);
   }
 
-  function removeDelegateTarget(address target) external onlyRole(DEFAULT_ADMIN_ROLE) {
-    allowedDelegateTargets[target] = false;
-    emit RemoveDelegateTarget(target);
-  }
+  /* PAUSER */
 
   function pause() external onlyRole(PAUSER) {
     _pause();
@@ -365,7 +359,8 @@ contract CollateralYieldVault is
     _updateLastTotalAssets(lastTotalAssets + assets);
   }
 
-  /// @dev Withdraws slisBNB from the Moolah position directly to `receiver` (no double transfer through the vault).
+  /// @dev Pull slisBNB out of the Moolah position into the vault, then let ERC4626 handle the
+  ///      allowance spend, share burn, asset transfer to `receiver`, and Withdraw event.
   function _withdraw(
     address caller,
     address receiver,
@@ -373,10 +368,8 @@ contract CollateralYieldVault is
     uint256 assets,
     uint256 shares
   ) internal override {
-    if (caller != owner) _spendAllowance(owner, caller, shares);
-    _burn(owner, shares);
-    PROVIDER.withdrawCollateral(marketParams, assets, address(this), receiver);
-    emit Withdraw(caller, receiver, owner, assets, shares);
+    PROVIDER.withdrawCollateral(marketParams, assets, address(this), address(this));
+    super._withdraw(caller, receiver, owner, assets, shares);
   }
 
   /// @dev Restrict share transfers to whitelisted holders (mint/burn always allowed).

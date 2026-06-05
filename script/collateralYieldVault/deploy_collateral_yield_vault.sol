@@ -65,7 +65,6 @@ contract DeployCollateralYieldVault is DeployBase {
     require(vault.asset() == SLIS_BNB, "asset mismatch");
 
     // 2. delegate slisBNBx to the governance-approved MPC.
-    vault.addDelegateTarget(MPC1);
     vault.setDelegateTarget(MPC1);
 
     // 3. dead seed deposit: keeps totalSupply > 0 forever (whitelist still empty == open here).

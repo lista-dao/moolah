@@ -32,7 +32,7 @@ contract RewardHarvester is UUPSUpgradeable, AccessControlEnumerableUpgradeable,
     bytes32[] proof;
   }
 
-  event Harvested(uint256 claimCount, uint256 bnbInjected, uint256 minSlisOut);
+  event Harvested(uint256 claimCount, uint256 bnbInjected);
   event Rescued(address indexed token, address indexed to, uint256 amount);
 
   error InsufficientReward();
@@ -57,14 +57,10 @@ contract RewardHarvester is UUPSUpgradeable, AccessControlEnumerableUpgradeable,
   }
 
   /// @notice Claim launchpool BNB for the given epochs (to this contract) and compound it into the vault.
-  /// @param claims Per-epoch claim data (epochId, amount, Merkle proof). `_account` is always this contract.
-  /// @param minBNBOut Minimum total BNB balance required after claiming (anti-anomaly).
-  /// @param minSlisOut Forwarded to the vault to bound the BNB->slisBNB stake result.
-  function harvest(
-    ClaimParams[] calldata claims,
-    uint256 minBNBOut,
-    uint256 minSlisOut
-  ) external onlyRole(BOT) nonReentrant {
+  /// @param claims Per-epoch claim data (epochId, amount, Merkle proof). `_account` is hardcoded to this contract,
+  ///        so the distributor pays the harvester directly and the BOT cannot redirect the funds.
+  /// @param minBNBOut Minimum total BNB balance required after claiming (anti-anomaly / sanity bound).
+  function harvest(ClaimParams[] calldata claims, uint256 minBNBOut) external onlyRole(BOT) nonReentrant {
     for (uint256 i; i < claims.length; ++i) {
       // Skip already-claimed epochs to keep the batch idempotent.
       if (DISTRIBUTOR.claimed(claims[i].epochId, address(this))) continue;
@@ -75,9 +71,9 @@ contract RewardHarvester is UUPSUpgradeable, AccessControlEnumerableUpgradeable,
     if (bnbBal == 0) revert NothingToCompound();
     if (bnbBal < minBNBOut) revert InsufficientReward();
 
-    VAULT.increaseVaultAssets{ value: bnbBal }(minSlisOut);
+    VAULT.increaseVaultAssets{ value: bnbBal }();
 
-    emit Harvested(claims.length, bnbBal, minSlisOut);
+    emit Harvested(claims.length, bnbBal);
   }
 
   /// @notice Emergency recovery of stranded tokens/BNB (e.g. a non-BNB reward token). Manager-only.

@@ -81,10 +81,9 @@ contract CollateralYieldVaultTest is Test {
     vault = CollateralYieldVault(payable(address(proxy)));
 
     // wire roles + delegate target
-    vm.startPrank(vAdmin);
-    vault.grantRole(vault.BOT(), bot);
-    vault.addDelegateTarget(delegateMpc);
-    vm.stopPrank();
+    bytes32 botRole = vault.BOT();
+    vm.prank(vAdmin);
+    vault.grantRole(botRole, bot);
 
     vm.prank(vManager);
     vault.setDelegateTarget(delegateMpc);
@@ -198,7 +197,7 @@ contract CollateralYieldVaultTest is Test {
     uint256 reward = 10 ether;
     deal(bot, reward);
     vm.prank(bot);
-    vault.increaseVaultAssets{ value: reward }(0);
+    vault.increaseVaultAssets{ value: reward }();
 
     uint256 staked = IStakeManagerLike(stakeManager).convertBnbToSnBnb(reward);
 
@@ -225,7 +224,7 @@ contract CollateralYieldVaultTest is Test {
     uint256 reward = 10 ether;
     deal(bot, reward);
     vm.prank(bot);
-    vault.increaseVaultAssets{ value: reward }(0);
+    vault.increaseVaultAssets{ value: reward }();
 
     uint256 staked = IStakeManagerLike(stakeManager).convertBnbToSnBnb(reward);
     uint256 feeShares = vault.balanceOf(feeRecipient);
@@ -263,18 +262,46 @@ contract CollateralYieldVaultTest is Test {
     assertEq(vault.balanceOf(charlie), 1 ether, "transfer ok after whitelist");
   }
 
-  function test_delegateTarget_onlyWhitelisted() public {
-    address rogue = makeAddr("rogue");
-    vm.prank(vManager);
-    vm.expectRevert(CollateralYieldVault.NotWhitelistedDelegate.selector);
-    vault.setDelegateTarget(rogue);
+  function test_setDelegateTarget_managerOnly_andUpdatesMinter() public {
+    address newMpc = makeAddr("newMpc");
 
-    vm.prank(vAdmin);
-    vault.addDelegateTarget(rogue);
+    // non-manager cannot set
+    vm.prank(alice);
+    vm.expectRevert();
+    vault.setDelegateTarget(newMpc);
+
+    // zero address rejected
     vm.prank(vManager);
-    vault.setDelegateTarget(rogue);
-    assertEq(vault.delegateTarget(), rogue, "delegate target updated");
-    assertEq(minter.delegation(address(vault)), rogue, "minter delegation updated");
+    vm.expectRevert(); // ErrorsLib.ZeroAddress
+    vault.setDelegateTarget(address(0));
+
+    // manager can set any non-zero target; minter delegation follows
+    vm.prank(vManager);
+    vault.setDelegateTarget(newMpc);
+    assertEq(vault.delegateTarget(), newMpc, "delegate target updated");
+    assertEq(minter.delegation(address(vault)), newMpc, "minter delegation updated");
+  }
+
+  function test_emergencyWithdraw_recoversStrayTokens() public {
+    _deposit(alice, 50 ether);
+    uint256 navBefore = vault.totalAssets();
+
+    // a stray slisBNB transfer lands idle in the vault (not in the position, not in NAV)
+    deal(slisBnb, address(vault), 3 ether);
+    assertEq(vault.totalAssets(), navBefore, "stray balance not counted in NAV");
+
+    // non-manager cannot withdraw
+    vm.prank(alice);
+    vm.expectRevert();
+    vault.emergencyWithdraw(3 ether, slisBnb);
+
+    // manager recovers the stray tokens; NAV and position unaffected
+    uint256 mgrBefore = IERC20(slisBnb).balanceOf(vManager);
+    vm.prank(vManager);
+    vault.emergencyWithdraw(3 ether, slisBnb);
+
+    assertEq(IERC20(slisBnb).balanceOf(vManager) - mgrBefore, 3 ether, "stray slisBNB recovered to manager");
+    assertEq(vault.totalAssets(), navBefore, "NAV unchanged");
   }
 
   function test_pause_blocksDepositNotRedeem() public {
@@ -298,7 +325,7 @@ contract CollateralYieldVaultTest is Test {
     deal(alice, 1 ether);
     vm.prank(alice);
     vm.expectRevert();
-    vault.increaseVaultAssets{ value: 1 ether }(0);
+    vault.increaseVaultAssets{ value: 1 ether }();
   }
 
   function test_donation_onlyViaProvider_raisesNavAndMintsSlisBNBx() public {
@@ -333,7 +360,7 @@ contract CollateralYieldVaultTest is Test {
     uint256 reward = 10 ether;
     deal(bot, reward);
     vm.prank(bot);
-    vault.increaseVaultAssets{ value: reward }(0);
+    vault.increaseVaultAssets{ value: reward }();
 
     // sweep is blocked while shares are outstanding
     vm.prank(vManager);
