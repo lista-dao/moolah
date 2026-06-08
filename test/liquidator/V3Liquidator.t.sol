@@ -8,7 +8,7 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import { V3Provider } from "../../src/provider/V3Provider.sol";
 import { V3Liquidator } from "../../src/liquidator/V3Liquidator.sol";
-import { IListaV3Pool } from "../../src/dex/v3/core/interfaces/IListaV3Pool.sol";
+import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
 import { IMoolah, MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
