@@ -1,6 +1,7 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
+import { DeployBase } from "../DeployBase.sol";
 
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
@@ -12,7 +13,7 @@ interface IUpgrade {
   function upgradeToAndCall(address newImplementation, bytes calldata data) external;
 }
 
-contract StableSwapLPCollateralDeploy is Script {
+contract StableSwapLPCollateralDeploy is DeployBase {
   address slisBNBx_test = 0x3dC5a40119B85d5f2b06eEC86a6d36852bd9aB52;
   address slisBnbModule_test = 0x0612c940460D68C16aA213315E32Fba579beD6A6;
   address smartLpModule_test = 0x3953B325b5aD068E74D1fc58fc66CE4440F1E2FF;
@@ -24,7 +25,7 @@ contract StableSwapLPCollateralDeploy is Script {
   address lpCollateral_test = 0x7c2b49bbF5fd96913513c373c5a76E7356D470e1;
 
   function run() public {
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY_TESTNET");
+    uint256 deployerPrivateKey = _deployerKey();
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

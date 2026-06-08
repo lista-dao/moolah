@@ -9,6 +9,7 @@ import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { IBroker, IBrokerBase } from "../broker/interfaces/IBroker.sol";
 import { Id, MarketParams, IMoolah } from "moolah/interfaces/IMoolah.sol";
 import "./IBrokerLiquidator.sol";
+import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
 
 contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerLiquidator {
   using MarketParamsLib for MarketParams;
@@ -33,14 +34,19 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   // then we will know broker is whitelisted or not
   // by checking broker address => marketIdToBroker[market id] == broker address
   mapping(address => bytes32) public brokerToMarketId;
+  // @dev smart collateral provider whitelist
+  mapping(address => bool) public smartProviders;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // manager role
+  /// @dev sentinel address representing native BNB
+  address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
   event TokenWhitelistChanged(address indexed token, bool added);
   event MarketWhitelistChanged(bytes32 id, address broker, bool added);
   event PairWhitelistChanged(address pair, bool added);
   event SellToken(address pair, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin);
+  event SmartProvidersChanged(address provider, bool added);
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   /// @param moolah The address of the Moolah contract.
@@ -177,6 +183,41 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     emit SellToken(pair, tokenIn, tokenOut, actualAmountIn, actualAmountOut);
   }
 
+  /// @dev sell native BNB for a token.
+  /// @param pair The address of the pair.
+  /// @param tokenOut The address of the output token.
+  /// @param amountIn The amount of BNB to sell.
+  /// @param amountOutMin The minimum amount to receive.
+  /// @param swapData The swap data.
+  function sellBNB(
+    address pair,
+    address tokenOut,
+    uint256 amountIn,
+    uint256 amountOutMin,
+    bytes calldata swapData
+  ) external onlyRole(BOT) {
+    require(tokenWhitelist[BNB_ADDRESS], NotWhitelisted());
+    require(tokenWhitelist[tokenOut], NotWhitelisted());
+    require(pairWhitelist[pair], NotWhitelisted());
+    require(amountIn > 0, "amountIn zero");
+
+    require(address(this).balance >= amountIn, ExceedAmount());
+
+    uint256 beforeTokenIn = address(this).balance;
+    uint256 beforeTokenOut = SafeTransferLib.balanceOf(tokenOut, address(this));
+
+    (bool success, ) = pair.call{ value: amountIn }(swapData);
+    require(success, SwapFailed());
+
+    uint256 actualAmountIn = beforeTokenIn - address(this).balance;
+    uint256 actualAmountOut = SafeTransferLib.balanceOf(tokenOut, address(this)) - beforeTokenOut;
+
+    require(actualAmountIn <= amountIn, ExceedAmount());
+    require(actualAmountOut >= amountOutMin, NoProfit());
+
+    emit SellToken(pair, BNB_ADDRESS, tokenOut, actualAmountIn, actualAmountOut);
+  }
+
   /// @dev flash liquidates a position.
   /// @param id The id of the market.
   /// @param borrower The address of the borrower.
@@ -284,5 +325,36 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     SafeTransferLib.safeApprove(arb.loanToken, msg.sender, repaidAssets);
   }
 
+  /// @dev redeems smart collateral LP tokens.
+  /// @param smartProvider The address of the smart collateral provider.
+  /// @param lpAmount The amount of LP collateral tokens to redeem.
+  /// @param minToken0Amt The minimum amount of token0 to receive.
+  /// @param minToken1Amt The minimum amount of token1 to receive.
+  /// @return The amount of token0 and token1 redeemed.
+  function redeemSmartCollateral(
+    address smartProvider,
+    uint256 lpAmount,
+    uint256 minToken0Amt,
+    uint256 minToken1Amt
+  ) external onlyRole(BOT) returns (uint256, uint256) {
+    require(smartProviders[smartProvider], NotWhitelisted());
+    return ISmartProvider(smartProvider).redeemLpCollateral(lpAmount, minToken0Amt, minToken1Amt);
+  }
+
+  /// @dev sets the smart collateral providers.
+  /// @dev allows the contract to receive native BNB, e.g. when redeeming slisBNB/BNB LP.
+  /// @param providers The array of smart collateral providers.
+  /// @param status The status of the providers.
+  function batchSetSmartProviders(address[] calldata providers, bool status) external onlyRole(MANAGER) {
+    for (uint256 i = 0; i < providers.length; i++) {
+      address provider = providers[i];
+      smartProviders[provider] = status;
+      emit SmartProvidersChanged(provider, status);
+    }
+  }
+
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+
+  /// @dev allows the contract to receive native BNB, e.g. when redeeming slisBNB/BNB LP.
+  receive() external payable {}
 }

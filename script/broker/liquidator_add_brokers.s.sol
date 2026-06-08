@@ -2,9 +2,10 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
+import { DeployBase } from "../DeployBase.sol";
 import { IBrokerLiquidator } from "../../src/liquidator/IBrokerLiquidator.sol";
 
-contract BrokerLiquidatorAddBrokersScript is Script {
+contract BrokerLiquidatorAddBrokersScript is DeployBase {
   bytes32[] marketIds = [
     bytes32(0x0000000000000000000000000000000000000000000000000000000000000000),
     bytes32(0x0000000000000000000000000000000000000000000000000000000000000000),
@@ -24,7 +25,7 @@ contract BrokerLiquidatorAddBrokersScript is Script {
   }
 
   function run() public {
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+    uint256 deployerPrivateKey = _deployerKey();
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

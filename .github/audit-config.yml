@@ -1,0 +1,22 @@
+audit_doc_paths:
+  - docs/audits/*.pdf
+
+actor_allowlist:
+  - lawson-ccy
+  - razww
+  - qingyang-lista
+  - ricklista
+
+escalation_reviewers:
+  - "@lista-dao/sc"
+
+telegram:
+  chat_id: -4110669414
+  send_pdf: true
+  caption_prefix: "[Moolah]"
+
+delivery:
+  also_post_to_slack: false
+
+focus_defaults:
+  skip: []

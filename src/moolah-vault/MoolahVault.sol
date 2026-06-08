@@ -81,6 +81,12 @@ contract MoolahVault is
   /// if whitelist is set, only whitelisted addresses can deposit and mint
   EnumerableSet.AddressSet private whiteList;
 
+  /// @notice Custom name override for the vault token.
+  string private _name;
+
+  /// @notice Custom symbol override for the vault token.
+  string private _symbol;
+
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant CURATOR = keccak256("CURATOR"); // curator role
   bytes32 public constant ALLOCATOR = keccak256("ALLOCATOR"); // allocator role
@@ -169,24 +175,20 @@ contract MoolahVault is
     emit EventsLib.SetFeeRecipient(newFeeRecipient);
   }
 
-  /// @inheritdoc IMoolahVaultBase
-  function addWhiteList(address account) external onlyRole(MANAGER) {
+  /// @notice Add or remove an account from the whitelist.
+  /// @param account The account to add or remove.
+  /// @param enabled True to add, false to remove.
+  function setWhiteList(address account, bool enabled) external onlyRole(MANAGER) {
     if (account == address(0)) revert ErrorsLib.ZeroAddress();
-    if (whiteList.contains(account)) revert ErrorsLib.AlreadySet();
+    if (enabled) {
+      if (whiteList.contains(account)) revert ErrorsLib.AlreadySet();
+      whiteList.add(account);
+    } else {
+      if (!whiteList.contains(account)) revert ErrorsLib.NotSet();
+      whiteList.remove(account);
+    }
 
-    whiteList.add(account);
-
-    emit EventsLib.AddWhiteList(account);
-  }
-
-  /// @inheritdoc IMoolahVaultBase
-  function removeWhiteList(address account) external onlyRole(MANAGER) {
-    if (account == address(0)) revert ErrorsLib.ZeroAddress();
-    if (!whiteList.contains(account)) revert ErrorsLib.NotSet();
-
-    whiteList.remove(account);
-
-    emit EventsLib.RemoveWhiteList(account);
+    emit EventsLib.SetWhiteList(account, enabled);
   }
 
   /// @inheritdoc IMoolahVaultBase
@@ -360,6 +362,16 @@ contract MoolahVault is
     emit EventsLib.InitProvider(_provider);
   }
 
+  /// @notice Set a custom vault name. Pass empty string to revert to the original name.
+  function setName(string calldata newName) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    _name = newName;
+  }
+
+  /// @notice Set a custom vault symbol. Pass empty string to revert to the original symbol.
+  function setSymbol(string calldata newSymbol) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    _symbol = newSymbol;
+  }
+
   /* EXTERNAL */
 
   /// @inheritdoc IMoolahVaultBase
@@ -488,6 +500,18 @@ contract MoolahVault is
     for (uint256 i; i < withdrawQueue.length; ++i) {
       assets += MOOLAH.expectedSupplyAssets(_marketParams(withdrawQueue[i]), address(this));
     }
+  }
+
+  /// @inheritdoc IERC20Metadata
+  function name() public view override(ERC20Upgradeable, IERC20Metadata) returns (string memory) {
+    if (bytes(_name).length > 0) return _name;
+    return super.name();
+  }
+
+  /// @inheritdoc IERC20Metadata
+  function symbol() public view override(ERC20Upgradeable, IERC20Metadata) returns (string memory) {
+    if (bytes(_symbol).length > 0) return _symbol;
+    return super.symbol();
   }
 
   /* ERC4626Upgradeable (INTERNAL) */

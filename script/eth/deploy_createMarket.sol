@@ -1,12 +1,13 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
+import { DeployBase } from "../DeployBase.sol";
 
 import { Moolah } from "moolah/Moolah.sol";
 import { MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 
-contract CreateMarketDeploy is Script {
+contract CreateMarketDeploy is DeployBase {
   using MarketParamsLib for MarketParams;
 
   Moolah moolah = Moolah(0xf820fB4680712CD7263a0D3D024D5b5aEA82Fd70);
@@ -45,56 +46,28 @@ contract CreateMarketDeploy is Script {
   uint256 lltv965 = 0.965 ether;
 
   function run() public {
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+    uint256 deployerPrivateKey = _deployerKey();
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams[] memory params = new MarketParams[](6);
+    MarketParams[] memory params = new MarketParams[](2);
     params[0] = MarketParams({
-      loanToken: USD1,
-      collateralToken: ETH_wstETH,
-      oracle: ETH_wstETHSmartProvider,
-      irm: irm,
-      lltv: lltv86
-    });
-    params[1] = MarketParams({
-      loanToken: USD1,
+      loanToken: USDT,
       collateralToken: USDT_USDC,
       oracle: USDT_USDCSmartProvider,
       irm: irm,
-      lltv: lltv86
-    });
-    params[2] = MarketParams({
-      loanToken: USD1,
-      collateralToken: USDT_USD1,
-      oracle: USDT_USD1SmartProvider,
-      irm: irm,
       lltv: lltv965
     });
-    params[3] = MarketParams({
-      loanToken: USD1,
-      collateralToken: WBTC_cbBTC,
-      oracle: WBTC_cbBTCSmartProvider,
+    params[1] = MarketParams({
+      loanToken: USDC,
+      collateralToken: USDT_USDC,
+      oracle: USDT_USDCSmartProvider,
       irm: irm,
       lltv: lltv965
-    });
-    params[4] = MarketParams({
-      loanToken: USD1,
-      collateralToken: USDT_USDe,
-      oracle: USDT_USDeSmartProvider,
-      irm: irm,
-      lltv: lltv945
-    });
-    params[5] = MarketParams({
-      loanToken: USD1,
-      collateralToken: USDC_USDe,
-      oracle: USDC_USDeSmartProvider,
-      irm: irm,
-      lltv: lltv945
     });
 
     vm.startBroadcast(deployerPrivateKey);
-    for (uint256 i = 0; i < 6; i++) {
+    for (uint256 i = 0; i < params.length; i++) {
       Id id = params[i].id();
       console.log("market id:");
       console.logBytes32(Id.unwrap(id));

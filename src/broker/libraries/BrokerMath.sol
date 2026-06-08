@@ -14,7 +14,6 @@ import { PriceLib } from "../../moolah/libraries/PriceLib.sol";
 import { IRateCalculator } from "../interfaces/IRateCalculator.sol";
 
 uint256 constant RATE_SCALE = 10 ** 27;
-uint256 constant LISUSD_PRICE = 1e8;
 
 library BrokerMath {
   using MathLib for uint128;
@@ -36,9 +35,9 @@ library BrokerMath {
     address collateralToken = broker.COLLATERAL_TOKEN();
     IMoolah moolah = IMoolah(moolah);
     Id marketId = broker.MARKET_ID();
-    // loan token's price never changes
     if (token == loanToken) {
-      return LISUSD_PRICE;
+      // for loan token, we return the price from oracle directly
+      return IOracle(oracle).peek(loanToken);
     } else if (token == collateralToken) {
       /*
         Broker accrues interest, so collateral price is adjusted downward,
@@ -47,7 +46,8 @@ library BrokerMath {
         [B] Broker Total Debt (included interest)
         [C] Moolah Debt (0% rate)
         [D] Collateral Amount
-        new collateral price  = A - (B-C)/D
+        [E] Loan Market Price
+        new collateral price  = A - (B-C)*E/D
       */
       // the total debt of the user (principal + interest)
       uint256 debtAtBroker = getTotalDebt(
@@ -75,13 +75,17 @@ library BrokerMath {
       uint8 loanDecimals = IERC20Metadata(loanToken).decimals();
       // calculate manipulated price
       uint256 deltaDebt = UtilsLib.zeroFloorSub(debtAtBroker, debtAtMoolah);
+      // fetch loan price from oracle
+      uint256 loanPrice = IOracle(oracle).peek(loanToken);
+      // calculate the deltaDebt values
+      uint256 deltaDebtValues = Math.mulDiv(deltaDebt, loanPrice, 1e8);
       // Convert (brokerDebt − moolahDebt) per unit collateral into an 8‑decimal price.
       // deltaDebt is in loan token units (10^loanDecimals); collateral is in 10^collateralDecimals.
       // Scale: ceil(deltaDebt * 10^(8 + collateralDecimals) / (collateral * 10^loanDecimals)).
       // 10^(collateralDecimals) cancels collateral units; 10^8 sets price precision.
       // Ceiling rounding avoids under‑deduction (more conservative).
       uint256 deduction = mulDivCeiling(
-        deltaDebt,
+        deltaDebtValues,
         10 ** (8 + uint256(collateralDecimals)),
         _position.collateral * (10 ** uint256(loanDecimals))
       );

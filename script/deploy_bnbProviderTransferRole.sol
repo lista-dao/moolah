@@ -1,12 +1,13 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
+import { DeployBase } from "./DeployBase.sol";
 
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import { BNBProvider } from "../src/provider/BNBProvider.sol";
 
-contract BNBProviderTransferRoleDeploy is Script {
+contract BNBProviderTransferRoleDeploy is DeployBase {
   address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
 
   BNBProvider provider = BNBProvider(payable(0x57134a64B7cD9F9eb72F8255A671F5Bf2fe3E2d0)); // Loop WBNB Vault
@@ -18,7 +19,7 @@ contract BNBProviderTransferRoleDeploy is Script {
   bytes32 public constant MANAGER = keccak256("MANAGER");
 
   function run() public {
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+    uint256 deployerPrivateKey = _deployerKey();
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);

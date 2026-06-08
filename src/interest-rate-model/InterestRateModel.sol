@@ -165,11 +165,13 @@ contract InterestRateModel is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
     uint256 avgRate = uint256(_curve(avgRateAtTarget, err));
     if (avgRate > _cap) avgRate = _cap;
 
-    if (endRateAtTarget > int256(_cap) / 4) endRateAtTarget = int256(_cap) / 4;
-
     // Adjust rate to make sure the rate >= floor
     uint256 floor = rateFloor[id];
     if (avgRate < floor) avgRate = floor;
+
+    // if (floor*4)>(cap/4), rateAtTarget will be set to cap / 4
+    if (endRateAtTarget < int256(floor) * 4) endRateAtTarget = int256(floor) * 4;
+    if (endRateAtTarget > int256(_cap) / 4) endRateAtTarget = int256(_cap) / 4;
 
     return (avgRate, endRateAtTarget);
   }

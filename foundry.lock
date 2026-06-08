@@ -5,6 +5,9 @@
       "rev": "1801b0541f4fda118a10798fd3486bb7051c5dd6"
     }
   },
+  "lib/lista-dao-contracts.git": {
+    "rev": "3ac9ef279a7c89908a6e03ed8a1c52738f94601e"
+  },
   "lib/murky": {
     "tag": {
       "name": "v0.1.0",

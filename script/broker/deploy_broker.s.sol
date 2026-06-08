@@ -2,13 +2,15 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
+import { DeployBase } from "../DeployBase.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { LendingBroker } from "../../src/broker/LendingBroker.sol";
 
-contract DeployLendingBroker is Script {
+contract DeployLendingBroker is DeployBase {
   address moolah;
   address interestRelayer;
   address oracle;
+  address wbnb;
   address timelock;
   address manager;
   address pauser;
@@ -20,6 +22,7 @@ contract DeployLendingBroker is Script {
     moolah = vm.envAddress("MOOLAH");
     interestRelayer = vm.envAddress("INTEREST_RELAYER");
     oracle = vm.envAddress("ORACLE");
+    wbnb = vm.envOr("WBNB", address(0));
     timelock = vm.envAddress("TIMELOCK");
     manager = vm.envAddress("MANAGER");
     pauser = vm.envAddress("PAUSER");
@@ -29,13 +32,13 @@ contract DeployLendingBroker is Script {
   }
 
   function run() public {
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+    uint256 deployerPrivateKey = _deployerKey();
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
 
     // Deploy LendingBroker implementation
-    LendingBroker impl = new LendingBroker(moolah, interestRelayer, oracle);
+    LendingBroker impl = new LendingBroker(moolah, interestRelayer, oracle, wbnb);
     console.log("LendingBroker implementation: ", address(impl));
 
     // Deploy LendingBroker proxy
@@ -56,8 +59,8 @@ contract DeployLendingBroker is Script {
     // grant roles to manager and admin
     bytes32 MANAGER = keccak256("MANAGER");
     bytes32 DEFAULT_ADMIN_ROLE = 0x0000000000000000000000000000000000000000000000000000000000000000;
-    LendingBroker(address(proxy)).grantRole(MANAGER, manager);
-    LendingBroker(address(proxy)).grantRole(DEFAULT_ADMIN_ROLE, timelock);
+    LendingBroker(payable(address(proxy))).grantRole(MANAGER, manager);
+    LendingBroker(payable(address(proxy))).grantRole(DEFAULT_ADMIN_ROLE, timelock);
 
     vm.stopBroadcast();
   }

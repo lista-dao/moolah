@@ -18,7 +18,7 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
   // ------- State variables -------
 
   // broker address => rate config
-  mapping(address => RateConfig) brokers;
+  mapping(address => RateConfig) public brokers;
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor() {

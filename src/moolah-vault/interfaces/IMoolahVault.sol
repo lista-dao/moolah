@@ -117,10 +117,13 @@ interface IMoolahVaultBase {
   /// @notice Sets the address of the provider.
   function setProvider(address _provider) external;
 
-  /// @notice Add account to whitelist
-  function addWhiteList(address account) external;
-  /// @notice Remove account from whitelist
-  function removeWhiteList(address account) external;
+  /// @notice Set a custom vault name.
+  function setName(string calldata newName) external;
+  /// @notice Set a custom vault symbol.
+  function setSymbol(string calldata newSymbol) external;
+
+  /// @notice Add or remove an account from the whitelist.
+  function setWhiteList(address account, bool enabled) external;
   /// @notice Returns the list of whitelisted accounts.
   function getWhiteList() external view returns (address[] memory);
   /// @notice Returns `true` if `account` is whitelisted.

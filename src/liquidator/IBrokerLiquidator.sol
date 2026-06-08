@@ -38,6 +38,14 @@ interface IBrokerLiquidator {
     bytes calldata swapData
   ) external;
 
+  function sellBNB(
+    address pair,
+    address tokenOut,
+    uint256 amountIn,
+    uint256 amountOutMin,
+    bytes calldata swapData
+  ) external;
+
   function setTokenWhitelist(address token, bool status) external;
 
   function setMarketToBroker(bytes32 id, address broker, bool status) external;
@@ -49,4 +57,6 @@ interface IBrokerLiquidator {
   function marketIdToBroker(bytes32 id) external view returns (address);
 
   function brokerToMarketId(address broker) external view returns (bytes32);
+
+  function tokenWhitelist(address token) external view returns (bool);
 }

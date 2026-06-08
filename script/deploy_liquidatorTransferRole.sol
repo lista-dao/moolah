@@ -1,12 +1,13 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
+import { DeployBase } from "./DeployBase.sol";
 
 import { Liquidator } from "liquidator/Liquidator.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 
-contract LiquidatorConfigDeploy is Script {
+contract LiquidatorConfigDeploy is DeployBase {
   using MarketParamsLib for MarketParams;
   Liquidator liquidator = Liquidator(payable(0x6a87C15598929B2db22cF68a9a0dDE5Bf297a59a));
 
@@ -17,7 +18,7 @@ contract LiquidatorConfigDeploy is Script {
   bytes32 public constant MANAGER = keccak256("MANAGER");
 
   function run() public {
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+    uint256 deployerPrivateKey = _deployerKey();
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 

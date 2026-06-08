@@ -2,10 +2,11 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Script.sol";
+import { DeployBase } from "../DeployBase.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { BrokerLiquidator } from "../../src/liquidator/BrokerLiquidator.sol";
 
-contract DeployBrokerLiquidator is Script {
+contract DeployBrokerLiquidator is DeployBase {
   address timelock;
   address manager;
   address bot;
@@ -19,7 +20,7 @@ contract DeployBrokerLiquidator is Script {
   }
 
   function run() public {
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+    uint256 deployerPrivateKey = _deployerKey();
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
@@ -38,8 +39,8 @@ contract DeployBrokerLiquidator is Script {
     // grant roles to manager and admin
     bytes32 MANAGER = keccak256("MANAGER");
     bytes32 DEFAULT_ADMIN_ROLE = 0x0000000000000000000000000000000000000000000000000000000000000000;
-    BrokerLiquidator(address(proxy)).grantRole(MANAGER, manager);
-    BrokerLiquidator(address(proxy)).grantRole(DEFAULT_ADMIN_ROLE, timelock);
+    BrokerLiquidator(payable(address(proxy))).grantRole(MANAGER, manager);
+    BrokerLiquidator(payable(address(proxy))).grantRole(DEFAULT_ADMIN_ROLE, timelock);
 
     vm.stopBroadcast();
   }

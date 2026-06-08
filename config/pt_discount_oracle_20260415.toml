@@ -1,0 +1,20 @@
+[bsc]
+enendpoint_url = "${BSC_RPC_URL}"
+
+[bsc.address]
+### PT-USDG-28MAY2026, PT-reUSD-25JUN2026, PT-sUSDe-7MAY2026(ETH), PT-sUSDe-18JUN2026(Plasma)
+pt = [
+  "${ptUSDG28MAY2026}",
+  "${ptReUSD25JUN2026}",
+  "${ptSUSDe7MAY2026ETH}",
+  "${ptSUSDe18JUN2026Plasma}",
+]
+
+[bsc.uint]
+### Linear discounted rates: 17%, 27%, 25%, 15%
+discount = [
+  "${discount_17}",
+  "${discount_27}",
+  "${discount_25}",
+  "${discount_15}",
+]
