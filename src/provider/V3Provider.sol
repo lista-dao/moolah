@@ -8,9 +8,8 @@ import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import { TickMath } from "./libraries/TickMath.sol";
-import { SqrtPriceMath } from "./libraries/SqrtPriceMath.sol";
-import { LiquidityAmounts } from "./libraries/LiquidityAmounts.sol";
+import { TickMath } from "lista-dao-contracts/libraries/TickMath.sol";
+import { LiquidityAmounts } from "lista-dao-contracts/libraries/LiquidityAmounts.sol";
 
 import { IMoolah, MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
@@ -40,10 +39,12 @@ import { ISlisBNBxMinter } from "../utils/interfaces/ISlisBNBx.sol";
  *   - Only Moolah may transfer shares (prevents bypassing the vault on withdrawal).
  *
  * Dependencies:
- *   lib/lista-v3 (submodule)        - IListaV3Factory / IListaV3Pool interfaces
- *   src/provider/libraries/*        - 0.8.34 ports of the V3 math libs (TickMath, SqrtPriceMath,
- *                                     LiquidityAmounts, …); the lista-v3 originals are 0.7.6 and
- *                                     cannot compile here.
+ *   lib/lista-v3 (submodule)             - IListaV3Factory / IListaV3Pool interfaces (0.7.6 originals
+ *                                          are interfaces only, so they compile under 0.8.34).
+ *   lib/lista-dao-contracts.git (submod) - audited 0.8 math libs TickMath + LiquidityAmounts
+ *                                          (LiquidityAmounts.getAmountsForLiquidity replaces the
+ *                                          former SqrtPriceMath path; lista-dao-contracts ships no
+ *                                          0.8 SqrtPriceMath, and it is no longer needed).
  *   src/provider/interfaces/INonfungiblePositionManager.sol - minimal local NPM interface.
  */
 contract V3Provider is
@@ -1004,26 +1005,17 @@ contract V3Provider is
   }
 
   /// @dev Computes token amounts for a given liquidity position at sqrtPriceX96.
-  ///      Delegates to SqrtPriceMath from uniswap/v3-core for overflow-safe arithmetic.
+  ///      Delegates to LiquidityAmounts.getAmountsForLiquidity (lista-dao-contracts, audited 0.8).
+  ///      This is mathematically identical to the previous SqrtPriceMath.getAmount{0,1}Delta(..., false)
+  ///      implementation: getAmount0ForLiquidity == getAmount0Delta(roundUp=false) and likewise for
+  ///      token1, with the same below/inside/above-range branching.
   function _getAmountsForLiquidity(
     uint160 sqrtPriceX96,
     uint160 sqrtRatioAX96,
     uint160 sqrtRatioBX96,
     uint128 liquidity
   ) internal pure returns (uint256 amount0, uint256 amount1) {
-    if (sqrtRatioAX96 > sqrtRatioBX96) (sqrtRatioAX96, sqrtRatioBX96) = (sqrtRatioBX96, sqrtRatioAX96);
-
-    if (sqrtPriceX96 <= sqrtRatioAX96) {
-      // Current price below range: position is fully TOKEN0.
-      amount0 = SqrtPriceMath.getAmount0Delta(sqrtRatioAX96, sqrtRatioBX96, liquidity, false);
-    } else if (sqrtPriceX96 < sqrtRatioBX96) {
-      // Current price inside range.
-      amount0 = SqrtPriceMath.getAmount0Delta(sqrtPriceX96, sqrtRatioBX96, liquidity, false);
-      amount1 = SqrtPriceMath.getAmount1Delta(sqrtRatioAX96, sqrtPriceX96, liquidity, false);
-    } else {
-      // Current price above range: position is fully TOKEN1.
-      amount1 = SqrtPriceMath.getAmount1Delta(sqrtRatioAX96, sqrtRatioBX96, liquidity, false);
-    }
+    return LiquidityAmounts.getAmountsForLiquidity(sqrtPriceX96, sqrtRatioAX96, sqrtRatioBX96, liquidity);
   }
 
   /* ──────────────────────── upgrade guard ─────────────────────────── */
