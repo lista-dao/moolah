@@ -8,17 +8,17 @@ import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import { TickMath } from "../dex/v3/core/libraries/TickMath.sol";
-import { SqrtPriceMath } from "../dex/v3/core/libraries/SqrtPriceMath.sol";
-import { LiquidityAmounts } from "../dex/v3/periphery/libraries/LiquidityAmounts.sol";
+import { TickMath } from "./libraries/TickMath.sol";
+import { SqrtPriceMath } from "./libraries/SqrtPriceMath.sol";
+import { LiquidityAmounts } from "./libraries/LiquidityAmounts.sol";
 
 import { IMoolah, MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { IOracle, TokenConfig } from "moolah/interfaces/IOracle.sol";
 
-import { INonfungiblePositionManager } from "../dex/v3/periphery/interfaces/INonfungiblePositionManager.sol";
-import { IListaV3Factory } from "../dex/v3/core/interfaces/IListaV3Factory.sol";
-import { IListaV3Pool } from "../dex/v3/core/interfaces/IListaV3Pool.sol";
+import { INonfungiblePositionManager } from "./interfaces/INonfungiblePositionManager.sol";
+import { IListaV3Factory } from "lista-v3/core/interfaces/IListaV3Factory.sol";
+import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
 import { IWBNB } from "./interfaces/IWBNB.sol";
 import { IV3Provider } from "./interfaces/IV3Provider.sol";
 import { ISlisBNBxMinter } from "../utils/interfaces/ISlisBNBx.sol";
@@ -39,8 +39,12 @@ import { ISlisBNBxMinter } from "../utils/interfaces/ISlisBNBx.sol";
  *   - Fees are compounded into the position before every deposit/withdraw/rebalance.
  *   - Only Moolah may transfer shares (prevents bypassing the vault on withdrawal).
  *
- * Dependencies (add to lib/ or remappings):
- *   uniswap/v3-core  - TickMath
+ * Dependencies:
+ *   lib/lista-v3 (submodule)        - IListaV3Factory / IListaV3Pool interfaces
+ *   src/provider/libraries/*        - 0.8.34 ports of the V3 math libs (TickMath, SqrtPriceMath,
+ *                                     LiquidityAmounts, …); the lista-v3 originals are 0.7.6 and
+ *                                     cannot compile here.
+ *   src/provider/interfaces/INonfungiblePositionManager.sol - minimal local NPM interface.
  */
 contract V3Provider is
   ERC20Upgradeable,

@@ -11,3 +11,4 @@ forge-std=lib/forge-std/src
 timelock=src/timelock
 revenue=src/revenue
 murky=lib/murky
+lista-v3/=lib/lista-v3/src/
