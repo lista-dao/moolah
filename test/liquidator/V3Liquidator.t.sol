@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import { V3Provider } from "../../src/provider/V3Provider.sol";
+import { SlisBNBV3Provider } from "../../src/provider/SlisBNBV3Provider.sol";
 import { V3Liquidator } from "../../src/liquidator/V3Liquidator.sol";
 import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
@@ -43,7 +43,7 @@ contract V3LiquidatorTest is Test {
 
   /* ───────────────────────── test contracts ───────────────────────── */
   Moolah moolah;
-  V3Provider provider;
+  SlisBNBV3Provider provider;
   V3Liquidator liquidator;
   MockOneInch mockSwap;
   MarketParams marketParams;
@@ -66,16 +66,15 @@ contract V3LiquidatorTest is Test {
     UUPSUpgradeable(MOOLAH_PROXY).upgradeToAndCall(newImpl, bytes(""));
     moolah = Moolah(MOOLAH_PROXY);
 
-    // Deploy V3Provider.
-    (, int24 currentTick, , , , , ) = IListaV3Pool(POOL).slot0();
-    V3Provider implP = new V3Provider(MOOLAH_PROXY, NPM, USDC, WBNB, FEE, TWAP_PERIOD);
-    provider = V3Provider(
+    // Deploy SlisBNBV3Provider.
+    SlisBNBV3Provider implP = new SlisBNBV3Provider(MOOLAH_PROXY, NPM, USDC, WBNB, FEE, TWAP_PERIOD);
+    provider = SlisBNBV3Provider(
       payable(
         new ERC1967Proxy(
           address(implP),
           abi.encodeCall(
-            V3Provider.initialize,
-            (admin, manager, bot, RESILIENT_ORACLE, currentTick - 500, currentTick + 500, "V3LP USDC/WBNB", "v3LP")
+            SlisBNBV3Provider.initialize,
+            (admin, manager, bot, RESILIENT_ORACLE, "V3LP USDC/WBNB", "v3LP")
           )
         )
       )
@@ -130,7 +129,7 @@ contract V3LiquidatorTest is Test {
   ) internal returns (uint256 shares, uint256 used0, uint256 used1) {
     deal(USDC, _user, amount0);
     deal(WBNB, _user, amount1);
-    (, uint256 exp0, uint256 exp1) = provider.previewDeposit(amount0, amount1);
+    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
     vm.startPrank(_user);
     IERC20(USDC).approve(address(provider), amount0);
     IERC20(WBNB).approve(address(provider), amount1);
@@ -347,7 +346,7 @@ contract V3LiquidatorTest is Test {
       borrowed * 2 // amountOutMin — enough to cover repayment
     );
 
-    // token1 (WBNB) swap: V3Provider unwraps WBNB → native BNB, V3Liquidator sends it via call{value}.
+    // token1 (WBNB) swap: SlisBNBV3Provider unwraps WBNB → native BNB, V3Liquidator sends it via call{value}.
     // amountIn=0 so msg.value >= 0 always passes; MockOneInch refunds BNB to liquidator, gives 0 lisUSD.
     bytes memory swap1Data = abi.encodeWithSelector(
       mockSwap.swap.selector,
@@ -431,7 +430,7 @@ contract V3LiquidatorTest is Test {
     uint256 heldShares = provider.balanceOf(address(liquidator));
     assertGt(heldShares, 0, "setup: liquidator holds shares");
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeem(heldShares);
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(heldShares);
 
     vm.prank(bot);
     (uint256 out0, uint256 out1) = liquidator.redeemV3Shares(

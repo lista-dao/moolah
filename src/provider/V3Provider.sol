@@ -2,7 +2,8 @@
 pragma solidity 0.8.34;
 
 import { ERC20Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
-import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
+import { ERC4626Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
+import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -16,41 +17,43 @@ import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { IOracle, TokenConfig } from "moolah/interfaces/IOracle.sol";
 
 import { INonfungiblePositionManager } from "./interfaces/INonfungiblePositionManager.sol";
+import { V3PositionLib } from "./libraries/V3PositionLib.sol";
 import { IListaV3Factory } from "lista-v3/core/interfaces/IListaV3Factory.sol";
 import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
 import { IWBNB } from "./interfaces/IWBNB.sol";
 import { IV3Provider } from "./interfaces/IV3Provider.sol";
-import { ISlisBNBxMinter } from "../utils/interfaces/ISlisBNBx.sol";
 
 /**
  * @title V3Provider
  * @author Lista DAO
- * @notice Manages a single Uniswap V3 / PancakeSwap V3 concentrated liquidity position.
- *         Issues ERC20 shares representing pro-rata ownership of the position.
- *         Registered as a Moolah provider so it can supply and withdraw collateral
- *         on behalf of users without requiring per-user Moolah authorization.
+ * @notice Generic, abstract base that manages a single Uniswap V3 / PancakeSwap V3 concentrated
+ *         liquidity position and issues ERC20 shares representing pro-rata ownership of it.
+ *         Registered as a Moolah provider so it can supply and withdraw collateral on behalf of
+ *         users without requiring per-user Moolah authorization.
  *
  * Architecture:
  *   - Shares (this contract's ERC20 token) are the Moolah collateral token for the market.
  *   - On deposit:  tokens → V3 liquidity → mint shares → Moolah.supplyCollateral(onBehalf)
  *   - On withdraw: Moolah.withdrawCollateral → burn shares → remove V3 liquidity → tokens to receiver
  *   - On liquidation: Moolah sends shares to liquidator; liquidator calls redeemShares()
- *   - Fees are compounded into the position before every deposit/withdraw/rebalance.
+ *   - Fees are compounded into the position before every deposit/withdraw/maintenance operation.
  *   - Only Moolah may transfer shares (prevents bypassing the vault on withdrawal).
  *
+ * Extension points (overridden by pool/asset-specific subclasses):
+ *   - _afterCollateralChange(id, account): hook called after deposit / withdraw / liquidation,
+ *     e.g. to mirror the position into an external reward system.
+ *   - peek / getTokenConfig / receive: virtual so subclasses can specialize pricing and native
+ *     token acceptance.
+ *
  * Dependencies:
- *   lib/lista-v3 (submodule)             - IListaV3Factory / IListaV3Pool interfaces (0.7.6 originals
- *                                          are interfaces only, so they compile under 0.8.34).
- *   lib/lista-dao-contracts.git (submod) - audited 0.8 math libs TickMath + LiquidityAmounts
- *                                          (LiquidityAmounts.getAmountsForLiquidity replaces the
- *                                          former SqrtPriceMath path; lista-dao-contracts ships no
- *                                          0.8 SqrtPriceMath, and it is no longer needed).
+ *   lib/lista-v3 (submodule)             - IListaV3Factory / IListaV3Pool interfaces.
+ *   lib/lista-dao-contracts.git (submod) - audited 0.8 math libs TickMath + LiquidityAmounts.
  *   src/provider/interfaces/INonfungiblePositionManager.sol - minimal local NPM interface.
  */
-contract V3Provider is
-  ERC20Upgradeable,
+abstract contract V3Provider is
+  ERC4626Upgradeable,
   UUPSUpgradeable,
-  AccessControlEnumerableUpgradeable,
+  AccessControlUpgradeable,
   ReentrancyGuardUpgradeable,
   IOracle,
   IV3Provider
@@ -89,6 +92,9 @@ contract V3Provider is
   ///      and unwrapped on exit when one of the pool tokens is WBNB.
   address public constant WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
 
+  bytes32 public constant MANAGER = keccak256("MANAGER");
+  bytes32 public constant BOT = keccak256("BOT");
+
   /* ──────────────────────────── storage ───────────────────────────── */
 
   /// @dev Resilient oracle used to price TOKEN0 and TOKEN1 individually (8-decimal USD)
@@ -111,30 +117,11 @@ contract V3Provider is
   ///      Tracked separately to avoid sweeping arbitrary token donations.
   uint256 public idleToken1;
 
-  /// @dev user account > market id > amount of collateral(shares) deposited
-  mapping(address => mapping(Id => uint256)) public userMarketDeposit;
-
-  /// @dev user account > total amount of collateral(shares) deposited
-  mapping(address => uint256) public userTotalDeposit;
-
-  /// @dev slisBNBxMinter address
-  address public slisBNBxMinter;
-
-  /// @dev Maximum allowed absolute tick deviation between slot0 and TWAP.
-  ///      When non-zero, rebalance() reverts if |spotTick - twapTick| exceeds this value.
-  ///      Default 0 = no guard (backwards compatible).
-  uint24 public maxTickDeviation;
-
-  /// @dev Virtual address used by the resilient oracle to price native BNB.
-  address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
-
-  bytes32 public constant MANAGER = keccak256("MANAGER");
-  bytes32 public constant BOT = keccak256("BOT");
+  /// @dev Reserved storage so future base-contract variables can be added without shifting
+  ///      subclass storage. Reduce the array size when adding a new variable.
+  uint256[50] private __gap;
 
   /* ───────────────────────────── events ───────────────────────────── */
-
-  event SlisBNBxMinterChanged(address indexed minter);
-  event MaxTickDeviationChanged(uint24 maxTickDeviation);
 
   event Deposit(
     address indexed onBehalf,
@@ -151,9 +138,32 @@ contract V3Provider is
     address receiver,
     Id indexed marketId
   );
+  event SharesWithdrawn(address indexed onBehalf, uint256 shares, address receiver, Id indexed marketId);
+  event SharesSupplied(address indexed supplier, address indexed onBehalf, uint256 shares, Id indexed marketId);
   event SharesRedeemed(address indexed redeemer, uint256 shares, uint256 amount0, uint256 amount1, address receiver);
   event Compounded(uint256 fees0, uint256 fees1, uint128 liquidityAdded);
   event Rebalanced(int24 oldTickLower, int24 oldTickUpper, int24 newTickLower, int24 newTickUpper, uint256 newTokenId);
+
+  /* ───────────────────────────── errors ───────────────────────────── */
+
+  error ZeroAddress();
+  error TokenOrderInvalid();
+  error ZeroFee();
+  error ZeroTwapPeriod();
+  error PoolDoesNotExist();
+  error InvalidTickRange();
+  error OnlyMoolah();
+  error InvalidCollateralToken();
+  error PoolHasNoWBNB();
+  error ZeroAmounts();
+  error ZeroLiquidity();
+  error ZeroShares();
+  error Unauthorized();
+  error InsufficientShares();
+  error InvalidMarket();
+  error BnbTransferFailed();
+  error NotWBNB();
+  error StandardEntryDisabled();
 
   /* ─────────────────────────── constructor ────────────────────────── */
 
@@ -166,19 +176,19 @@ contract V3Provider is
     uint24 _fee,
     uint32 _twapPeriod
   ) {
-    require(_moolah != address(0), "zero address");
-    require(_positionManager != address(0), "zero address");
-    require(_token0 != address(0) && _token1 != address(0), "zero address");
-    require(_token0 < _token1, "token0 must be < token1");
-    require(_fee > 0, "zero fee");
-    require(_twapPeriod > 0, "zero twap period");
+    if (_moolah == address(0)) revert ZeroAddress();
+    if (_positionManager == address(0)) revert ZeroAddress();
+    if (_token0 == address(0) || _token1 == address(0)) revert ZeroAddress();
+    if (_token0 >= _token1) revert TokenOrderInvalid();
+    if (_fee == 0) revert ZeroFee();
+    if (_twapPeriod == 0) revert ZeroTwapPeriod();
 
     address _pool = IListaV3Factory(INonfungiblePositionManager(_positionManager).factory()).getPool(
       _token0,
       _token1,
       _fee
     );
-    require(_pool != address(0), "pool does not exist");
+    if (_pool == address(0)) revert PoolDoesNotExist();
 
     MOOLAH = IMoolah(_moolah);
     POSITION_MANAGER = INonfungiblePositionManager(_positionManager);
@@ -196,8 +206,10 @@ contract V3Provider is
   /* ─────────────────────────── initializer ────────────────────────── */
 
   /**
+   * @dev Shared initializer for subclasses. Subclasses expose an external `initialize`
+   *      guarded by the `initializer` modifier and forward to this.
    * @param _admin            Default admin (can upgrade, grant roles)
-   * @param _manager          Manager role (can rebalance position range)
+   * @param _manager          Manager role (can configure provider-level risk controls)
    * @param _bot              Bot address granted BOT role (can trigger rebalance)
    * @param _resilientOracle  Resilient oracle for pricing TOKEN0 and TOKEN1
    * @param _tickLower        Initial position lower tick
@@ -205,7 +217,7 @@ contract V3Provider is
    * @param _name             ERC20 name for shares token
    * @param _symbol           ERC20 symbol for shares token
    */
-  function initialize(
+  function __V3Provider_init(
     address _admin,
     address _manager,
     address _bot,
@@ -214,14 +226,14 @@ contract V3Provider is
     int24 _tickUpper,
     string calldata _name,
     string calldata _symbol
-  ) external initializer {
-    require(
-      _admin != address(0) && _manager != address(0) && _bot != address(0) && _resilientOracle != address(0),
-      "zero address"
-    );
-    require(_tickLower < _tickUpper, "invalid tick range");
+  ) internal onlyInitializing {
+    if (_admin == address(0) || _manager == address(0) || _bot == address(0) || _resilientOracle == address(0)) {
+      revert ZeroAddress();
+    }
+    if (_tickLower >= _tickUpper) revert InvalidTickRange();
 
     __ERC20_init(_name, _symbol);
+    __ERC4626_init(IERC20(WBNB)); // ERC-4626 shell: numéraire asset is WBNB (BNB)
     __AccessControl_init();
     __ReentrancyGuard_init();
 
@@ -239,15 +251,15 @@ contract V3Provider is
 
   /// @dev Only Moolah may transfer shares. This prevents users from transferring
   ///      shares directly without going through withdraw(), which would orphan V3 liquidity.
-  function transfer(address to, uint256 value) public override returns (bool) {
-    require(msg.sender == address(MOOLAH), "only moolah");
+  function transfer(address to, uint256 value) public override(ERC20Upgradeable, IERC20) returns (bool) {
+    if (msg.sender != address(MOOLAH)) revert OnlyMoolah();
     _transfer(msg.sender, to, value);
     return true;
   }
 
   /// @dev Only Moolah may call transferFrom (e.g. when pulling collateral on supplyCollateral).
-  function transferFrom(address from, address to, uint256 value) public override returns (bool) {
-    require(msg.sender == address(MOOLAH), "only moolah");
+  function transferFrom(address from, address to, uint256 value) public override(ERC20Upgradeable, IERC20) returns (bool) {
+    if (msg.sender != address(MOOLAH)) revert OnlyMoolah();
     _transfer(from, to, value);
     return true;
   }
@@ -275,8 +287,8 @@ contract V3Provider is
     uint256 amount1Min,
     address onBehalf
   ) external payable nonReentrant returns (uint256 shares, uint256 amount0Used, uint256 amount1Used) {
-    require(marketParams.collateralToken == address(this), "invalid collateral token");
-    require(onBehalf != address(0), "zero address");
+    if (marketParams.collateralToken != address(this)) revert InvalidCollateralToken();
+    if (onBehalf == address(0)) revert ZeroAddress();
 
     // ── Native token handling ──────────────────────────────────────────
     // If the caller sends BNB, wrap it and use it in place of the pool token
@@ -286,7 +298,7 @@ contract V3Provider is
     uint256 _amount1Desired = amount1Desired;
 
     if (msg.value > 0) {
-      require(TOKEN0 == WBNB || TOKEN1 == WBNB, "pool has no WBNB");
+      if (!(TOKEN0 == WBNB || TOKEN1 == WBNB)) revert PoolHasNoWBNB();
       if (TOKEN0 == WBNB) {
         _amount0Desired = msg.value;
       } else {
@@ -295,23 +307,24 @@ contract V3Provider is
       IWBNB(WBNB).deposit{ value: msg.value }();
     }
 
-    require(_amount0Desired > 0 || _amount1Desired > 0, "zero amounts");
+    if (_amount0Desired == 0 && _amount1Desired == 0) revert ZeroAmounts();
 
     // Reject upfront if the supplied amounts yield zero liquidity at the current price.
     // This catches one-sided deposits in the wrong direction (e.g. token0-only when price
     // is above tickUpper) before any tokens are pulled from the caller.
     {
       (uint160 sqrtPriceX96, , , , , , ) = IListaV3Pool(POOL).slot0();
-      require(
+      if (
         LiquidityAmounts.getLiquidityForAmounts(
           sqrtPriceX96,
           TickMath.getSqrtRatioAtTick(tickLower),
           TickMath.getSqrtRatioAtTick(tickUpper),
           _amount0Desired,
           _amount1Desired
-        ) > 0,
-        "zero liquidity"
-      );
+        ) == 0
+      ) {
+        revert ZeroLiquidity();
+      }
     }
 
     // Pull ERC-20 tokens from caller.
@@ -333,41 +346,32 @@ contract V3Provider is
     uint128 liquidityAdded;
     if (tokenId == 0) {
       // No position exists yet — mint a fresh V3 NFT.
-      IERC20(TOKEN0).safeIncreaseAllowance(address(POSITION_MANAGER), _amount0Desired);
-      IERC20(TOKEN1).safeIncreaseAllowance(address(POSITION_MANAGER), _amount1Desired);
-
-      (tokenId, liquidityAdded, amount0Used, amount1Used) = POSITION_MANAGER.mint(
-        INonfungiblePositionManager.MintParams({
-          token0: TOKEN0,
-          token1: TOKEN1,
-          fee: FEE,
-          tickLower: tickLower,
-          tickUpper: tickUpper,
-          amount0Desired: _amount0Desired,
-          amount1Desired: _amount1Desired,
-          amount0Min: amount0Min,
-          amount1Min: amount1Min,
-          recipient: address(this),
-          deadline: block.timestamp
-        })
+      (tokenId, liquidityAdded, amount0Used, amount1Used) = V3PositionLib.mint(
+        POSITION_MANAGER,
+        TOKEN0,
+        TOKEN1,
+        FEE,
+        tickLower,
+        tickUpper,
+        _amount0Desired,
+        _amount1Desired,
+        amount0Min,
+        amount1Min
       );
 
       // First depositor: shares 1:1 with liquidity units.
       shares = uint256(liquidityAdded);
     } else {
       // Existing position — increase liquidity.
-      IERC20(TOKEN0).safeIncreaseAllowance(address(POSITION_MANAGER), _amount0Desired);
-      IERC20(TOKEN1).safeIncreaseAllowance(address(POSITION_MANAGER), _amount1Desired);
-
-      (liquidityAdded, amount0Used, amount1Used) = POSITION_MANAGER.increaseLiquidity(
-        INonfungiblePositionManager.IncreaseLiquidityParams({
-          tokenId: tokenId,
-          amount0Desired: _amount0Desired,
-          amount1Desired: _amount1Desired,
-          amount0Min: amount0Min,
-          amount1Min: amount1Min,
-          deadline: block.timestamp
-        })
+      (liquidityAdded, amount0Used, amount1Used) = V3PositionLib.increaseLiquidity(
+        POSITION_MANAGER,
+        TOKEN0,
+        TOKEN1,
+        tokenId,
+        _amount0Desired,
+        _amount1Desired,
+        amount0Min,
+        amount1Min
       );
 
       // Subsequent depositors: proportional to liquidity contributed vs pre-deposit total.
@@ -378,7 +382,7 @@ contract V3Provider is
       }
     }
 
-    require(shares > 0, "zero shares");
+    if (shares == 0) revert ZeroShares();
 
     // Refund any tokens not consumed by the V3 pool (ratio mismatch).
     // WBNB refunds are unwrapped back to BNB before sending.
@@ -394,7 +398,7 @@ contract V3Provider is
     _approve(address(this), address(MOOLAH), shares);
     MOOLAH.supplyCollateral(marketParams, shares, onBehalf, "");
 
-    _syncPosition(marketParams.id(), onBehalf);
+    _afterCollateralChange(marketParams.id(), onBehalf);
 
     emit Deposit(onBehalf, amount0Used, amount1Used, shares, marketParams.id());
   }
@@ -418,22 +422,73 @@ contract V3Provider is
     address onBehalf,
     address receiver
   ) external nonReentrant returns (uint256 amount0, uint256 amount1) {
-    require(marketParams.collateralToken == address(this), "invalid collateral token");
-    require(shares > 0, "zero shares");
-    require(receiver != address(0), "zero address");
-    require(_isSenderAuthorized(onBehalf), "unauthorized");
+    if (marketParams.collateralToken != address(this)) revert InvalidCollateralToken();
+    if (shares == 0) revert ZeroShares();
+    if (receiver == address(0)) revert ZeroAddress();
+    if (!_isSenderAuthorized(onBehalf)) revert Unauthorized();
 
     // Moolah decrements position.collateral and transfers shares to address(this).
     // Our transfer() allows msg.sender == MOOLAH, so this succeeds.
     MOOLAH.withdrawCollateral(marketParams, shares, onBehalf, address(this));
 
-    _syncPosition(marketParams.id(), onBehalf);
+    _afterCollateralChange(marketParams.id(), onBehalf);
 
     _collectAndCompound();
 
     (amount0, amount1) = _burnSharesAndRemoveLiquidity(shares, minAmount0, minAmount1, receiver);
 
     emit Withdraw(onBehalf, shares, amount0, amount1, receiver, marketParams.id());
+  }
+
+  /**
+   * @notice Withdraw provider shares from Moolah collateral without redeeming the underlying V3 position.
+   * @dev Caller must be `onBehalf` or authorized via MOOLAH.isAuthorized().
+   *      This enables moving the same vLP shares to another Moolah market through supplyShares().
+   * @param marketParams Moolah market (collateralToken must equal address(this))
+   * @param shares       Number of shares to withdraw from the Moolah collateral position
+   * @param onBehalf     Owner of the Moolah collateral position
+   * @param receiver     Address to receive the provider shares
+   */
+  function withdrawShares(
+    MarketParams calldata marketParams,
+    uint256 shares,
+    address onBehalf,
+    address receiver
+  ) external nonReentrant {
+    if (marketParams.collateralToken != address(this)) revert InvalidCollateralToken();
+    if (shares == 0) revert ZeroShares();
+    if (receiver == address(0)) revert ZeroAddress();
+    if (!_isSenderAuthorized(onBehalf)) revert Unauthorized();
+
+    MOOLAH.withdrawCollateral(marketParams, shares, onBehalf, address(this));
+
+    _afterCollateralChange(marketParams.id(), onBehalf);
+
+    _transfer(address(this), receiver, shares);
+
+    emit SharesWithdrawn(onBehalf, shares, receiver, marketParams.id());
+  }
+
+  /**
+   * @notice Supply wallet-held provider shares as Moolah collateral.
+   * @dev Useful after withdrawShares() when moving vLP collateral between isolated markets.
+   * @param marketParams Moolah market (collateralToken must equal address(this))
+   * @param shares       Number of wallet-held provider shares to supply
+   * @param onBehalf     Moolah position owner to credit collateral to
+   */
+  function supplyShares(MarketParams calldata marketParams, uint256 shares, address onBehalf) external nonReentrant {
+    if (marketParams.collateralToken != address(this)) revert InvalidCollateralToken();
+    if (shares == 0) revert ZeroShares();
+    if (onBehalf == address(0)) revert ZeroAddress();
+    if (balanceOf(msg.sender) < shares) revert InsufficientShares();
+
+    _transfer(msg.sender, address(this), shares);
+    _approve(address(this), address(MOOLAH), shares);
+    MOOLAH.supplyCollateral(marketParams, shares, onBehalf, "");
+
+    _afterCollateralChange(marketParams.id(), onBehalf);
+
+    emit SharesSupplied(msg.sender, onBehalf, shares, marketParams.id());
   }
 
   /**
@@ -450,9 +505,9 @@ contract V3Provider is
     uint256 minAmount1,
     address receiver
   ) external nonReentrant returns (uint256 amount0, uint256 amount1) {
-    require(shares > 0, "zero shares");
-    require(receiver != address(0), "zero address");
-    require(balanceOf(msg.sender) >= shares, "insufficient shares");
+    if (shares == 0) revert ZeroShares();
+    if (receiver == address(0)) revert ZeroAddress();
+    if (balanceOf(msg.sender) < shares) revert InsufficientShares();
 
     _collectAndCompound();
 
@@ -469,134 +524,14 @@ contract V3Provider is
   /* ──────────────────── Moolah provider callback ──────────────────── */
 
   /**
-   * @dev Called by Moolah after a liquidation event.
-   *      Syncs the borrower's deposit tracking and triggers slisBNBx rebalance if configured.
-   *      Moolah already transferred the seized shares to the liquidator via transfer().
+   * @dev Called by Moolah after a liquidation event. Runs the _afterCollateralChange hook so
+   *      subclasses can resync external state. Moolah already transferred the seized shares to
+   *      the liquidator via transfer().
    */
   function liquidate(Id id, address borrower) external {
-    require(msg.sender == address(MOOLAH), "only moolah");
-    require(MOOLAH.idToMarketParams(id).collateralToken == address(this), "invalid market");
-    _syncPosition(id, borrower);
-  }
-
-  /* ───────────────────── manager: rebalance range ─────────────────── */
-
-  /**
-   * @notice Move the position to a new tick range. Collects all fees, removes all
-   *         liquidity, burns the old NFT, and mints a new position at the new ticks.
-   *         Share count is unchanged — each share now represents the new range.
-   * @dev    Caller must hold MANAGER role. A price movement between decreaseLiquidity
-   *         and the new mint is the primary slippage risk; minAmount0/minAmount1 guard against it.
-   * @param _tickLower      New lower tick
-   * @param _tickUpper      New upper tick
-   * @param minAmount0      Min TOKEN0 to receive when removing old liquidity
-   * @param minAmount1      Min TOKEN1 to receive when removing old liquidity
-   * @param amount0Desired  TOKEN0 to reinvest into the new position. Must not exceed
-   *                        the total internally collected (fees + idle + removed liquidity).
-   *                        Pass type(uint256).max to reinvest everything.
-   * @param amount1Desired  TOKEN1 to reinvest into the new position. Same semantics.
-   */
-  function rebalance(
-    int24 _tickLower,
-    int24 _tickUpper,
-    uint256 minAmount0,
-    uint256 minAmount1,
-    uint256 amount0Desired,
-    uint256 amount1Desired
-  ) external onlyRole(BOT) nonReentrant {
-    require(_tickLower < _tickUpper, "invalid tick range");
-
-    // Guard: prevent rebalance when spot diverges too far from TWAP.
-    if (maxTickDeviation > 0) {
-      (, int24 spotTick, , , , , ) = IListaV3Pool(POOL).slot0();
-      int24 twapTick = getTwapTick();
-      int24 delta = spotTick > twapTick ? spotTick - twapTick : twapTick - spotTick;
-      require(uint24(delta) <= maxTickDeviation, "twap deviation too high");
-    }
-
-    int24 oldTickLower = tickLower;
-    int24 oldTickUpper = tickUpper;
-
-    // 1. Collect all fees; track amounts explicitly to avoid balanceOf donation surface.
-    (uint256 total0, uint256 total1) = _collectAll();
-
-    // Add previously idle tokens from compound ratio mismatches.
-    total0 += idleToken0;
-    total1 += idleToken1;
-    idleToken0 = 0;
-    idleToken1 = 0;
-
-    // 2. Remove all existing liquidity.
-    if (tokenId != 0) {
-      uint128 liquidity = _getPositionLiquidity();
-      if (liquidity > 0) {
-        POSITION_MANAGER.decreaseLiquidity(
-          INonfungiblePositionManager.DecreaseLiquidityParams({
-            tokenId: tokenId,
-            liquidity: liquidity,
-            amount0Min: minAmount0,
-            amount1Min: minAmount1,
-            deadline: block.timestamp
-          })
-        );
-      }
-      // Collect removed liquidity back to this contract; accumulate into tracked totals.
-      (uint256 removed0, uint256 removed1) = POSITION_MANAGER.collect(
-        INonfungiblePositionManager.CollectParams({
-          tokenId: tokenId,
-          recipient: address(this),
-          amount0Max: type(uint128).max,
-          amount1Max: type(uint128).max
-        })
-      );
-      total0 += removed0;
-      total1 += removed1;
-
-      POSITION_MANAGER.burn(tokenId);
-      tokenId = 0;
-    }
-
-    // 3. Update range.
-    tickLower = _tickLower;
-    tickUpper = _tickUpper;
-
-    // 4. Re-mint with caller-specified amounts (capped to internally available).
-    //    This lets the BOT pre-compute the optimal ratio for the new tick range,
-    //    minimising idle remainder. Excess stays in idleToken0/1 for next compound.
-    uint256 toMint0 = amount0Desired > total0 ? total0 : amount0Desired;
-    uint256 toMint1 = amount1Desired > total1 ? total1 : amount1Desired;
-
-    if (toMint0 > 0 || toMint1 > 0) {
-      IERC20(TOKEN0).safeIncreaseAllowance(address(POSITION_MANAGER), toMint0);
-      IERC20(TOKEN1).safeIncreaseAllowance(address(POSITION_MANAGER), toMint1);
-
-      (uint256 newTokenId, , uint256 used0, uint256 used1) = POSITION_MANAGER.mint(
-        INonfungiblePositionManager.MintParams({
-          token0: TOKEN0,
-          token1: TOKEN1,
-          fee: FEE,
-          tickLower: _tickLower,
-          tickUpper: _tickUpper,
-          amount0Desired: toMint0,
-          amount1Desired: toMint1,
-          amount0Min: 0,
-          amount1Min: 0,
-          recipient: address(this),
-          deadline: block.timestamp
-        })
-      );
-      tokenId = newTokenId;
-
-      // Any leftover (caller under-specified or ratio mismatch) tracked for next compound.
-      idleToken0 = total0 - used0;
-      idleToken1 = total1 - used1;
-    } else {
-      // Nothing to mint; park everything as idle.
-      idleToken0 = total0;
-      idleToken1 = total1;
-    }
-
-    emit Rebalanced(oldTickLower, oldTickUpper, _tickLower, _tickUpper, tokenId);
+    if (msg.sender != address(MOOLAH)) revert OnlyMoolah();
+    if (MOOLAH.idToMarketParams(id).collateralToken != address(this)) revert InvalidMarket();
+    _afterCollateralChange(id, borrower);
   }
 
   /* ───────────────────────── view functions ───────────────────────── */
@@ -628,7 +563,7 @@ contract V3Provider is
    * @return amount0  TOKEN0 the caller would receive (≥ minAmount0 to pass slippage guard).
    * @return amount1  TOKEN1 the caller would receive (≥ minAmount1 to pass slippage guard).
    */
-  function previewRedeem(uint256 shares) external view returns (uint256 amount0, uint256 amount1) {
+  function previewRedeemUnderlying(uint256 shares) external view returns (uint256 amount0, uint256 amount1) {
     uint256 supply = totalSupply();
     if (supply == 0 || shares == 0) return (0, 0);
 
@@ -660,7 +595,7 @@ contract V3Provider is
    * @return amount0        TOKEN0 that would actually be consumed (≤ amount0Desired).
    * @return amount1        TOKEN1 that would actually be consumed (≤ amount1Desired).
    */
-  function previewDeposit(
+  function previewDepositAmounts(
     uint256 amount0Desired,
     uint256 amount1Desired
   ) external view returns (uint128 liquidity, uint256 amount0, uint256 amount1) {
@@ -679,28 +614,56 @@ contract V3Provider is
   }
 
   /// @dev Returns the TOKEN field required by the IProvider interface.
-  ///      For V3Provider, the "token" is this contract itself (the shares ERC20).
+  ///      For a V3Provider, the "token" is this contract itself (the shares ERC20).
   function TOKEN() external view returns (address) {
     return address(this);
+  }
+
+  /* ─────────────────────── ERC-4626 shell ─────────────────────────── */
+
+  /// @notice ERC-4626 total managed assets, denominated in the vault asset (WBNB / BNB).
+  /// @dev    Equals the position's BNB value: with the resilient oracle pricing slisBNB as
+  ///         BNB_price × exchangeRate, `USD_value / WBNB_price` collapses to
+  ///         `WBNB_amt + slisBNB_amt × exchangeRate` (PRD §4.5). WBNB has 18 decimals, so the
+  ///         8-decimal USD value scaled by 1e18 and divided by the 8-decimal WBNB price yields an
+  ///         18-decimal WBNB amount. convertToShares/convertToAssets derive from this and totalSupply.
+  function totalAssets() public view override returns (uint256) {
+    uint256 assetPrice = IOracle(resilientOracle).peek(asset()); // 8 decimals
+    if (assetPrice == 0) return 0;
+    return (_positionValueUsd() * 1e18) / assetPrice;
+  }
+
+  /// @dev The single-asset ERC-4626 entry points are disabled — this is a two-token LP vault.
+  ///      Use the two-token deposit(marketParams,…) / withdraw(marketParams,…) / redeemShares().
+  function deposit(uint256, address) public pure override returns (uint256) {
+    revert StandardEntryDisabled();
+  }
+
+  function mint(uint256, address) public pure override returns (uint256) {
+    revert StandardEntryDisabled();
+  }
+
+  function withdraw(uint256, address, address) public pure override returns (uint256) {
+    revert StandardEntryDisabled();
+  }
+
+  function redeem(uint256, address, address) public pure override returns (uint256) {
+    revert StandardEntryDisabled();
   }
 
   /* ─────────────────────── IOracle implementation ─────────────────── */
 
   /**
    * @notice Returns the USD price (8 decimals) for a given token.
-   *         - If token == address(this): prices V3Provider shares as
+   *         - If token == address(this): prices provider shares as
    *           (total0 × price0 + total1 × price1) / totalSupply.
    *         - Otherwise: delegates directly to the resilient oracle.
    *
    * @dev    Token composition is derived from the TWAP tick (not slot0) so a single-block
-   *         AMM price manipulation cannot inflate the reported collateral value.
-   *         The maxTickDeviation guard on rebalance() prevents rebalancing while spot
-   *         diverges far from TWAP, which would cause a phantom share-price discontinuity.
-   *         pool.observe() reverts when the pool lacks TWAP_PERIOD seconds of history,
-   *         which in turn reverts peek() — intentionally blocking borrows until the market
-   *         has seasoned.
+   *         AMM price manipulation cannot inflate the reported collateral value. Subclasses may
+   *         override to use an exchange-rate-implied price instead of the pool TWAP.
    */
-  function peek(address token) external view override returns (uint256) {
+  function peek(address token) external view virtual override returns (uint256) {
     if (token != address(this)) {
       return IOracle(resilientOracle).peek(token);
     }
@@ -708,16 +671,24 @@ contract V3Provider is
     uint256 supply = totalSupply();
     if (supply == 0) return 0;
 
-    uint160 sqrtTwapX96 = TickMath.getSqrtRatioAtTick(getTwapTick());
-    (uint256 total0, uint256 total1) = _getTotalAmountsAt(sqrtTwapX96);
+    // shares are 18-decimal; return 8-decimal price per share
+    return (_positionValueUsd() * 1e18) / supply;
+  }
 
+  /// @dev Total position value in 8-decimal USD, with leg composition taken at the TWAP price
+  ///      (manipulation-resistant). Shared by peek() and totalAssets().
+  function _positionValueUsd() internal view returns (uint256) {
+    (uint256 total0, uint256 total1) = _getTotalAmountsAt(_valuationSqrtPriceX96());
     uint256 price0 = IOracle(resilientOracle).peek(TOKEN0); // 8 decimals
     uint256 price1 = IOracle(resilientOracle).peek(TOKEN1); // 8 decimals
+    return (total0 * price0) / (10 ** DECIMALS0) + (total1 * price1) / (10 ** DECIMALS1);
+  }
 
-    uint256 totalValue = (total0 * price0) / (10 ** DECIMALS0) + (total1 * price1) / (10 ** DECIMALS1);
-
-    // shares are 18-decimal; return 8-decimal price per share
-    return (totalValue * 1e18) / supply;
+  /// @dev sqrtPriceX96 used to value the position for the lending oracle (peek / totalAssets /
+  ///      getUserBalanceInBnb). Base uses the pool TWAP. Subclasses override to use an
+  ///      exchange-rate-implied price so a pool-trade cannot move the reported collateral value.
+  function _valuationSqrtPriceX96() internal view virtual returns (uint160) {
+    return TickMath.getSqrtRatioAtTick(getTwapTick());
   }
 
   /**
@@ -726,7 +697,7 @@ contract V3Provider is
    *           so the resilient oracle can delegate share pricing back to us.
    *         - Otherwise: delegates to the resilient oracle.
    */
-  function getTokenConfig(address token) external view override returns (TokenConfig memory) {
+  function getTokenConfig(address token) external view virtual override returns (TokenConfig memory) {
     if (token != address(this)) {
       return IOracle(resilientOracle).getTokenConfig(token);
     }
@@ -739,12 +710,8 @@ contract V3Provider is
       });
   }
 
-  /**
-   * @notice Returns the TWAP tick for POOL over TWAP_PERIOD seconds.
-   *         Useful for bots to cross-check whether the current slot0 tick deviates
-   *         significantly from the TWAP before triggering a rebalance.
-   *         Public (not external) so peek() can call it directly.
-   */
+  /// @notice Returns the TWAP tick for POOL over TWAP_PERIOD seconds.
+  ///         Public (not external) so peek() can call it directly.
   function getTwapTick() public view returns (int24 twapTick) {
     uint32[] memory secondsAgos = new uint32[](2);
     secondsAgos[0] = TWAP_PERIOD;
@@ -757,97 +724,13 @@ contract V3Provider is
     if (delta < 0 && (delta % int56(uint56(TWAP_PERIOD)) != 0)) twapTick--;
   }
 
-  /* ─────────────────── slisBNBx: sync / view ──────────────────────── */
+  /* ────────────────────────── extension hooks ─────────────────────── */
 
-  /**
-   * @notice Returns the user's total deposited collateral value expressed in BNB (18 decimals).
-   *         Called by SlisBNBxMinter as the ISlisBNBxModule callback to compute how much
-   *         slisBNBx the user is entitled to.
-   * @param account The user whose position is being priced.
-   */
-  function getUserBalanceInBnb(address account) external view returns (uint256) {
-    uint256 shares = userTotalDeposit[account];
-    if (shares == 0) return 0;
-
-    uint256 supply = totalSupply();
-    if (supply == 0) return 0;
-
-    (uint256 total0, uint256 total1) = getTotalAmounts();
-
-    uint256 user0 = (total0 * shares) / supply;
-    uint256 user1 = (total1 * shares) / supply;
-
-    uint256 price0 = IOracle(resilientOracle).peek(TOKEN0); // 8-decimal USD
-    uint256 price1 = IOracle(resilientOracle).peek(TOKEN1); // 8-decimal USD
-    uint256 bnbPrice = IOracle(resilientOracle).peek(BNB_ADDRESS); // 8-decimal USD
-
-    // Scale up by 1e18 before dividing by bnbPrice so the result is 18-decimal BNB.
-    uint256 value0 = (user0 * price0 * 1e18) / (10 ** DECIMALS0);
-    uint256 value1 = (user1 * price1 * 1e18) / (10 ** DECIMALS1);
-
-    return (value0 + value1) / bnbPrice;
-  }
-
-  /**
-   * @notice Manually sync one user's deposit tracking and slisBNBx balance for a market.
-   * @param id      Moolah market Id (collateralToken must equal address(this)).
-   * @param account User to sync.
-   */
-  function syncUserBalance(Id id, address account) external {
-    require(MOOLAH.idToMarketParams(id).collateralToken == address(this), "invalid market");
-    _syncPosition(id, account);
-  }
-
-  /**
-   * @notice Batch sync multiple users across multiple markets.
-   * @param ids      Array of market Ids.
-   * @param accounts Array of user addresses (parallel to ids).
-   */
-  function bulkSyncUserBalance(Id[] calldata ids, address[] calldata accounts) external {
-    require(ids.length == accounts.length, "length mismatch");
-    for (uint256 i = 0; i < accounts.length; i++) {
-      require(MOOLAH.idToMarketParams(ids[i]).collateralToken == address(this), "invalid market");
-      _syncPosition(ids[i], accounts[i]);
-    }
-  }
-
-  /* ──────────────────── manager: slisBNBxMinter ───────────────────── */
-
-  /// @notice Set (or unset) the SlisBNBxMinter plugin. Pass address(0) to disable.
-  ///         When set, deposit/withdraw/liquidate call minter.rebalance(account).
-  function setSlisBNBxMinter(address _slisBNBxMinter) external onlyRole(MANAGER) {
-    slisBNBxMinter = _slisBNBxMinter;
-    emit SlisBNBxMinterChanged(_slisBNBxMinter);
-  }
-
-  /// @notice Set the maximum allowed tick deviation between slot0 and TWAP for rebalance().
-  ///         Pass 0 to disable the guard.
-  function setMaxTickDeviation(uint24 _maxTickDeviation) external onlyRole(MANAGER) {
-    maxTickDeviation = _maxTickDeviation;
-    emit MaxTickDeviationChanged(_maxTickDeviation);
-  }
+  /// @dev Hook invoked after deposit / withdraw / liquidation with the affected (market, account).
+  ///      Base is a no-op; subclasses override to mirror the position into external systems.
+  function _afterCollateralChange(Id id, address account) internal virtual {}
 
   /* ─────────────────────────── internals ──────────────────────────── */
-
-  /// @dev Reads the user's current Moolah collateral for `id`, diffs against the last
-  ///      recorded snapshot in `userMarketDeposit`, updates `userTotalDeposit`, then
-  ///      calls `slisBNBxMinter.rebalance(account)` if a minter is configured.
-  ///      Callers that have already validated the market (deposit, withdraw) skip the
-  ///      idToMarketParams check; liquidate() validates before calling this.
-  function _syncPosition(Id id, address account) internal {
-    uint256 current = MOOLAH.position(id, account).collateral;
-
-    if (current >= userMarketDeposit[account][id]) {
-      userTotalDeposit[account] += current - userMarketDeposit[account][id];
-    } else {
-      userTotalDeposit[account] -= userMarketDeposit[account][id] - current;
-    }
-    userMarketDeposit[account][id] = current;
-
-    if (slisBNBxMinter != address(0)) {
-      ISlisBNBxMinter(slisBNBxMinter).rebalance(account);
-    }
-  }
 
   /// @dev Collect accrued fees from the position and re-add them plus any previously
   ///      idle tokens (from prior ratio mismatches) as liquidity.
@@ -856,32 +739,22 @@ contract V3Provider is
   function _collectAndCompound() internal {
     if (tokenId == 0) return;
 
-    (uint256 fees0, uint256 fees1) = POSITION_MANAGER.collect(
-      INonfungiblePositionManager.CollectParams({
-        tokenId: tokenId,
-        recipient: address(this),
-        amount0Max: type(uint128).max,
-        amount1Max: type(uint128).max
-      })
-    );
+    (uint256 fees0, uint256 fees1) = V3PositionLib.collectAll(POSITION_MANAGER, tokenId);
 
     uint256 toCompound0 = fees0 + idleToken0;
     uint256 toCompound1 = fees1 + idleToken1;
 
     if (toCompound0 == 0 && toCompound1 == 0) return;
 
-    IERC20(TOKEN0).safeIncreaseAllowance(address(POSITION_MANAGER), toCompound0);
-    IERC20(TOKEN1).safeIncreaseAllowance(address(POSITION_MANAGER), toCompound1);
-
-    (uint128 liquidityAdded, uint256 used0, uint256 used1) = POSITION_MANAGER.increaseLiquidity(
-      INonfungiblePositionManager.IncreaseLiquidityParams({
-        tokenId: tokenId,
-        amount0Desired: toCompound0,
-        amount1Desired: toCompound1,
-        amount0Min: 0,
-        amount1Min: 0,
-        deadline: block.timestamp
-      })
+    (uint128 liquidityAdded, uint256 used0, uint256 used1) = V3PositionLib.increaseLiquidity(
+      POSITION_MANAGER,
+      TOKEN0,
+      TOKEN1,
+      tokenId,
+      toCompound0,
+      toCompound1,
+      0,
+      0
     );
 
     // Track leftover from ratio mismatch so it's swept on the next compound.
@@ -895,14 +768,7 @@ contract V3Provider is
   ///      Returns the amounts collected so callers can track totals without balanceOf.
   function _collectAll() internal returns (uint256 collected0, uint256 collected1) {
     if (tokenId == 0) return (0, 0);
-    (collected0, collected1) = POSITION_MANAGER.collect(
-      INonfungiblePositionManager.CollectParams({
-        tokenId: tokenId,
-        recipient: address(this),
-        amount0Max: type(uint128).max,
-        amount1Max: type(uint128).max
-      })
-    );
+    (collected0, collected1) = V3PositionLib.collectAll(POSITION_MANAGER, tokenId);
   }
 
   /// @dev Burn `shares` held by address(this), remove proportional V3 liquidity,
@@ -923,25 +789,10 @@ contract V3Provider is
     _burn(address(this), shares);
 
     if (liquidityToRemove > 0) {
-      POSITION_MANAGER.decreaseLiquidity(
-        INonfungiblePositionManager.DecreaseLiquidityParams({
-          tokenId: tokenId,
-          liquidity: liquidityToRemove,
-          amount0Min: minAmount0,
-          amount1Min: minAmount1,
-          deadline: block.timestamp
-        })
-      );
+      V3PositionLib.decreaseLiquidity(POSITION_MANAGER, tokenId, liquidityToRemove, minAmount0, minAmount1);
 
       // Collect to address(this) so we can unwrap WBNB before forwarding.
-      (amount0, amount1) = POSITION_MANAGER.collect(
-        INonfungiblePositionManager.CollectParams({
-          tokenId: tokenId,
-          recipient: address(this),
-          amount0Max: type(uint128).max,
-          amount1Max: type(uint128).max
-        })
-      );
+      (amount0, amount1) = V3PositionLib.collectAll(POSITION_MANAGER, tokenId);
 
       if (amount0 > 0) _sendToken(TOKEN0, amount0, payable(receiver));
       if (amount1 > 0) _sendToken(TOKEN1, amount1, payable(receiver));
@@ -956,15 +807,15 @@ contract V3Provider is
     if (token == WBNB) {
       IWBNB(WBNB).withdraw(amount);
       (bool ok, ) = to.call{ value: amount }("");
-      require(ok, "BNB transfer failed");
+      if (!ok) revert BnbTransferFailed();
     } else {
       IERC20(token).safeTransfer(to, amount);
     }
   }
 
-  /// @dev Accepts native BNB sent by WBNB during unwrap.
-  receive() external payable {
-    require(msg.sender == WBNB, "not WBNB");
+  /// @dev Accepts native BNB sent by WBNB during unwrap. Subclasses may widen the allowed senders.
+  receive() external payable virtual {
+    if (msg.sender != WBNB) revert NotWBNB();
   }
 
   /// @dev Returns the current liquidity of the managed V3 position.
@@ -978,12 +829,12 @@ contract V3Provider is
     return msg.sender == onBehalf || MOOLAH.isAuthorized(onBehalf, msg.sender);
   }
 
-  /* ──────── Uniswap V3 liquidity math (via v3-core libraries) ──────── */
+  /* ──────── Uniswap V3 liquidity math (via lista-dao-contracts) ─────── */
 
   /// @dev Shared implementation for getTotalAmounts() and peek(). Callers supply the
   ///      sqrtPriceX96 so each can use the price appropriate for its purpose:
   ///      slot0 for display/bots, TWAP for the lending oracle.
-  function _getTotalAmountsAt(uint160 sqrtPriceX96) private view returns (uint256 total0, uint256 total1) {
+  function _getTotalAmountsAt(uint160 sqrtPriceX96) internal view returns (uint256 total0, uint256 total1) {
     if (tokenId == 0) return (0, 0);
 
     (, , , , , , , uint128 liquidity, , , uint128 tokensOwed0, uint128 tokensOwed1) = POSITION_MANAGER.positions(
@@ -1006,9 +857,6 @@ contract V3Provider is
 
   /// @dev Computes token amounts for a given liquidity position at sqrtPriceX96.
   ///      Delegates to LiquidityAmounts.getAmountsForLiquidity (lista-dao-contracts, audited 0.8).
-  ///      This is mathematically identical to the previous SqrtPriceMath.getAmount{0,1}Delta(..., false)
-  ///      implementation: getAmount0ForLiquidity == getAmount0Delta(roundUp=false) and likewise for
-  ///      token1, with the same below/inside/above-range branching.
   function _getAmountsForLiquidity(
     uint160 sqrtPriceX96,
     uint160 sqrtRatioAX96,

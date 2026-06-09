@@ -6,6 +6,7 @@ import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
+import { SlisBNBV3Provider } from "../../src/provider/SlisBNBV3Provider.sol";
 import { V3Provider } from "../../src/provider/V3Provider.sol";
 import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
@@ -36,7 +37,7 @@ contract PoolSwapper {
   }
 }
 
-contract V3ProviderTest is Test {
+contract SlisBNBV3ProviderTest is Test {
   using MarketParamsLib for MarketParams;
 
   /* ─────────────────── PancakeSwap V3 BSC mainnet ─────────────────── */
@@ -59,10 +60,11 @@ contract V3ProviderTest is Test {
 
   uint32 constant TWAP_PERIOD = 1800; // 30 minutes
   uint256 constant LLTV = 70 * 1e16;
+  uint256 constant LLTV_SECOND = 71 * 1e16;
 
   /* ───────────────────────── test contracts ───────────────────────── */
   Moolah moolah;
-  V3Provider provider;
+  SlisBNBV3Provider provider;
   MarketParams marketParams;
   Id marketId;
 
@@ -84,18 +86,13 @@ contract V3ProviderTest is Test {
     UUPSUpgradeable(MOOLAH_PROXY).upgradeToAndCall(newImpl, bytes(""));
     moolah = Moolah(MOOLAH_PROXY);
 
-    // Derive initial tick range from the live pool.
-    (, int24 currentTick, , , , , ) = IListaV3Pool(POOL).slot0();
-    int24 tickLower = currentTick - 500;
-    int24 tickUpper = currentTick + 500;
-
-    // Deploy V3Provider (implementation + UUPS proxy).
-    V3Provider impl = new V3Provider(MOOLAH_PROXY, NPM, USDC, WBNB, FEE, TWAP_PERIOD);
+    // Deploy SlisBNBV3Provider (implementation + UUPS proxy).
+    SlisBNBV3Provider impl = new SlisBNBV3Provider(MOOLAH_PROXY, NPM, USDC, WBNB, FEE, TWAP_PERIOD);
     bytes memory initData = abi.encodeCall(
-      V3Provider.initialize,
-      (admin, manager, bot, RESILIENT_ORACLE, tickLower, tickUpper, "V3Provider USDC/WBNB", "v3LP-USDC-WBNB")
+      SlisBNBV3Provider.initialize,
+      (admin, manager, bot, RESILIENT_ORACLE, "SlisBNBV3Provider USDC/WBNB", "v3LP-USDC-WBNB")
     );
-    provider = V3Provider(payable(new ERC1967Proxy(address(impl), initData)));
+    provider = SlisBNBV3Provider(payable(new ERC1967Proxy(address(impl), initData)));
 
     // Build Moolah market: collateral = provider shares, oracle = provider.
     marketParams = MarketParams({
@@ -107,7 +104,7 @@ contract V3ProviderTest is Test {
     });
     marketId = marketParams.id();
 
-    // Create market and register V3Provider as the Moolah provider.
+    // Create market and register SlisBNBV3Provider as the Moolah provider.
     vm.prank(OPERATOR);
     moolah.createMarket(marketParams);
 
@@ -131,7 +128,7 @@ contract V3ProviderTest is Test {
     deal(WBNB, _user, amount1);
     // Derive tight min amounts (0.1% slippage) from previewDeposit so that we
     // never bypass the slippage guard with zeros.
-    (, uint256 exp0, uint256 exp1) = provider.previewDeposit(amount0, amount1);
+    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
     uint256 min0 = (exp0 * 999) / 1000;
     uint256 min1 = (exp1 * 999) / 1000;
     vm.startPrank(_user);
@@ -146,6 +143,28 @@ contract V3ProviderTest is Test {
     return col;
   }
 
+  function _createSecondMarket() internal returns (MarketParams memory secondParams, Id secondId) {
+    secondParams = MarketParams({
+      loanToken: LISUSD,
+      collateralToken: address(provider),
+      oracle: address(provider),
+      irm: IRM,
+      lltv: LLTV_SECOND
+    });
+    secondId = secondParams.id();
+
+    if (!moolah.isLltvEnabled(LLTV_SECOND)) {
+      vm.prank(MANAGER_ADDR);
+      moolah.enableLltv(LLTV_SECOND);
+    }
+
+    vm.prank(OPERATOR);
+    moolah.createMarket(secondParams);
+
+    vm.prank(MANAGER_ADDR);
+    moolah.setProvider(secondId, address(provider), true);
+  }
+
   /* ────────────────────────── test cases ─────────────────────────── */
 
   function test_initialize() public view {
@@ -157,6 +176,7 @@ contract V3ProviderTest is Test {
     assertEq(address(provider.POSITION_MANAGER()), NPM);
     assertEq(provider.resilientOracle(), RESILIENT_ORACLE);
     assertEq(provider.TWAP_PERIOD(), TWAP_PERIOD);
+    assertLt(provider.tickLower(), provider.tickUpper());
     assertTrue(provider.hasRole(provider.DEFAULT_ADMIN_ROLE(), admin));
     assertTrue(provider.hasRole(provider.MANAGER(), manager));
     assertTrue(provider.hasRole(provider.BOT(), bot));
@@ -202,7 +222,7 @@ contract V3ProviderTest is Test {
     uint256 usdcBefore = IERC20(USDC).balanceOf(user);
     uint256 bnbBefore = user.balance; // WBNB (TOKEN1) is unwrapped to native BNB on withdrawal
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeem(shares);
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
     uint256 min0 = (exp0 * 999) / 1000;
     uint256 min1 = (exp1 * 999) / 1000;
 
@@ -221,7 +241,7 @@ contract V3ProviderTest is Test {
   function test_withdraw_partialWithdrawal() public {
     (uint256 shares, , ) = _deposit(user, 1_000 ether, 3 ether);
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeem(shares / 2);
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares / 2);
     uint256 min0 = (exp0 * 999) / 1000;
     uint256 min1 = (exp1 * 999) / 1000;
 
@@ -238,8 +258,76 @@ contract V3ProviderTest is Test {
     // user2 cannot withdraw on behalf of user without authorization.
     // The revert fires on the auth check before min amounts are evaluated; use 1,1.
     vm.prank(user2);
-    vm.expectRevert("unauthorized");
+    vm.expectRevert(V3Provider.Unauthorized.selector);
     provider.withdraw(marketParams, shares, 1, 1, user, user2);
+  }
+
+  function test_withdrawShares_toWallet_doesNotRedeemUnderlying() public {
+    (uint256 shares, , ) = _deposit(user, 1_000 ether, 3 ether);
+    uint256 supplyBefore = provider.totalSupply();
+    uint256 tokenIdBefore = provider.tokenId();
+
+    vm.prank(user);
+    provider.withdrawShares(marketParams, shares, user, user);
+
+    assertEq(_collateral(user), 0, "collateral should be withdrawn from market");
+    assertEq(provider.balanceOf(user), shares, "user should hold vLP shares");
+    assertEq(provider.balanceOf(MOOLAH_PROXY), 0, "Moolah should hold no shares");
+    assertEq(provider.totalSupply(), supplyBefore, "shares should not be burned");
+    assertEq(provider.tokenId(), tokenIdBefore, "V3 position should remain intact");
+    assertEq(provider.userMarketDeposit(user, marketId), 0, "market tracking should clear");
+    assertEq(provider.userTotalDeposit(user), 0, "total tracking should clear");
+  }
+
+  function test_withdrawShares_revertsIfUnauthorized() public {
+    _deposit(user, 1_000 ether, 3 ether);
+    uint256 shares = _collateral(user);
+
+    vm.prank(user2);
+    vm.expectRevert(V3Provider.Unauthorized.selector);
+    provider.withdrawShares(marketParams, shares, user, user2);
+  }
+
+  function test_supplyShares_fromWallet_suppliesCollateral() public {
+    (uint256 shares, , ) = _deposit(user, 1_000 ether, 3 ether);
+
+    vm.startPrank(user);
+    provider.withdrawShares(marketParams, shares, user, user);
+    provider.supplyShares(marketParams, shares, user);
+    vm.stopPrank();
+
+    assertEq(_collateral(user), shares, "collateral should be restored");
+    assertEq(provider.balanceOf(user), 0, "user should no longer hold shares");
+    assertEq(provider.balanceOf(MOOLAH_PROXY), shares, "Moolah should hold shares");
+    assertEq(provider.userMarketDeposit(user, marketId), shares, "market tracking should restore");
+    assertEq(provider.userTotalDeposit(user), shares, "total tracking should restore");
+  }
+
+  function test_supplyShares_revertsIfSenderDoesNotHoldShares() public {
+    (uint256 shares, , ) = _deposit(user, 1_000 ether, 3 ether);
+
+    vm.prank(user2);
+    vm.expectRevert(V3Provider.InsufficientShares.selector);
+    provider.supplyShares(marketParams, shares, user2);
+  }
+
+  function test_withdrawShares_supplyShares_movesCollateralBetweenMarkets() public {
+    (uint256 shares, , ) = _deposit(user, 1_000 ether, 3 ether);
+    (MarketParams memory secondParams, Id secondId) = _createSecondMarket();
+
+    vm.startPrank(user);
+    provider.withdrawShares(marketParams, shares, user, user);
+    provider.supplyShares(secondParams, shares, user);
+    vm.stopPrank();
+
+    (, , uint256 secondCollateral) = moolah.position(secondId, user);
+    assertEq(_collateral(user), 0, "first market collateral should be empty");
+    assertEq(secondCollateral, shares, "second market collateral should receive shares");
+    assertEq(provider.balanceOf(user), 0, "wallet should not retain shares");
+    assertEq(provider.balanceOf(MOOLAH_PROXY), shares, "Moolah should custody shares");
+    assertEq(provider.userMarketDeposit(user, marketId), 0, "first market tracking should clear");
+    assertEq(provider.userMarketDeposit(user, secondId), shares, "second market tracking should update");
+    assertEq(provider.userTotalDeposit(user), shares, "total tracking should remain one deposit");
   }
 
   function test_redeemShares_byLiquidator() public {
@@ -256,7 +344,7 @@ contract V3ProviderTest is Test {
     uint256 usdcBefore = IERC20(USDC).balanceOf(liquidator);
     uint256 bnbBefore = liquidator.balance; // WBNB (TOKEN1) is unwrapped to native BNB
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeem(shares);
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
     uint256 min0 = (exp0 * 999) / 1000;
     uint256 min1 = (exp1 * 999) / 1000;
 
@@ -273,7 +361,7 @@ contract V3ProviderTest is Test {
     _deposit(user, 1_000 ether, 3 ether);
 
     vm.prank(user);
-    vm.expectRevert("only moolah");
+    vm.expectRevert(V3Provider.OnlyMoolah.selector);
     provider.transfer(user2, 1);
   }
 
@@ -281,31 +369,28 @@ contract V3ProviderTest is Test {
     _deposit(user, 1_000 ether, 3 ether);
 
     vm.prank(user);
-    vm.expectRevert("only moolah");
+    vm.expectRevert(V3Provider.OnlyMoolah.selector);
     provider.transferFrom(MOOLAH_PROXY, user2, 1);
   }
 
   function test_rebalance_onlyBot() public {
     _deposit(user, 1_000 ether, 3 ether);
 
-    (, int24 currentTick, , , , , ) = IListaV3Pool(POOL).slot0();
-    int24 newLower = currentTick - 1000;
-    int24 newUpper = currentTick + 1000;
-
     // manager cannot rebalance — revert fires on role check before amounts matter.
     vm.prank(manager);
     vm.expectRevert();
-    provider.rebalance(newLower, newUpper, 1, 1, 1, 1);
+    provider.rebalance(1, 1, 1, block.timestamp);
 
-    // bot can rebalance — pass full available amounts so pool picks optimal ratio.
+    // bot can rebalance — range is derived internally by the provider.
     (uint256 total0, uint256 total1) = provider.getTotalAmounts();
     uint256 min0 = (total0 * 999) / 1000;
     uint256 min1 = (total1 * 999) / 1000;
+    uint256 oldTokenId = provider.tokenId();
     vm.prank(bot);
-    provider.rebalance(newLower, newUpper, min0, min1, total0, total1);
+    provider.rebalance(min0, min1, 0, block.timestamp);
 
-    assertEq(provider.tickLower(), newLower);
-    assertEq(provider.tickUpper(), newUpper);
+    assertGt(provider.tokenId(), oldTokenId, "position NFT should be re-minted");
+    assertLt(provider.tickLower(), provider.tickUpper());
   }
 
   function test_rebalance_liquidity_preserved() public {
@@ -313,12 +398,11 @@ contract V3ProviderTest is Test {
 
     (uint256 total0Before, uint256 total1Before) = provider.getTotalAmounts();
 
-    (, int24 currentTick, , , , , ) = IListaV3Pool(POOL).slot0();
     (uint256 total0, uint256 total1) = provider.getTotalAmounts();
     uint256 min0 = (total0 * 999) / 1000;
     uint256 min1 = (total1 * 999) / 1000;
     vm.prank(bot);
-    provider.rebalance(currentTick - 1000, currentTick + 1000, min0, min1, total0, total1);
+    provider.rebalance(min0, min1, 0, block.timestamp);
 
     // Share count is unchanged after rebalance.
     assertEq(_collateral(user), shares, "shares should be unchanged after rebalance");
@@ -430,7 +514,7 @@ contract V3ProviderTest is Test {
     uint256 amount0 = 1_000 ether;
     uint256 amount1 = 3 ether;
 
-    (uint128 liquidity, uint256 exp0, uint256 exp1) = provider.previewDeposit(amount0, amount1);
+    (uint128 liquidity, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
 
     assertGt(liquidity, 0, "liquidity should be non-zero");
     // Both preview amounts must be within the desired amounts.
@@ -452,7 +536,7 @@ contract V3ProviderTest is Test {
     uint256 amount0 = 5_000 ether;
     uint256 amount1 = 15 ether;
 
-    (, uint256 exp0, uint256 exp1) = provider.previewDeposit(amount0, amount1);
+    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
 
     // Apply 0.5% slippage tolerance.
     uint256 min0 = (exp0 * 995) / 1000;
@@ -472,7 +556,7 @@ contract V3ProviderTest is Test {
     uint256 amount0 = 1_000 ether;
     uint256 amount1 = 3 ether;
 
-    (, uint256 exp0, uint256 exp1) = provider.previewDeposit(amount0, amount1);
+    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
 
     // Position is fully USDC — only token0 consumed, token1 = 0.
     assertGt(exp0, 0, "expected token0 consumed when price below range");
@@ -486,7 +570,7 @@ contract V3ProviderTest is Test {
     uint256 amount0 = 1_000 ether;
     uint256 amount1 = 3 ether;
 
-    (, uint256 exp0, uint256 exp1) = provider.previewDeposit(amount0, amount1);
+    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
 
     // Position is fully WBNB — only token1 consumed, token0 = 0.
     assertEq(exp0, 0, "expected no token0 consumed when price above range");
@@ -500,7 +584,7 @@ contract V3ProviderTest is Test {
     uint256 amount0 = 2_000 ether;
     uint256 amount1 = 6 ether;
 
-    (, uint256 exp0, uint256 exp1) = provider.previewDeposit(amount0, amount1);
+    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
 
     uint256 min0 = exp0 > 0 ? exp0 - 1 : 0;
     uint256 min1 = exp1 > 0 ? exp1 - 1 : 0;
@@ -513,7 +597,7 @@ contract V3ProviderTest is Test {
   /* ──────────────── previewRedeem tests ──────────────────────────── */
 
   function test_previewRedeem_zeroBeforeDeposit() public view {
-    (uint256 amount0, uint256 amount1) = provider.previewRedeem(1 ether);
+    (uint256 amount0, uint256 amount1) = provider.previewRedeemUnderlying(1 ether);
     assertEq(amount0, 0, "should return 0 when no position exists");
     assertEq(amount1, 0, "should return 0 when no position exists");
   }
@@ -526,7 +610,7 @@ contract V3ProviderTest is Test {
     assertGt(currentTick, provider.tickLower(), "price should be above tickLower");
     assertLt(currentTick, provider.tickUpper(), "price should be below tickUpper");
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeem(shares);
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
     assertGt(exp0, 0, "previewRedeem should predict token0 in-range");
     assertGt(exp1, 0, "previewRedeem should predict token1 in-range");
 
@@ -548,7 +632,7 @@ contract V3ProviderTest is Test {
     vm.prank(MOOLAH_PROXY);
     provider.transfer(user2, shares);
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeem(shares);
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
 
     uint256 min0 = exp0 > 0 ? exp0 - 1 : 0;
     uint256 min1 = exp1 > 0 ? exp1 - 1 : 0;
@@ -563,8 +647,8 @@ contract V3ProviderTest is Test {
   function test_previewRedeem_partialShares_proportional() public {
     (uint256 shares, , ) = _deposit(user, 10_000 ether, 30 ether);
 
-    (uint256 fullExp0, uint256 fullExp1) = provider.previewRedeem(shares);
-    (uint256 halfExp0, uint256 halfExp1) = provider.previewRedeem(shares / 2);
+    (uint256 fullExp0, uint256 fullExp1) = provider.previewRedeemUnderlying(shares);
+    (uint256 halfExp0, uint256 halfExp1) = provider.previewRedeemUnderlying(shares / 2);
 
     // Half the shares should yield approximately half the tokens.
     assertApproxEqRel(halfExp0, fullExp0 / 2, 0.001e18, "half shares ~half token0");
@@ -575,7 +659,7 @@ contract V3ProviderTest is Test {
     (uint256 shares, , ) = _deposit(user, 10_000 ether, 30 ether);
     _pushPriceBelowRange();
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeem(shares);
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
     assertGt(exp0, 0, "should return token0 when price below range");
     assertEq(exp1, 0, "should return no token1 when price below range");
   }
@@ -584,7 +668,7 @@ contract V3ProviderTest is Test {
     (uint256 shares, , ) = _deposit(user, 10_000 ether, 30 ether);
     _pushPriceAboveRange();
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeem(shares);
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
     assertEq(exp0, 0, "should return no token0 when price above range");
     assertGt(exp1, 0, "should return token1 when price above range");
   }
@@ -592,7 +676,7 @@ contract V3ProviderTest is Test {
   function test_previewRedeem_derivedMinAmounts_succeed() public {
     (uint256 shares, , ) = _deposit(user, 10_000 ether, 30 ether);
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeem(shares);
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
 
     // Apply 0.5% slippage tolerance.
     uint256 min0 = (exp0 * 995) / 1000;
@@ -677,7 +761,7 @@ contract V3ProviderTest is Test {
     deal(USDC, user, 10_000 ether);
     vm.startPrank(user);
     IERC20(USDC).approve(address(provider), 10_000 ether);
-    vm.expectRevert("zero liquidity");
+    vm.expectRevert(V3Provider.ZeroLiquidity.selector);
     provider.deposit(marketParams, 10_000 ether, 0, 0, 0, user);
     vm.stopPrank();
   }
@@ -687,7 +771,7 @@ contract V3ProviderTest is Test {
     deal(WBNB, user, 30 ether);
     vm.startPrank(user);
     IERC20(WBNB).approve(address(provider), 30 ether);
-    vm.expectRevert("zero liquidity");
+    vm.expectRevert(V3Provider.ZeroLiquidity.selector);
     provider.deposit(marketParams, 0, 30 ether, 0, 0, user);
     vm.stopPrank();
   }
@@ -705,7 +789,7 @@ contract V3ProviderTest is Test {
     deal(USDC, user2, amount0);
     vm.startPrank(user2);
     IERC20(USDC).approve(address(provider), amount0);
-    (, uint256 exp0, ) = provider.previewDeposit(amount0, 0);
+    (, uint256 exp0, ) = provider.previewDepositAmounts(amount0, 0);
     uint256 min0 = (exp0 * 999) / 1000;
     (uint256 shares, uint256 used0, uint256 used1) = provider.deposit(marketParams, amount0, 0, min0, 0, user2);
     vm.stopPrank();
@@ -723,7 +807,7 @@ contract V3ProviderTest is Test {
     deal(WBNB, user2, 30 ether);
     vm.startPrank(user2);
     IERC20(WBNB).approve(address(provider), 30 ether);
-    vm.expectRevert("zero liquidity");
+    vm.expectRevert(V3Provider.ZeroLiquidity.selector);
     provider.deposit(marketParams, 0, 30 ether, 0, 0, user2);
     vm.stopPrank();
   }
@@ -737,7 +821,7 @@ contract V3ProviderTest is Test {
     deal(WBNB, user2, amount1);
     vm.startPrank(user2);
     IERC20(WBNB).approve(address(provider), amount1);
-    (, , uint256 exp1) = provider.previewDeposit(0, amount1);
+    (, , uint256 exp1) = provider.previewDepositAmounts(0, amount1);
     uint256 min1 = (exp1 * 999) / 1000;
     (uint256 shares, uint256 used0, uint256 used1) = provider.deposit(marketParams, 0, amount1, 0, min1, user2);
     vm.stopPrank();
@@ -755,7 +839,7 @@ contract V3ProviderTest is Test {
     deal(USDC, user2, 10_000 ether);
     vm.startPrank(user2);
     IERC20(USDC).approve(address(provider), 10_000 ether);
-    vm.expectRevert("zero liquidity");
+    vm.expectRevert(V3Provider.ZeroLiquidity.selector);
     provider.deposit(marketParams, 10_000 ether, 0, 0, 0, user2);
     vm.stopPrank();
   }
@@ -769,7 +853,7 @@ contract V3ProviderTest is Test {
     vm.startPrank(user);
     IERC20(USDC).approve(address(provider), 1_000 ether);
     IERC20(WBNB).approve(address(provider), 3 ether);
-    vm.expectRevert("invalid collateral token");
+    vm.expectRevert(V3Provider.InvalidCollateralToken.selector);
     // The revert fires before min amounts are evaluated; use 1,1 for consistency.
     provider.deposit(badParams, 1_000 ether, 3 ether, 1, 1, user);
     vm.stopPrank();
@@ -838,22 +922,13 @@ contract V3ProviderTest is Test {
     uint256 valueBefore = _valueUSD(total0Before, total1Before);
     assertGt(valueBefore, 0, "should have non-zero value before rebalance");
 
-    // Rebalance to a range entirely ABOVE the current (very low) tick so that
-    // the entire range is below current price → only token0 (USDC) is needed to mint.
-    (, int24 newTick, , , , , ) = IListaV3Pool(POOL).slot0();
-    int24 newLower = newTick + 100;
-    int24 newUpper = newTick + 600;
-
-    // Position is 100% USDC — only token0 needed for new range (price below it).
+    // Rebalance uses an internally derived range; caller only supplies execution guards.
     uint256 min0 = (total0Before * 999) / 1000;
     vm.prank(bot);
-    provider.rebalance(newLower, newUpper, min0, 0, total0Before, 0);
+    provider.rebalance(min0, 0, 0, block.timestamp);
 
-    assertEq(provider.tickLower(), newLower, "tickLower updated");
-    assertEq(provider.tickUpper(), newUpper, "tickUpper updated");
+    assertLt(provider.tickLower(), provider.tickUpper(), "tick range remains valid");
 
-    // Position is still fully USDC (price below new range). All USDC was deployed
-    // into the new position; getTotalAmounts captures it via position amounts.
     (uint256 total0After, uint256 total1After) = provider.getTotalAmounts();
     uint256 valueAfter = _valueUSD(total0After, total1After);
 
@@ -898,22 +973,13 @@ contract V3ProviderTest is Test {
     uint256 valueBefore = _valueUSD(total0Before, total1Before);
     assertGt(valueBefore, 0, "should have non-zero value before rebalance");
 
-    // Rebalance to a range entirely BELOW the current (very high) tick so that
-    // the entire range is above current price → only token1 (WBNB) is needed to mint.
-    (, int24 newTick, , , , , ) = IListaV3Pool(POOL).slot0();
-    int24 newLower = newTick - 600;
-    int24 newUpper = newTick - 100;
-
-    // Position is 100% WBNB — only token1 needed for new range (price above it).
+    // Rebalance uses an internally derived range; caller only supplies execution guards.
     uint256 min1 = (total1Before * 999) / 1000;
     vm.prank(bot);
-    provider.rebalance(newLower, newUpper, 0, min1, 0, total1Before);
+    provider.rebalance(0, min1, 0, block.timestamp);
 
-    assertEq(provider.tickLower(), newLower, "tickLower updated");
-    assertEq(provider.tickUpper(), newUpper, "tickUpper updated");
+    assertLt(provider.tickLower(), provider.tickUpper(), "tick range remains valid");
 
-    // Position is still fully WBNB (price above new range). All WBNB was deployed
-    // into the new position; getTotalAmounts captures it via position amounts.
     (uint256 total0After, uint256 total1After) = provider.getTotalAmounts();
     uint256 valueAfter = _valueUSD(total0After, total1After);
 
@@ -931,14 +997,11 @@ contract V3ProviderTest is Test {
     (uint256 total0, ) = provider.getTotalAmounts();
     assertGt(total0, 0, "should hold USDC before rebalance");
 
-    (, int24 newTick, , , , , ) = IListaV3Pool(POOL).slot0();
-
     // minAmount0 = total0 (exact), minAmount1 = 0 (position has no WBNB).
-    // amount0Desired = total0, amount1Desired = 0 (reinvest all USDC, no WBNB available).
     vm.prank(bot);
-    provider.rebalance(newTick + 100, newTick + 600, total0, 0, total0, 0);
+    provider.rebalance(total0, 0, 0, block.timestamp);
 
-    assertEq(provider.tickLower(), newTick + 100, "tickLower updated");
+    assertLt(provider.tickLower(), provider.tickUpper(), "tick range remains valid");
   }
 
   function test_rebalance_priceBelowRange_minAmount0_tooHigh_reverts() public {
@@ -947,13 +1010,10 @@ contract V3ProviderTest is Test {
 
     (uint256 total0, ) = provider.getTotalAmounts();
 
-    (, int24 newTick, , , , , ) = IListaV3Pool(POOL).slot0();
-
     // minAmount0 one unit above actual → should revert with NPM slippage check.
-    // amount0Desired = total0 (correct available), minAmount0 = total0 + 1 (too tight).
     vm.prank(bot);
     vm.expectRevert();
-    provider.rebalance(newTick + 100, newTick + 600, total0 + 1, 0, total0, 0);
+    provider.rebalance(total0 + 1, 0, 0, block.timestamp);
   }
 
   /// @dev When price is above range the position is 100% WBNB (token1).
@@ -965,14 +1025,11 @@ contract V3ProviderTest is Test {
     (, uint256 total1) = provider.getTotalAmounts();
     assertGt(total1, 0, "should hold WBNB before rebalance");
 
-    (, int24 newTick, , , , , ) = IListaV3Pool(POOL).slot0();
-
     // minAmount0 = 0 (no USDC), minAmount1 = total1 (exact).
-    // amount0Desired = 0, amount1Desired = total1 (reinvest all WBNB).
     vm.prank(bot);
-    provider.rebalance(newTick - 600, newTick - 100, 0, total1, 0, total1);
+    provider.rebalance(0, total1, 0, block.timestamp);
 
-    assertEq(provider.tickUpper(), newTick - 100, "tickUpper updated");
+    assertLt(provider.tickLower(), provider.tickUpper(), "tick range remains valid");
   }
 
   function test_rebalance_priceAboveRange_minAmount1_tooHigh_reverts() public {
@@ -981,19 +1038,16 @@ contract V3ProviderTest is Test {
 
     (, uint256 total1) = provider.getTotalAmounts();
 
-    (, int24 newTick, , , , , ) = IListaV3Pool(POOL).slot0();
-
     // minAmount1 one unit above actual → should revert with NPM slippage check.
-    // amount1Desired = total1 (correct available), minAmount1 = total1 + 1 (too tight).
     vm.prank(bot);
     vm.expectRevert();
-    provider.rebalance(newTick - 600, newTick - 100, 0, total1 + 1, 0, total1);
+    provider.rebalance(0, total1 + 1, 0, block.timestamp);
   }
 
   function test_withdraw_minAmount_tooHigh_reverts() public {
     (uint256 shares, , ) = _deposit(user, 10_000 ether, 30 ether);
 
-    (uint256 exp0, ) = provider.previewRedeem(shares);
+    (uint256 exp0, ) = provider.previewRedeemUnderlying(shares);
 
     vm.prank(user);
     vm.expectRevert();
@@ -1006,7 +1060,7 @@ contract V3ProviderTest is Test {
     vm.prank(MOOLAH_PROXY);
     provider.transfer(user2, shares);
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeem(shares);
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
     uint256 min0 = (exp0 * 999) / 1000;
 
     vm.prank(user2);
@@ -1021,7 +1075,7 @@ contract V3ProviderTest is Test {
     (uint256 shares, , ) = _deposit(user, 10_000 ether, 30 ether);
     _pushPriceBelowRange();
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeem(shares);
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
     assertGt(exp0, 0, "previewRedeem should predict token0 below range");
     assertEq(exp1, 0, "previewRedeem should predict zero token1 below range");
 
@@ -1037,7 +1091,7 @@ contract V3ProviderTest is Test {
     (uint256 shares, , ) = _deposit(user, 10_000 ether, 30 ether);
     _pushPriceAboveRange();
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeem(shares);
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
     assertEq(exp0, 0, "previewRedeem should predict zero token0 above range");
     assertGt(exp1, 0, "previewRedeem should predict token1 above range");
 
@@ -1053,7 +1107,7 @@ contract V3ProviderTest is Test {
     // Setting min to 0 disables the floor but does not change what is received.
     (uint256 shares, , ) = _deposit(user, 10_000 ether, 30 ether);
 
-    (uint256 exp0, ) = provider.previewRedeem(shares);
+    (uint256 exp0, ) = provider.previewRedeemUnderlying(shares);
 
     vm.prank(user);
     (uint256 out0, uint256 out1) = provider.withdraw(marketParams, shares, (exp0 * 999) / 1000, 0, user, user);
@@ -1154,7 +1208,7 @@ contract V3ProviderTest is Test {
   function test_withdraw_updatesUserMarketDeposit() public {
     (uint256 shares, , ) = _deposit(user, 1_000 ether, 3 ether);
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeem(shares);
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
     vm.prank(user);
     provider.withdraw(marketParams, shares, (exp0 * 99) / 100, (exp1 * 99) / 100, user, user);
 
@@ -1166,7 +1220,7 @@ contract V3ProviderTest is Test {
     (uint256 shares, , ) = _deposit(user, 1_000 ether, 3 ether);
     uint256 half = shares / 2;
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeem(half);
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(half);
     vm.prank(user);
     provider.withdraw(marketParams, half, (exp0 * 99) / 100, (exp1 * 99) / 100, user, user);
 
@@ -1281,7 +1335,7 @@ contract V3ProviderTest is Test {
     address[] memory accounts = new address[](1);
     accounts[0] = user;
 
-    vm.expectRevert("length mismatch");
+    vm.expectRevert(SlisBNBV3Provider.LengthMismatch.selector);
     provider.bulkSyncUserBalance(ids, accounts);
   }
 
@@ -1290,7 +1344,7 @@ contract V3ProviderTest is Test {
   /// @dev Returns the Id of a live Moolah market whose collateralToken != address(provider).
   function _foreignMarketId() internal pure returns (Id) {
     // Use the first market in the live Moolah deployment (slisBNB / lisUSD).
-    // Its collateralToken is slisBNB, not this V3Provider.
+    // Its collateralToken is slisBNB, not this SlisBNBV3Provider.
     MarketParams memory foreign = MarketParams({
       loanToken: LISUSD,
       collateralToken: 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B, // slisBNB
@@ -1305,7 +1359,7 @@ contract V3ProviderTest is Test {
     _deposit(user, 1_000 ether, 3 ether);
     uint256 totalBefore = provider.userTotalDeposit(user);
 
-    vm.expectRevert("invalid market");
+    vm.expectRevert(V3Provider.InvalidMarket.selector);
     provider.syncUserBalance(_foreignMarketId(), user);
 
     // Deposit tracking must be unchanged.
@@ -1321,7 +1375,7 @@ contract V3ProviderTest is Test {
     address[] memory accounts = new address[](1);
     accounts[0] = user;
 
-    vm.expectRevert("invalid market");
+    vm.expectRevert(V3Provider.InvalidMarket.selector);
     provider.bulkSyncUserBalance(ids, accounts);
 
     assertEq(provider.userTotalDeposit(user), totalBefore);
@@ -1353,7 +1407,7 @@ contract V3ProviderTest is Test {
     (uint256 shares, , ) = _deposit(user, 1_000 ether, 3 ether);
     assertGt(ISlisBNBx(SLISBNBX).balanceOf(user), 0, "setup: slisBNBx minted after deposit");
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeem(shares);
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
     vm.prank(user);
     provider.withdraw(marketParams, shares, (exp0 * 99) / 100, (exp1 * 99) / 100, user, user);
 
@@ -1375,7 +1429,7 @@ contract V3ProviderTest is Test {
     assertGt(slisBNBxAfterDeposit, 0);
 
     uint256 half = shares / 2;
-    (uint256 exp0, uint256 exp1) = provider.previewRedeem(half);
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(half);
     vm.prank(user);
     provider.withdraw(marketParams, half, (exp0 * 99) / 100, (exp1 * 99) / 100, user, user);
 
@@ -1527,7 +1581,7 @@ contract V3ProviderTest is Test {
     moolah.liquidate(marketParams, user, shares, 0, "");
 
     uint256 seizedShares = provider.balanceOf(liquidator);
-    (uint256 exp0, uint256 exp1) = provider.previewRedeem(seizedShares);
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(seizedShares);
     (uint256 out0, uint256 out1) = provider.redeemShares(
       seizedShares,
       (exp0 * 99) / 100,
@@ -1612,11 +1666,8 @@ contract V3ProviderTest is Test {
     // Ensure new range is entirely above the spot tick.
     assertGt(newLower, spotTickAfterSwap, "new tickLower should be above spot tick");
 
-    // Collect total amounts for slippage params.
-    (uint256 t0, uint256 t1) = provider.getTotalAmounts();
-
     vm.prank(bot);
-    provider.rebalance(newLower, newUpper, 0, 0, t0, t1);
+    provider.rebalance(0, 0, 0, block.timestamp);
 
     // 5. peek() after rebalance — TWAP evaluates NEW range.
     uint256 peekAfterRebalance = provider.peek(address(provider));
@@ -1640,56 +1691,29 @@ contract V3ProviderTest is Test {
     emit log_named_int("new tickLower", newLower);
     emit log_named_int("new tickUpper", newUpper);
 
-    // Without maxTickDeviation guard, the rebalance succeeds and causes a large
+    // Without a spot/TWAP rebalance guard, the rebalance succeeds and causes a large
     // peek() discontinuity. This proves the TWAP-stale-window risk is real.
     assertGt(pctChange, 0.01e18, "peek() should show a >1% discontinuity due to stale TWAP");
   }
 
-  /// @notice With maxTickDeviation set, the same rebalance is blocked — preventing
-  ///         the peek() discontinuity from ever occurring.
-  function test_peek_discontinuity_blocked_by_maxTickDeviation() public {
-    _mockOraclePrices();
+  /// @notice The V3 provider no longer blocks rebalance based on spot/TWAP tick deviation.
+  function test_rebalance_noLongerUsesTwapDeviationGuard() public {
     _deposit(user, 10_000 ether, 30 ether);
 
-    // Set the guard — only allow rebalance when spot ≈ TWAP.
-    vm.prank(manager);
-    provider.setMaxTickDeviation(100);
-
-    _pushPriceBelowRange();
-
-    (, int24 spotTickAfterSwap, , , , , ) = IListaV3Pool(POOL).slot0();
-    int24 newLower = spotTickAfterSwap + 100;
-    int24 newUpper = spotTickAfterSwap + 500;
-    (uint256 t0, uint256 t1) = provider.getTotalAmounts();
-
     vm.prank(bot);
-    vm.expectRevert("twap deviation too high");
-    provider.rebalance(newLower, newUpper, 0, 0, t0, t1);
+    provider.rebalance(0, 0, 0, block.timestamp);
+
+    assertLt(provider.tickLower(), provider.tickUpper(), "tick range remains valid");
   }
 
-  /* ───── rebalance TWAP deviation guard ───── */
+  /* ───── rebalance without TWAP deviation guard ───── */
 
-  function test_rebalance_succeeds_when_twap_deviation_within_limit() public {
+  function test_rebalance_succeeds_without_twap_deviation_config() public {
     _deposit(user, 10_000 ether, 30 ether);
 
-    // Set a generous deviation limit — slot0 and TWAP should be close after deposit.
-    vm.prank(manager);
-    provider.setMaxTickDeviation(5000);
-
-    (, int24 spotTick, , , , , ) = IListaV3Pool(POOL).slot0();
-    int24 twapTick = provider.getTwapTick();
-    int24 delta = twapTick > spotTick ? twapTick - spotTick : spotTick - twapTick;
-    assertLt(uint24(delta), 5000, "deviation should be within limit");
-
-    // Rebalance to a slightly shifted range — should succeed.
-    int24 newLower = provider.tickLower() - 100;
-    int24 newUpper = provider.tickUpper() - 100;
-    (uint256 t0, uint256 t1) = provider.getTotalAmounts();
-
     vm.prank(bot);
-    provider.rebalance(newLower, newUpper, 0, 0, t0, t1);
+    provider.rebalance(0, 0, 0, block.timestamp);
 
-    assertEq(provider.tickLower(), newLower, "tickLower should be updated");
-    assertEq(provider.tickUpper(), newUpper, "tickUpper should be updated");
+    assertLt(provider.tickLower(), provider.tickUpper(), "tick range remains valid");
   }
 }
