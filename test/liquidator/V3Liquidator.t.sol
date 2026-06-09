@@ -7,25 +7,45 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import { SlisBNBV3Provider } from "../../src/provider/SlisBNBV3Provider.sol";
+import { SlisBNBV3DexAdapter } from "../../src/provider/SlisBNBV3DexAdapter.sol";
+import { SlisBNBV3ProviderOracle } from "../../src/provider/SlisBNBV3ProviderOracle.sol";
 import { V3Liquidator } from "../../src/liquidator/V3Liquidator.sol";
 import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
 import { IMoolah, MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
-import { IOracle } from "moolah/interfaces/IOracle.sol";
+import { IOracle, TokenConfig } from "moolah/interfaces/IOracle.sol";
+import { IStakeManager } from "../../src/provider/interfaces/IStakeManager.sol";
 
 import { MockOneInch } from "./mocks/MockOneInch.sol";
+
+/// @dev Minimal resilient-oracle mock: 8-decimal USD prices, settable per token.
+contract MockOracle is IOracle {
+  mapping(address => uint256) public price;
+
+  function setPrice(address token, uint256 value) external {
+    price[token] = value;
+  }
+
+  function peek(address token) external view returns (uint256) {
+    return price[token];
+  }
+
+  function getTokenConfig(address) external pure returns (TokenConfig memory c) {
+    return c;
+  }
+}
 
 contract V3LiquidatorTest is Test {
   using MarketParamsLib for MarketParams;
 
   /* ─────────────────── PancakeSwap V3 BSC mainnet ─────────────────── */
-  address constant POOL = 0x4141325bAc36aFFe9Db165e854982230a14e6d48; // USDC/WBNB
-  address constant NPM = 0x7b8A01B39D58278b5DE7e48c8449c9f4F5170613;
+  address constant POOL = 0xe1B404Aaf60eEc5c8A1FEDE7dcDC0EAb9C69662F; // SLISBNB/WBNB
+  address constant NPM = 0x46A15B0b27311cedF172AB29E4f4766fbE7F4364;
   uint24 constant FEE = 100;
 
   /* ───────────────────────────── tokens ───────────────────────────── */
-  address constant USDC = 0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d; // token0
+  address constant SLISBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B; // token0
   address constant WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c; // token1
   address constant LISUSD = 0x0782b6d8c4551B9760e74c0545a9bCD90bdc41E5;
   address constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
@@ -35,17 +55,21 @@ contract V3LiquidatorTest is Test {
   address constant TIMELOCK = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253;
   address constant OPERATOR = 0xd7e38800201D6a42C408Bf79d8723740C4E7f631;
   address constant MANAGER_ADDR = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
-  address constant RESILIENT_ORACLE = 0xf3afD82A4071f272F403dC176916141f44E6c750;
+  address constant STAKE_MANAGER = 0x1adB950d8bB3dA4bE104211D5AB038628e477fE6;
   address constant IRM = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
 
   uint32 constant TWAP_PERIOD = 1800;
   uint256 constant LLTV = 70 * 1e16;
+  uint256 constant BNB_USD = 600e8; // 8-dec mock BNB/USD
 
   /* ───────────────────────── test contracts ───────────────────────── */
   Moolah moolah;
+  SlisBNBV3DexAdapter adapter;
   SlisBNBV3Provider provider;
+  SlisBNBV3ProviderOracle providerOracle;
   V3Liquidator liquidator;
   MockOneInch mockSwap;
+  MockOracle oracle;
   MarketParams marketParams;
   Id marketId;
 
@@ -66,16 +90,50 @@ contract V3LiquidatorTest is Test {
     UUPSUpgradeable(MOOLAH_PROXY).upgradeToAndCall(newImpl, bytes(""));
     moolah = Moolah(MOOLAH_PROXY);
 
-    // Deploy SlisBNBV3Provider.
-    SlisBNBV3Provider implP = new SlisBNBV3Provider(MOOLAH_PROXY, NPM, USDC, WBNB, FEE, TWAP_PERIOD);
+    // Resilient-oracle mock: WBNB = BNB price; slisBNB = BNB price × StakeManager rate; lisUSD ≈ $1.
+    oracle = new MockOracle();
+    uint256 rate = IStakeManager(STAKE_MANAGER).convertSnBnbToBnb(1e18);
+    oracle.setPrice(WBNB, BNB_USD);
+    oracle.setPrice(BNB_ADDRESS, BNB_USD);
+    oracle.setPrice(SLISBNB, (BNB_USD * rate) / 1e18);
+    oracle.setPrice(LISUSD, 1e8);
+
+    // Deploy the heavy 3-contract topology EARLY (adapter → provider → oracle) to avoid
+    // forge setUp gas-forwarding issues with large code deposits.
+
+    // 1) DEX adapter: sole NFT custodian + all NPM/pool writes.
+    SlisBNBV3DexAdapter adapterImpl = new SlisBNBV3DexAdapter(NPM, SLISBNB, WBNB, FEE, TWAP_PERIOD);
+    adapter = SlisBNBV3DexAdapter(
+      payable(
+        new ERC1967Proxy(address(adapterImpl), abi.encodeCall(SlisBNBV3DexAdapter.initialize, (admin, manager)))
+      )
+    );
+
+    // 2) Provider / vault: ERC-4626 shares = Moolah collateral. accountingAsset = WBNB.
+    SlisBNBV3Provider implP = new SlisBNBV3Provider(MOOLAH_PROXY, address(adapter));
     provider = SlisBNBV3Provider(
       payable(
         new ERC1967Proxy(
           address(implP),
           abi.encodeCall(
             SlisBNBV3Provider.initialize,
-            (admin, manager, bot, RESILIENT_ORACLE, "V3LP USDC/WBNB", "v3LP")
+            (admin, manager, bot, address(oracle), WBNB, "V3LP SLISBNB/WBNB", "v3LP")
           )
+        )
+      )
+    );
+
+    // 3) Wire the adapter to the vault (one-time, admin).
+    vm.prank(admin);
+    adapter.setProvider(address(provider));
+
+    // 4) Oracle: Moolah market.oracle; prices the share off the adapter's fair view.
+    SlisBNBV3ProviderOracle oracleImpl = new SlisBNBV3ProviderOracle(address(adapter), address(provider), SLISBNB, WBNB);
+    providerOracle = SlisBNBV3ProviderOracle(
+      payable(
+        new ERC1967Proxy(
+          address(oracleImpl),
+          abi.encodeCall(SlisBNBV3ProviderOracle.initialize, (admin, manager, address(oracle), uint256(0)))
         )
       )
     );
@@ -88,11 +146,11 @@ contract V3LiquidatorTest is Test {
 
     mockSwap = new MockOneInch();
 
-    // Build Moolah market: collateral = provider shares, oracle = provider.
+    // Build Moolah market: collateral = provider shares, oracle = providerOracle.
     marketParams = MarketParams({
       loanToken: LISUSD,
       collateralToken: address(provider),
-      oracle: address(provider),
+      oracle: address(providerOracle),
       irm: IRM,
       lltv: LLTV
     });
@@ -111,7 +169,7 @@ contract V3LiquidatorTest is Test {
 
     // Configure liquidator whitelists.
     vm.startPrank(manager);
-    liquidator.setTokenWhitelist(USDC, true);
+    liquidator.setTokenWhitelist(SLISBNB, true);
     liquidator.setTokenWhitelist(LISUSD, true);
     liquidator.setTokenWhitelist(BNB_ADDRESS, true);
     liquidator.setMarketWhitelist(Id.unwrap(marketId), true);
@@ -127,11 +185,11 @@ contract V3LiquidatorTest is Test {
     uint256 amount0,
     uint256 amount1
   ) internal returns (uint256 shares, uint256 used0, uint256 used1) {
-    deal(USDC, _user, amount0);
+    deal(SLISBNB, _user, amount0);
     deal(WBNB, _user, amount1);
     (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
     vm.startPrank(_user);
-    IERC20(USDC).approve(address(provider), amount0);
+    IERC20(SLISBNB).approve(address(provider), amount0);
     IERC20(WBNB).approve(address(provider), amount1);
     (shares, used0, used1) = provider.deposit(
       marketParams,
@@ -152,8 +210,8 @@ contract V3LiquidatorTest is Test {
   /// @dev Borrow 60% of user's collateral value — healthy, but mocking oracle to 0 makes it unhealthy.
   function _borrowAgainstCollateral(address _user) internal returns (uint256 borrowed) {
     (, , uint128 col) = moolah.position(marketId, _user);
-    uint256 sharePrice = provider.peek(address(provider));
-    uint256 loanPrice = provider.peek(LISUSD);
+    uint256 sharePrice = providerOracle.peek(address(provider));
+    uint256 loanPrice = providerOracle.peek(LISUSD);
     borrowed = (uint256(col) * sharePrice * 60) / (loanPrice * 100);
     vm.prank(_user);
     moolah.borrow(marketParams, borrowed, 0, _user, _user);
@@ -162,7 +220,7 @@ contract V3LiquidatorTest is Test {
   /// @dev Mock collateral oracle to zero, making any indebted position liquidatable.
   function _makeUnhealthy() internal {
     vm.mockCall(
-      address(provider),
+      address(providerOracle),
       abi.encodeWithSelector(IOracle.peek.selector, address(provider)),
       abi.encode(uint256(0))
     );
@@ -272,13 +330,13 @@ contract V3LiquidatorTest is Test {
   function test_sellToken_revertsIfNotBot() public {
     vm.prank(user);
     vm.expectRevert();
-    liquidator.sellToken(address(mockSwap), USDC, LISUSD, 1, 0, "");
+    liquidator.sellToken(address(mockSwap), SLISBNB, LISUSD, 1, 0, "");
   }
 
   /* ─────────────────── liquidate (pre-funded) ─────────────────────── */
 
   function test_liquidate_prefunded_receivesShares() public {
-    (uint256 shares, , ) = _deposit(user, 1_000 ether, 3 ether);
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
     _borrowAgainstCollateral(user);
     _makeUnhealthy();
 
@@ -304,7 +362,7 @@ contract V3LiquidatorTest is Test {
   /* ─────────────────── flashLiquidate ─────────────────────────────── */
 
   function test_flashLiquidate_holdShares_noRedeem() public {
-    (uint256 shares, , ) = _deposit(user, 1_000 ether, 3 ether);
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
     uint256 borrowed = _borrowAgainstCollateral(user);
     _makeUnhealthy();
 
@@ -332,17 +390,17 @@ contract V3LiquidatorTest is Test {
   }
 
   function test_flashLiquidate_redeemAndSwap_coveredBySwapProfit() public {
-    (uint256 shares, , ) = _deposit(user, 1_000 ether, 3 ether);
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
     uint256 borrowed = _borrowAgainstCollateral(user);
     _makeUnhealthy();
 
-    // token0 (USDC) swap: amountIn=0 so mock accepts any approval; produces borrowed*2 lisUSD.
+    // token0 (SLISBNB) swap: amountIn=0 so mock accepts any approval; produces borrowed*2 lisUSD.
     // This ensures the NoProfit check passes without knowing the exact repaidAssets upfront.
     bytes memory swap0Data = abi.encodeWithSelector(
       mockSwap.swap.selector,
-      USDC, // tokenIn
+      SLISBNB, // tokenIn
       LISUSD, // tokenOut
-      uint256(0), // amountIn (mock pulls nothing; residual USDC stays in liquidator)
+      uint256(0), // amountIn (mock pulls nothing; residual SLISBNB stays in liquidator)
       borrowed * 2 // amountOutMin — enough to cover repayment
     );
 
@@ -420,7 +478,7 @@ contract V3LiquidatorTest is Test {
 
   function test_redeemV3Shares_redemeesSharesToTokens() public {
     // Acquire shares via pre-funded liquidation.
-    (uint256 shares, , ) = _deposit(user, 1_000 ether, 3 ether);
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
     _borrowAgainstCollateral(user);
     _makeUnhealthy();
     deal(LISUSD, address(liquidator), 1_000 ether);
@@ -443,7 +501,7 @@ contract V3LiquidatorTest is Test {
 
     assertEq(provider.balanceOf(address(liquidator)), 0, "shares burned after redeem");
     assertGt(out0 + out1, 0, "tokens received");
-    assertEq(IERC20(USDC).balanceOf(address(liquidator)), out0, "USDC received");
+    assertEq(IERC20(SLISBNB).balanceOf(address(liquidator)), out0, "SLISBNB received");
     assertEq(address(liquidator).balance, out1, "BNB received (WBNB unwrapped)");
   }
 
@@ -461,16 +519,16 @@ contract V3LiquidatorTest is Test {
   function test_sellToken_erc20_swapsAndClearsAllowance() public {
     uint256 amountIn = 100 ether;
     uint256 amountOut = 50 ether;
-    deal(USDC, address(liquidator), amountIn);
+    deal(SLISBNB, address(liquidator), amountIn);
 
-    bytes memory swapData = abi.encodeWithSelector(mockSwap.swap.selector, USDC, LISUSD, amountIn, amountOut);
+    bytes memory swapData = abi.encodeWithSelector(mockSwap.swap.selector, SLISBNB, LISUSD, amountIn, amountOut);
 
     vm.prank(bot);
-    liquidator.sellToken(address(mockSwap), USDC, LISUSD, amountIn, amountOut, swapData);
+    liquidator.sellToken(address(mockSwap), SLISBNB, LISUSD, amountIn, amountOut, swapData);
 
     assertEq(IERC20(LISUSD).balanceOf(address(liquidator)), amountOut, "received lisUSD");
-    assertEq(IERC20(USDC).balanceOf(address(liquidator)), 0, "USDC consumed");
-    assertEq(IERC20(USDC).allowance(address(liquidator), address(mockSwap)), 0, "allowance cleared");
+    assertEq(IERC20(SLISBNB).balanceOf(address(liquidator)), 0, "SLISBNB consumed");
+    assertEq(IERC20(SLISBNB).allowance(address(liquidator), address(mockSwap)), 0, "allowance cleared");
   }
 
   function test_sellToken_revertsIfTokenNotWhitelisted() public {
@@ -483,19 +541,19 @@ contract V3LiquidatorTest is Test {
 
   function test_sellToken_revertsIfPairNotWhitelisted() public {
     address fakePair = makeAddr("fakePair");
-    deal(USDC, address(liquidator), 1 ether);
+    deal(SLISBNB, address(liquidator), 1 ether);
 
     vm.prank(bot);
     vm.expectRevert(V3Liquidator.NotWhitelisted.selector);
-    liquidator.sellToken(fakePair, USDC, LISUSD, 1 ether, 0, "");
+    liquidator.sellToken(fakePair, SLISBNB, LISUSD, 1 ether, 0, "");
   }
 
   function test_sellToken_revertsIfAmountExceedsBalance() public {
-    deal(USDC, address(liquidator), 50 ether);
+    deal(SLISBNB, address(liquidator), 50 ether);
 
     vm.prank(bot);
     vm.expectRevert(V3Liquidator.ExceedAmount.selector);
-    liquidator.sellToken(address(mockSwap), USDC, LISUSD, 100 ether, 0, "");
+    liquidator.sellToken(address(mockSwap), SLISBNB, LISUSD, 100 ether, 0, "");
   }
 
   function test_sellBNB_swapsNativeBNB() public {
