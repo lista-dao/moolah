@@ -49,6 +49,18 @@ interface IV3Provider is IProvider, IOracle {
     address receiver
   ) external returns (uint256 amount0, uint256 amount1);
 
+  /// @notice Withdraw provider shares from Moolah collateral without
+  ///         redeeming the underlying token0/token1 position.
+  function withdrawShares(
+    MarketParams calldata marketParams,
+    uint256 shares,
+    address onBehalf,
+    address receiver
+  ) external;
+
+  /// @notice Supply wallet-held provider shares as Moolah collateral.
+  function supplyShares(MarketParams calldata marketParams, uint256 shares, address onBehalf) external;
+
   /// @notice Redeem shares already held by the caller (e.g. a liquidator)
   ///         for the underlying token0/token1.
   function redeemShares(

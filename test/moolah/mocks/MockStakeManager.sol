@@ -19,4 +19,10 @@ contract MockStakeManager is IStakeManager {
   function convertSnBnbToBnb(uint256 _amountInSlisBnb) external view returns (uint256) {
     return (_amountInSlisBnb * 1e18) / exchangeRate;
   }
+
+  function deposit() external payable {}
+
+  function instantWithdraw(uint256) external pure returns (uint256) {
+    return 0;
+  }
 }
