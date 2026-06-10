@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.34;
 
-import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
@@ -21,7 +21,7 @@ import "./Interface.sol";
  *   3. redeemV3Shares()     — standalone: redeem shares held by this contract.
  *   4. sellToken/sellBNB()  — swap any token/BNB held by this contract (e.g. post-redeem).
  */
-contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessControlUpgradeable {
+contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   using SafeTransferLib for address;
 
   /* ──────────────────────────── errors ────────────────────────────── */
