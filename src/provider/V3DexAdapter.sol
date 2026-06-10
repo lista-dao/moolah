@@ -34,12 +34,7 @@ import { IV3PoolMinimal } from "./interfaces/IV3PoolMinimal.sol";
  *   - receive(): widen accepted native-BNB senders (StakeManager instantWithdraw).
  *   - rebalance(): added by the subclass (rate-centered recenter + inventory conversion).
  */
-abstract contract V3DexAdapter is
-  UUPSUpgradeable,
-  AccessControlUpgradeable,
-  ReentrancyGuardUpgradeable,
-  IV3DexAdapter
-{
+abstract contract V3DexAdapter is UUPSUpgradeable, AccessControlUpgradeable, ReentrancyGuardUpgradeable, IV3DexAdapter {
   using SafeERC20 for IERC20;
 
   /* ─────────────────────────── immutables ─────────────────────────── */
@@ -305,7 +300,13 @@ abstract contract V3DexAdapter is
     uint160 sqrtPriceX96 = spotSqrtPriceX96();
     uint160 sqrtLower = TickMath.getSqrtRatioAtTick(tickLower);
     uint160 sqrtUpper = TickMath.getSqrtRatioAtTick(tickUpper);
-    liquidity = LiquidityAmounts.getLiquidityForAmounts(sqrtPriceX96, sqrtLower, sqrtUpper, amount0Desired, amount1Desired);
+    liquidity = LiquidityAmounts.getLiquidityForAmounts(
+      sqrtPriceX96,
+      sqrtLower,
+      sqrtUpper,
+      amount0Desired,
+      amount1Desired
+    );
     (amount0, amount1) = LiquidityAmounts.getAmountsForLiquidity(sqrtPriceX96, sqrtLower, sqrtUpper, liquidity);
   }
 

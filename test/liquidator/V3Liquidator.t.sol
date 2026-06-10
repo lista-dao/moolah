@@ -104,9 +104,7 @@ contract V3LiquidatorTest is Test {
     // 1) DEX adapter: sole NFT custodian + all NPM/pool writes.
     SlisBNBV3DexAdapter adapterImpl = new SlisBNBV3DexAdapter(NPM, SLISBNB, WBNB, FEE, TWAP_PERIOD);
     adapter = SlisBNBV3DexAdapter(
-      payable(
-        new ERC1967Proxy(address(adapterImpl), abi.encodeCall(SlisBNBV3DexAdapter.initialize, (admin, manager)))
-      )
+      payable(new ERC1967Proxy(address(adapterImpl), abi.encodeCall(SlisBNBV3DexAdapter.initialize, (admin, manager))))
     );
 
     // 2) Provider / vault: ERC-4626 shares = Moolah collateral. accountingAsset = WBNB.
@@ -128,7 +126,12 @@ contract V3LiquidatorTest is Test {
     adapter.setProvider(address(provider));
 
     // 4) Oracle: Moolah market.oracle; prices the share off the adapter's fair view.
-    SlisBNBV3ProviderOracle oracleImpl = new SlisBNBV3ProviderOracle(address(adapter), address(provider), SLISBNB, WBNB);
+    SlisBNBV3ProviderOracle oracleImpl = new SlisBNBV3ProviderOracle(
+      address(adapter),
+      address(provider),
+      SLISBNB,
+      WBNB
+    );
     providerOracle = SlisBNBV3ProviderOracle(
       payable(
         new ERC1967Proxy(

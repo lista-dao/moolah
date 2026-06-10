@@ -81,7 +81,13 @@ abstract contract V3Provider is
 
   /* ───────────────────────────── events ───────────────────────────── */
 
-  event Deposit(address indexed onBehalf, uint256 amount0Used, uint256 amount1Used, uint256 shares, Id indexed marketId);
+  event Deposit(
+    address indexed onBehalf,
+    uint256 amount0Used,
+    uint256 amount1Used,
+    uint256 shares,
+    Id indexed marketId
+  );
   event Withdraw(
     address indexed onBehalf,
     uint256 shares,
