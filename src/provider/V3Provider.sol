@@ -112,6 +112,8 @@ abstract contract V3Provider is
   error OnlyMoolah();
   error InvalidMarket();
   error StandardEntryDisabled();
+  error BnbTransferFailed();
+  error NotAdapter();
 
   /* ─────────────────────────── constructor ────────────────────────── */
 
@@ -231,7 +233,12 @@ abstract contract V3Provider is
       if (totalValueBefore == 0) revert ZeroShares();
     }
 
-    // Forward the input to the adapter, which adds liquidity and refunds unused to the depositor.
+    // Forward the input to the adapter, which adds liquidity and refunds unused back to THIS vault.
+    // The refund is deliberately NOT sent to the depositor here: doing so (a native-BNB call) before
+    // shares are minted would expose a window where adapter NAV already includes the new liquidity
+    // but totalSupply() is still the old value, letting a malicious depositor reenter and read an
+    // inflated share price from the oracle (C-1). We forward the refund to the depositor only after
+    // _mint + supplyCollateral below, when NAV and totalSupply are consistent.
     if (_amount0Desired > 0) IERC20(TOKEN0).safeTransfer(ADAPTER, _amount0Desired);
     if (_amount1Desired > 0) IERC20(TOKEN1).safeTransfer(ADAPTER, _amount1Desired);
 
@@ -241,7 +248,7 @@ abstract contract V3Provider is
       _amount1Desired,
       amount0Min,
       amount1Min,
-      msg.sender
+      address(this)
     );
 
     (uint256 added0, uint256 added1) = IV3DexAdapter(ADAPTER).amountsForLiquidity(liquidityAdded, fairSqrtPriceX96);
@@ -261,6 +268,13 @@ abstract contract V3Provider is
     _afterCollateralChange(marketParams.id(), onBehalf);
 
     emit Deposit(onBehalf, amount0Used, amount1Used, shares, marketParams.id());
+
+    // Refund unused input to the depositor now that shares are minted and supplied (CEI): NAV and
+    // totalSupply are consistent, so the (native-BNB) refund callback cannot inflate the share price.
+    uint256 refund0 = _amount0Desired - amount0Used;
+    uint256 refund1 = _amount1Desired - amount1Used;
+    if (refund0 > 0) _refund(TOKEN0, refund0, msg.sender);
+    if (refund1 > 0) _refund(TOKEN1, refund1, msg.sender);
   }
 
   /// @inheritdoc IV3Provider
@@ -436,6 +450,22 @@ abstract contract V3Provider is
 
   function _isSenderAuthorized(address onBehalf) internal view returns (bool) {
     return msg.sender == onBehalf || MOOLAH.isAuthorized(onBehalf, msg.sender);
+  }
+
+  /// @dev Forward a deposit refund to the depositor. WBNB is already unwrapped to native BNB by the
+  ///      adapter when it refunds to this vault, so the WBNB leg is paid out as native BNB.
+  function _refund(address token, uint256 amount, address to) internal {
+    if (token == WBNB) {
+      (bool ok, ) = payable(to).call{ value: amount }("");
+      if (!ok) revert BnbTransferFailed();
+    } else {
+      IERC20(token).safeTransfer(to, amount);
+    }
+  }
+
+  /// @dev Accept native BNB only from the adapter (WBNB refund unwrapped during deposit).
+  receive() external payable {
+    if (msg.sender != ADAPTER) revert NotAdapter();
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
