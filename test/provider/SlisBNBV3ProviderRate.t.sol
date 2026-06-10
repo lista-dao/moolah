@@ -180,12 +180,7 @@ contract SlisBNBV3ProviderRateTest is Test {
     // 1) DEX adapter (NFT custodian + rate/rebalance logic).
     SlisBNBV3DexAdapter adapterImpl = new SlisBNBV3DexAdapter(NPM, SLISBNB, WBNB, FEE, TWAP_PERIOD);
     adapter = SlisBNBV3DexAdapter(
-      payable(
-        new ERC1967Proxy(
-          address(adapterImpl),
-          abi.encodeCall(SlisBNBV3DexAdapter.initialize, (admin, manager))
-        )
-      )
+      payable(new ERC1967Proxy(address(adapterImpl), abi.encodeCall(SlisBNBV3DexAdapter.initialize, (admin, manager))))
     );
 
     // 2) Vault (ERC-4626 shares + Moolah wiring). accountingAsset = WBNB for these pools.
