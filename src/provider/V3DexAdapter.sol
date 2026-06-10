@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.34;
 
-import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -34,7 +34,12 @@ import { IV3PoolMinimal } from "./interfaces/IV3PoolMinimal.sol";
  *   - receive(): widen accepted native-BNB senders (StakeManager instantWithdraw).
  *   - rebalance(): added by the subclass (rate-centered recenter + inventory conversion).
  */
-abstract contract V3DexAdapter is UUPSUpgradeable, AccessControlUpgradeable, ReentrancyGuardUpgradeable, IV3DexAdapter {
+abstract contract V3DexAdapter is
+  UUPSUpgradeable,
+  AccessControlEnumerableUpgradeable,
+  ReentrancyGuardUpgradeable,
+  IV3DexAdapter
+{
   using SafeERC20 for IERC20;
 
   /* ─────────────────────────── immutables ─────────────────────────── */

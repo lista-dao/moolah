@@ -3,7 +3,7 @@ pragma solidity 0.8.34;
 
 import { ERC20Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import { ERC4626Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
-import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -41,7 +41,7 @@ import { IV3DexAdapter } from "./interfaces/IV3DexAdapter.sol";
 abstract contract V3Provider is
   ERC4626Upgradeable,
   UUPSUpgradeable,
-  AccessControlUpgradeable,
+  AccessControlEnumerableUpgradeable,
   ReentrancyGuardUpgradeable,
   IV3Provider
 {

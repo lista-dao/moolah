@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.34;
 
-import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
@@ -23,7 +23,7 @@ import { IV3ProviderOracle } from "./interfaces/IV3ProviderOracle.sol";
  * @dev finding D — when supply > 0, peek(share) reverts on a zero leg price or zero total value so
  *      Moolah never prices collateral off a broken feed; supply == 0 returns 0 (pre-market).
  */
-contract SlisBNBV3ProviderOracle is UUPSUpgradeable, AccessControlUpgradeable, IV3ProviderOracle {
+contract SlisBNBV3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IV3ProviderOracle {
   /* ─────────────────────────── immutables ─────────────────────────── */
 
   /// @inheritdoc IV3ProviderOracle
