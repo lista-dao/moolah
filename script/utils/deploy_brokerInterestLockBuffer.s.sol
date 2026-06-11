@@ -27,7 +27,12 @@ import { BrokerInterestLockBuffer } from "../../src/utils/BrokerInterestLockBuff
 /// Rollout reminder (must be ordered):
 ///   1. (this script) deploy buffer + grant RELAYER + hand off admin/manager
 ///   2. upgrade BrokerInterestRelayer / CreditBrokerInterestRelayer to the buffer-aware impl
-///   3. vault.setLockBuffer(<bufferProxy>)  -- only after step 2 lands
+///   3. SEED THE VAULT (audit M-06) — governance deposits a small never-withdrawn balance into
+///      the vault and assigns the shares to TIMELOCK. Required to prevent two failure modes if
+///      every LP ever redeems while currentLocked() > 0:
+///        - orphaned Moolah supply shares (no claimer for the locked reward), and
+///        - the inflation-attack window where totalAssets > 0 while totalSupply == 0.
+///   4. vault.setLockBuffer(<bufferProxy>)  -- only after steps 2 and 3 land
 contract DeployBrokerInterestLockBuffer is DeployBase {
   address timelock;
   address manager;

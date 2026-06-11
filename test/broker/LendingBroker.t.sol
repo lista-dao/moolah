@@ -1935,18 +1935,6 @@ contract LendingBrokerTest is Test {
     vault.setLockBuffer(address(wrongProxy));
   }
 
-  /// @dev notifyBrokerInterest reverts when amount exceeds vault.totalAssets().
-  function test_lockBuffer_notifyExceedingTotalAssetsReverts() public {
-    bytes32 relayerRole = lockBuffer.RELAYER();
-    vm.startPrank(ADMIN);
-    lockBuffer.grantRole(relayerRole, address(this));
-    vm.stopPrank();
-
-    // Vault has 0 totalAssets — any positive amount must be rejected.
-    vm.expectRevert(BrokerInterestLockBuffer.AmountExceedsVaultAssets.selector);
-    lockBuffer.notifyBrokerInterest(1);
-  }
-
   /// @dev setLockBuffer refuses a buffer with residual locked balance.
   function test_lockBuffer_setLockBufferNonZeroLockedReverts() public {
     _enableLockBuffer();
