@@ -23,8 +23,6 @@ contract BrokerInterestLockBuffer is UUPSUpgradeable, AccessControlEnumerableUpg
   uint64 public override lastUpdate;
   uint64 public override duration;
 
-  uint256[45] private __gap;
-
   event BrokerInterestNotified(address indexed relayer, uint256 amount, uint256 newLocked, uint256 unlockEnd);
   event SetDuration(uint64 newDuration);
 
@@ -58,11 +56,12 @@ contract BrokerInterestLockBuffer is UUPSUpgradeable, AccessControlEnumerableUpg
   }
 
   function currentLocked() public view override returns (uint256) {
+    uint128 locked = lockedAmount;
+    if (locked == 0) return 0;
     uint64 dur = duration;
-    if (dur == 0) return 0;
     uint256 elapsed = block.timestamp - lastUpdate;
     if (elapsed >= dur) return 0;
-    return (uint256(lockedAmount) * (dur - elapsed)) / dur;
+    return (uint256(locked) * (dur - elapsed)) / dur;
   }
 
   /// @dev Combine-and-reset: clock restarts each notify; duration unchanged here.
