@@ -97,8 +97,12 @@ contract DeployBrokerInterestLockBuffer is DeployBase {
     buffer.grantRole(MANAGER, manager);
     buffer.grantRole(DEFAULT_ADMIN_ROLE, timelock);
 
-    // Deployer's temporary roles should be revoked in a follow-up tx (matches the
-    // pattern in script/broker/renounceRoles.s.sol).
+    // 5. Revoke the deployer's temporary roles in the same broadcast so the deployer EOA cannot
+    //    upgrade the buffer impl or reset the unlock clock after deploy. Order matters: revoke
+    //    MANAGER first (still callable by ourselves while we hold DEFAULT_ADMIN_ROLE), then drop
+    //    DEFAULT_ADMIN_ROLE last.
+    buffer.revokeRole(MANAGER, deployer);
+    buffer.revokeRole(DEFAULT_ADMIN_ROLE, deployer);
 
     vm.stopBroadcast();
   }
