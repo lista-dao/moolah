@@ -2099,18 +2099,61 @@ contract LendingBrokerTest is Test {
     vault.setLockBuffer(address(wrongProxy));
   }
 
-  /// @dev setLockBuffer refuses a buffer with residual locked balance.
-  function test_lockBuffer_setLockBufferNonZeroLockedReverts() public {
+  /// @dev setLockBuffer refuses to detach or replace a buffer that still has locked balance.
+  function test_lockBuffer_setLockBufferDetachWithLockedReverts() public {
     _enableLockBuffer();
     _depositToVault(address(0xA), 10_000 ether);
-    _triggerInterestFlush(50 ether); // pins 50 in the buffer
+    _triggerInterestFlush(50 ether); // pins 50 in the current buffer
 
+    // Detach (A → 0) must revert while the current buffer still has locked > 0.
+    vm.expectRevert(VaultErrorsLib.LockBufferNotEmpty.selector);
     vm.prank(MANAGER);
     vault.setLockBuffer(address(0));
 
+    // Replace (A → B) must revert too, even if B itself is empty.
+    BrokerInterestLockBuffer otherImpl = new BrokerInterestLockBuffer();
+    ERC1967Proxy otherProxy = new ERC1967Proxy(
+      address(otherImpl),
+      abi.encodeWithSelector(
+        BrokerInterestLockBuffer.initialize.selector,
+        ADMIN,
+        MANAGER,
+        address(vault),
+        address(LISUSD),
+        LOCK_DURATION
+      )
+    );
     vm.expectRevert(VaultErrorsLib.LockBufferNotEmpty.selector);
     vm.prank(MANAGER);
-    vault.setLockBuffer(address(lockBuffer));
+    vault.setLockBuffer(address(otherProxy));
+  }
+
+  /// @dev setLockBuffer refuses to attach a new buffer that already has locked balance.
+  function test_lockBuffer_setLockBufferAttachNonEmptyReverts() public {
+    // Vault starts with lockBuffer == address(0); deploy a fresh buffer and pre-load it.
+    BrokerInterestLockBuffer newImpl = new BrokerInterestLockBuffer();
+    ERC1967Proxy newProxy = new ERC1967Proxy(
+      address(newImpl),
+      abi.encodeWithSelector(
+        BrokerInterestLockBuffer.initialize.selector,
+        ADMIN,
+        MANAGER,
+        address(vault),
+        address(LISUSD),
+        LOCK_DURATION
+      )
+    );
+    BrokerInterestLockBuffer newBuffer = BrokerInterestLockBuffer(address(newProxy));
+
+    bytes32 relayerRole = newBuffer.RELAYER();
+    vm.startPrank(ADMIN);
+    newBuffer.grantRole(relayerRole, address(this));
+    vm.stopPrank();
+    newBuffer.notifyBrokerInterest(1 ether);
+
+    vm.expectRevert(VaultErrorsLib.LockBufferNotEmpty.selector);
+    vm.prank(MANAGER);
+    vault.setLockBuffer(address(newBuffer));
   }
 }
 

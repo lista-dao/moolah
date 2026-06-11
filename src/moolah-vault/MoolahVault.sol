@@ -181,6 +181,11 @@ contract MoolahVault is
 
   /// @notice Set (or unset, with `address(0)`) the broker-interest smoothing buffer.
   function setLockBuffer(address buf) external onlyRole(MANAGER) {
+    // Refuse to drop or swap a buffer that still has residual locked balance — both detach
+    // (A → 0) and replace (A → B) would otherwise produce an immediate NAV jump.
+    address cur = lockBuffer;
+    if (cur != address(0) && IBrokerInterestLockBuffer(cur).currentLocked() != 0)
+      revert ErrorsLib.LockBufferNotEmpty();
     if (buf != address(0)) {
       if (IBrokerInterestLockBuffer(buf).vault() != address(this) || IBrokerInterestLockBuffer(buf).asset() != asset())
         revert ErrorsLib.LockBufferMismatch();
