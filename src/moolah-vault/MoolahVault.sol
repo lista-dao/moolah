@@ -383,11 +383,13 @@ contract MoolahVault is
   /// @notice Set a custom vault name. Pass empty string to revert to the original name.
   function setName(string calldata newName) external onlyRole(DEFAULT_ADMIN_ROLE) {
     _name = newName;
+    emit EventsLib.SetName(newName);
   }
 
   /// @notice Set a custom vault symbol. Pass empty string to revert to the original symbol.
   function setSymbol(string calldata newSymbol) external onlyRole(DEFAULT_ADMIN_ROLE) {
     _symbol = newSymbol;
+    emit EventsLib.SetSymbol(newSymbol);
   }
 
   /* EXTERNAL */

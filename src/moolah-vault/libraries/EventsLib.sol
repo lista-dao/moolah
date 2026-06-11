@@ -124,4 +124,10 @@ library EventsLib {
 
   /// @notice Emitted when the lock buffer pointer is set (or unset with `address(0)`).
   event SetLockBuffer(address indexed lockBuffer);
+
+  /// @notice Emitted when the vault token name override is changed.
+  event SetName(string newName);
+
+  /// @notice Emitted when the vault token symbol override is changed.
+  event SetSymbol(string newSymbol);
 }
