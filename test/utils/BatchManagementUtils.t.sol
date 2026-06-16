@@ -160,10 +160,20 @@ contract BatchManagementUtilsTest is Test {
   }
 
   function _deployBroker() internal returns (LendingBroker b) {
-    LendingBroker impl = new LendingBroker(address(moolah), RELAYER_STUB, address(oracle), address(0));
+    LendingBroker impl = new LendingBroker(address(moolah), address(0));
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(LendingBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER, address(rateCalc), 10)
+      abi.encodeWithSelector(
+        LendingBroker.initialize.selector,
+        ADMIN,
+        MANAGER,
+        BOT,
+        PAUSER,
+        address(rateCalc),
+        10,
+        RELAYER_STUB,
+        address(oracle)
+      )
     );
     b = LendingBroker(payable(address(proxy)));
   }

@@ -87,8 +87,6 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     _grantRole(BOT, bot);
   }
 
-  receive() external payable {}
-
   /// @dev withdraws ERC20 tokens.
   /// @param token The address of the token.
   /// @param amount The amount to withdraw.
