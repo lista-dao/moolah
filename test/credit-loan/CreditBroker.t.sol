@@ -18,6 +18,9 @@ import { ICreditBroker, FixedLoanPosition, FixedTermAndRate, GraceConfig, FixedT
 import { CreditBrokerMath, RATE_SCALE } from "../../src/credit-loan/libraries/CreditBrokerMath.sol";
 import { MoolahVault } from "../../src/moolah-vault/MoolahVault.sol";
 import { MarketAllocation } from "../../src/moolah-vault/interfaces/IMoolahVault.sol";
+import { BrokerInterestLockBuffer } from "../../src/utils/BrokerInterestLockBuffer.sol";
+import { IBrokerInterestLockBuffer } from "../../src/utils/interfaces/IBrokerInterestLockBuffer.sol";
+import { ErrorsLib as VaultErrorsLib } from "../../src/moolah-vault/libraries/ErrorsLib.sol";
 
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
@@ -42,6 +45,8 @@ contract CreditBrokerTest is Test {
   MoolahVault public vault;
   CreditBrokerInterestRelayer public relayer;
   CreditBrokerInfo public info;
+  BrokerInterestLockBuffer public lockBuffer; // audit #08 — opt-in via _enableLockBuffer
+  uint64 constant LOCK_DURATION = 6 hours;
 
   // Market commons
   MarketParams public marketParams;
@@ -120,8 +125,20 @@ contract CreditBrokerTest is Test {
     vm.prank(MANAGER);
     Moolah(address(moolah)).enableLltv(LTV);
 
-    // Vault (only used as supply receiver for interest in tests)
-    vault = new MoolahVault(address(moolah), address(USDT));
+    // Vault deployed via UUPS proxy so MANAGER/CURATOR/ALLOCATOR gates are usable in fix tests.
+    MoolahVault vaultImpl = new MoolahVault(address(moolah), address(USDT));
+    ERC1967Proxy vaultProxy = new ERC1967Proxy(
+      address(vaultImpl),
+      abi.encodeWithSelector(
+        MoolahVault.initialize.selector,
+        ADMIN,
+        MANAGER,
+        address(USDT),
+        "Lista USDT Vault",
+        "vUSDT"
+      )
+    );
+    vault = MoolahVault(address(vaultProxy));
 
     // CreditBrokerInterestRelayer
     CreditBrokerInterestRelayer relayerImpl = new CreditBrokerInterestRelayer();
@@ -216,6 +233,70 @@ contract CreditBrokerTest is Test {
     assertEq(penaltyRate, 15 * 1e25);
     assertEq(noInterestPeriod, 1);
     assertEq(broker.maxFixedLoanPositions(), 100);
+
+    // --- audit #08 wiring ---
+    // Cache role hashes so startPrank covers the actual grantRole (separate STATICCALL for the
+    // view-role lookup would otherwise consume vm.prank).
+    bytes32 vaultCurator = vault.CURATOR();
+    bytes32 vaultAllocator = vault.ALLOCATOR();
+    vm.startPrank(ADMIN);
+    vault.grantRole(vaultCurator, MANAGER);
+    vm.stopPrank();
+    vm.startPrank(MANAGER);
+    vault.grantRole(vaultAllocator, MANAGER);
+    vault.setCap(marketParams, type(uint184).max);
+    Id[] memory sq = new Id[](1);
+    sq[0] = id;
+    vault.setSupplyQueue(sq);
+    vm.stopPrank();
+
+    BrokerInterestLockBuffer bufferImpl = new BrokerInterestLockBuffer();
+    ERC1967Proxy bufferProxy = new ERC1967Proxy(
+      address(bufferImpl),
+      abi.encodeWithSelector(
+        BrokerInterestLockBuffer.initialize.selector,
+        ADMIN,
+        MANAGER,
+        address(vault),
+        address(USDT),
+        LOCK_DURATION
+      )
+    );
+    lockBuffer = BrokerInterestLockBuffer(address(bufferProxy));
+
+    bytes32 bufferRelayer = lockBuffer.RELAYER();
+    vm.startPrank(ADMIN);
+    lockBuffer.grantRole(bufferRelayer, address(relayer));
+    vm.stopPrank();
+  }
+
+  // ===== audit #08 helpers =====
+
+  function _enableLockBuffer() internal {
+    vm.prank(MANAGER);
+    vault.setLockBuffer(address(lockBuffer));
+  }
+
+  /// @dev The credit relayer accumulates supplyAmount; flush + notify only fires when >= minLoan.
+  function _triggerInterestFlush(uint256 amount) internal {
+    USDT.setBalance(address(broker), USDT.balanceOf(address(broker)) + amount);
+    vm.startPrank(address(broker));
+    IERC20(address(USDT)).approve(address(relayer), amount);
+    relayer.supplyToVault(amount);
+    vm.stopPrank();
+  }
+
+  function _depositToVault(address user, uint256 amount) internal returns (uint256 shares) {
+    USDT.setBalance(user, USDT.balanceOf(user) + amount);
+    vm.startPrank(user);
+    IERC20(address(USDT)).approve(address(vault), type(uint256).max);
+    shares = vault.deposit(amount, user);
+    vm.stopPrank();
+  }
+
+  function _redeemFromVault(address user, uint256 shares) internal returns (uint256 assets) {
+    vm.prank(user);
+    assets = vault.redeem(shares, user, user);
   }
 
   function _deployCreditToken() public {
@@ -1587,5 +1668,219 @@ contract CreditBrokerTest is Test {
     vm.expectRevert("not supported");
     moolah.liquidate(marketParams, borrower, 0, positions[0].borrowedShares, "");
     vm.stopPrank();
+  }
+
+  // =====================================================================================
+  //                 Audit #08 — BrokerInterestLockBuffer (credit side)
+  // =====================================================================================
+
+  /// @dev Flush is hidden in the same block, unlocks linearly over LOCK_DURATION.
+  function test_lockBuffer_smoothsBrokerInterestFlush() public {
+    _enableLockBuffer();
+    _depositToVault(address(0xA), 10_000 ether);
+
+    uint256 totalBefore = vault.totalAssets();
+    uint256 supplyBefore = vault.totalSupply();
+
+    _triggerInterestFlush(50 ether);
+
+    assertEq(lockBuffer.currentLocked(), 50 ether);
+    assertEq(vault.totalAssets(), totalBefore);
+    assertEq(vault.totalSupply(), supplyBefore);
+
+    vm.warp(block.timestamp + LOCK_DURATION / 2);
+    assertApproxEqAbs(lockBuffer.currentLocked(), 25 ether, 1);
+    assertApproxEqAbs(vault.totalAssets(), totalBefore + 25 ether, 1);
+
+    vm.warp(block.timestamp + LOCK_DURATION / 2 + 1);
+    assertEq(lockBuffer.currentLocked(), 0);
+    assertApproxEqAbs(vault.totalAssets(), totalBefore + 50 ether, 1);
+  }
+
+  /// @dev Regression: without buffer wired, the flush jumps NAV in one block.
+  function test_lockBuffer_disabledMatchesPreFixBehavior() public {
+    assertEq(vault.lockBuffer(), address(0));
+    _depositToVault(address(0xA), 10_000 ether);
+
+    uint256 totalBefore = vault.totalAssets();
+    _triggerInterestFlush(50 ether);
+    assertApproxEqAbs(vault.totalAssets(), totalBefore + 50 ether, 1);
+  }
+
+  /// @dev End-to-end sandwich: attacker captures only wei-level dust, LP keeps the flush.
+  function test_lockBuffer_sandwichAttackerCapturesNothing() public {
+    _enableLockBuffer();
+
+    address lp = address(0xA);
+    address attacker = address(0xB);
+    _depositToVault(lp, 1_000 ether);
+
+    uint256 attackerShares = _depositToVault(attacker, 9_000 ether);
+    uint256 attackerCost = 9_000 ether;
+
+    _triggerInterestFlush(50 ether);
+    uint256 attackerReturn = _redeemFromVault(attacker, attackerShares);
+
+    assertLe(attackerReturn, attackerCost);
+    assertLt(attackerCost - attackerReturn, 1e15);
+
+    vm.warp(block.timestamp + LOCK_DURATION + 1);
+    uint256 lpRedeem = _redeemFromVault(lp, vault.balanceOf(lp));
+    assertGt(lpRedeem, 1_045 ether);
+    assertLe(lpRedeem, 1_050 ether + 10);
+  }
+
+  function test_lockBuffer_notifyOnlyByRelayer() public {
+    vm.expectRevert();
+    vm.prank(address(0xC0FFEE));
+    lockBuffer.notifyBrokerInterest(1 ether);
+  }
+
+  /// @dev setDuration rebases under the old curve — no NAV discontinuity.
+  function test_lockBuffer_setDurationRebasesContinuously() public {
+    _enableLockBuffer();
+    _depositToVault(address(0xA), 10_000 ether);
+    _triggerInterestFlush(100 ether);
+
+    vm.warp(block.timestamp + LOCK_DURATION / 2);
+    uint256 lockedBefore = lockBuffer.currentLocked();
+    uint256 totalBefore = vault.totalAssets();
+
+    vm.prank(MANAGER);
+    lockBuffer.setDuration(1 hours);
+
+    assertApproxEqAbs(lockBuffer.currentLocked(), lockedBefore, 1);
+    assertApproxEqAbs(vault.totalAssets(), totalBefore, 1);
+
+    vm.warp(block.timestamp + 1 hours + 1);
+    assertEq(lockBuffer.currentLocked(), 0);
+  }
+
+  function test_lockBuffer_setDurationOutOfBoundsReverts() public {
+    vm.startPrank(MANAGER);
+    vm.expectRevert(BrokerInterestLockBuffer.InvalidDuration.selector);
+    lockBuffer.setDuration(uint64(1 minutes));
+
+    vm.expectRevert(BrokerInterestLockBuffer.InvalidDuration.selector);
+    lockBuffer.setDuration(uint64(30 days));
+    vm.stopPrank();
+  }
+
+  /// @dev newLocked = stillLocked + amount; clock restarts each notify.
+  function test_lockBuffer_notifyCombinesAndResetsClock() public {
+    _enableLockBuffer();
+    _depositToVault(address(0xA), 10_000 ether);
+
+    _triggerInterestFlush(60 ether);
+    assertEq(lockBuffer.currentLocked(), 60 ether);
+
+    vm.warp(block.timestamp + LOCK_DURATION / 3);
+    assertApproxEqAbs(lockBuffer.currentLocked(), 40 ether, 1);
+
+    _triggerInterestFlush(30 ether);
+    assertApproxEqAbs(lockBuffer.currentLocked(), 70 ether, 1);
+
+    vm.warp(block.timestamp + LOCK_DURATION + 1);
+    assertEq(lockBuffer.currentLocked(), 0);
+  }
+
+  /// @dev Vault refuses a buffer not bound to itself.
+  function test_lockBuffer_setLockBufferMismatchReverts() public {
+    MoolahVault wrongVaultImpl = new MoolahVault(address(moolah), address(LISTA));
+    ERC1967Proxy wrongVaultProxy = new ERC1967Proxy(
+      address(wrongVaultImpl),
+      abi.encodeWithSelector(MoolahVault.initialize.selector, ADMIN, MANAGER, address(LISTA), "Wrong", "WRONG")
+    );
+
+    BrokerInterestLockBuffer wrongImpl = new BrokerInterestLockBuffer();
+    ERC1967Proxy wrongProxy = new ERC1967Proxy(
+      address(wrongImpl),
+      abi.encodeWithSelector(
+        BrokerInterestLockBuffer.initialize.selector,
+        ADMIN,
+        MANAGER,
+        address(MoolahVault(address(wrongVaultProxy))),
+        address(LISTA),
+        LOCK_DURATION
+      )
+    );
+
+    vm.expectRevert();
+    vm.prank(MANAGER);
+    vault.setLockBuffer(address(wrongProxy));
+  }
+
+  /// @dev Credit-specific: sub-minLoan payments accumulate in the relayer; buffer untouched until
+  ///      the accumulated balance crosses minLoan and Moolah.supply actually fires.
+  function test_lockBuffer_subMinLoanAccumulatesWithoutNotify() public {
+    _enableLockBuffer();
+    _depositToVault(address(0xA), 10_000 ether);
+
+    // minLoan = 15 USDT at $1. Two 5-USDT pushes accumulate; the third triggers the flush.
+    uint256 before = relayer.supplyAmount();
+    _triggerInterestFlush(5 ether);
+    _triggerInterestFlush(5 ether);
+    assertEq(relayer.supplyAmount(), before + 10 ether);
+    assertEq(lockBuffer.currentLocked(), 0);
+
+    _triggerInterestFlush(5 ether);
+    assertEq(relayer.supplyAmount(), 0);
+    assertEq(lockBuffer.currentLocked(), 15 ether);
+  }
+
+  /// @dev setLockBuffer refuses to detach or replace a buffer that still has locked balance.
+  function test_lockBuffer_setLockBufferDetachWithLockedReverts() public {
+    _enableLockBuffer();
+    _depositToVault(address(0xA), 10_000 ether);
+    _triggerInterestFlush(50 ether); // pins 50 in the current buffer
+
+    // Detach (A → 0) must revert while the current buffer still has locked > 0.
+    vm.expectRevert(VaultErrorsLib.LockBufferNotEmpty.selector);
+    vm.prank(MANAGER);
+    vault.setLockBuffer(address(0));
+
+    // Replace (A → B) must revert too, even if B itself is empty.
+    BrokerInterestLockBuffer otherImpl = new BrokerInterestLockBuffer();
+    ERC1967Proxy otherProxy = new ERC1967Proxy(
+      address(otherImpl),
+      abi.encodeWithSelector(
+        BrokerInterestLockBuffer.initialize.selector,
+        ADMIN,
+        MANAGER,
+        address(vault),
+        address(USDT),
+        LOCK_DURATION
+      )
+    );
+    vm.expectRevert(VaultErrorsLib.LockBufferNotEmpty.selector);
+    vm.prank(MANAGER);
+    vault.setLockBuffer(address(otherProxy));
+  }
+
+  /// @dev setLockBuffer refuses to attach a new buffer that already has locked balance.
+  function test_lockBuffer_setLockBufferAttachNonEmptyReverts() public {
+    BrokerInterestLockBuffer newImpl = new BrokerInterestLockBuffer();
+    ERC1967Proxy newProxy = new ERC1967Proxy(
+      address(newImpl),
+      abi.encodeWithSelector(
+        BrokerInterestLockBuffer.initialize.selector,
+        ADMIN,
+        MANAGER,
+        address(vault),
+        address(USDT),
+        LOCK_DURATION
+      )
+    );
+    BrokerInterestLockBuffer newBuffer = BrokerInterestLockBuffer(address(newProxy));
+
+    bytes32 relayerRole = newBuffer.RELAYER();
+    vm.startPrank(ADMIN);
+    newBuffer.grantRole(relayerRole, address(this));
+    vm.stopPrank();
+    newBuffer.notifyBrokerInterest(1 ether);
+
+    vm.expectRevert(VaultErrorsLib.LockBufferNotEmpty.selector);
+    vm.prank(MANAGER);
+    vault.setLockBuffer(address(newBuffer));
   }
 }

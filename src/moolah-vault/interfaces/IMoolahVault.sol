@@ -128,6 +128,10 @@ interface IMoolahVaultBase {
   function getWhiteList() external view returns (address[] memory);
   /// @notice Returns `true` if `account` is whitelisted.
   function isWhiteList(address account) external view returns (bool);
+
+  /// @notice The smoothing buffer pointer (or `address(0)` when smoothing is disabled).
+  function lockBuffer() external view returns (address);
+  function setLockBuffer(address buf) external;
 }
 
 /// @dev This interface is inherited by MoolahVault so that function signatures are checked by the compiler.
