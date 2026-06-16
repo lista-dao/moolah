@@ -9,7 +9,8 @@ import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/
 import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
-import { MarketParams } from "moolah/interfaces/IMoolah.sol";
+import { IMoolah, MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
+import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { WAD } from "moolah/libraries/MathLib.sol";
 import { UtilsLib } from "moolah/libraries/UtilsLib.sol";
 import { ConstantsLib } from "./libraries/ConstantsLib.sol";
@@ -41,6 +42,7 @@ contract CollateralYieldVault is
   using UtilsLib for uint256;
   using SafeERC20 for IERC20;
   using EnumerableSet for EnumerableSet.AddressSet;
+  using MarketParamsLib for MarketParams;
 
   /* IMMUTABLES */
 
@@ -50,6 +52,8 @@ contract CollateralYieldVault is
   IStakeManager public immutable STAKE_MANAGER;
   /// @notice SlisBNBProvider that holds the Moolah collateral position on behalf of this vault.
   ISlisBnbProvider public immutable PROVIDER;
+  /// @notice Moolah lending market contract, read from the provider at construction.
+  IMoolah public immutable MOOLAH;
 
   /* ROLES */
 
@@ -101,6 +105,7 @@ contract CollateralYieldVault is
     // slisBNBxMinter is read dynamically at use (the provider may re-set it).
     SLIS_BNB = PROVIDER.TOKEN();
     STAKE_MANAGER = IStakeManager(PROVIDER.STAKE_MANAGER());
+    MOOLAH = IMoolah(PROVIDER.MOOLAH());
     // asset is always slisBNB (18 decimals) => ERC4626 decimals offset is 0 (the inherited default).
   }
 
@@ -150,6 +155,7 @@ contract CollateralYieldVault is
     uint256 newTotalAssets = _accrueFee();
     lastTotalAssets = newTotalAssets;
     shares = _convertToSharesWithTotals(assets, totalSupply(), newTotalAssets, Math.Rounding.Floor);
+    if (shares == 0) revert ZeroAmount();
     _deposit(_msgSender(), receiver, assets, shares);
   }
 
@@ -238,19 +244,25 @@ contract CollateralYieldVault is
   /* VIEWS */
 
   /// @inheritdoc IERC4626
-  /// @dev NAV = the vault's slisBNB collateral tracked by the provider. Note: an external party can raise this by
-  ///      calling `SlisBNBProvider.supplyCollateral(onBehalf=vault)` (a donation that benefits holders).
+  /// @dev NAV = the vault's slisBNB collateral in *this exact Moolah market*, read live from Moolah. Reading the
+  ///      per-market position (not the provider's cross-market `userTotalDeposit`) ensures NAV only ever reflects
+  ///      collateral that the vault can actually withdraw from this market, so slisBNB the vault supplies to any
+  ///      other market cannot inflate the share price. Note: an external party can still raise this by calling
+  ///      `SlisBNBProvider.supplyCollateral(onBehalf=vault)` against this market (a donation that benefits holders).
   function totalAssets() public view override returns (uint256) {
-    return PROVIDER.userTotalDeposit(address(this));
+    return MOOLAH.position(marketParams.id(), address(this)).collateral;
   }
 
+  /// @dev Mirrors the deposit gate (`whenNotPaused` + `_checkWhiteList`): a deposit reverts unless BOTH the caller
+  ///      and the receiver are whitelisted, so reflect the `_msgSender()` whitelist here too.
   function maxDeposit(address receiver) public view override returns (uint256) {
-    if (paused() || !isWhiteList(receiver)) return 0;
+    if (paused() || !isWhiteList(_msgSender()) || !isWhiteList(receiver)) return 0;
     return type(uint256).max;
   }
 
+  /// @dev See {maxDeposit}: reflects both the caller and receiver whitelist so it cannot signal a mint that reverts.
   function maxMint(address receiver) public view override returns (uint256) {
-    if (paused() || !isWhiteList(receiver)) return 0;
+    if (paused() || !isWhiteList(_msgSender()) || !isWhiteList(receiver)) return 0;
     return type(uint256).max;
   }
 

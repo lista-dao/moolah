@@ -28,6 +28,8 @@ interface ISlisBnbProvider is IProvider {
   function slisBNBxMinter() external view returns (address);
 
   function STAKE_MANAGER() external view returns (address);
+
+  function MOOLAH() external view returns (address);
 }
 interface ISmartProvider is IProvider {
   function dexLP() external view returns (address);
