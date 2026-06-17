@@ -67,7 +67,9 @@ contract DeployCollateralYieldVault is DeployBase {
     // 2. delegate slisBNBx to the governance-approved MPC.
     vault.setDelegateTarget(MPC1);
 
-    // 3. dead seed deposit: keeps totalSupply > 0 forever (whitelist still empty == open here).
+    // 3. dead seed deposit (NOTICE): governance makes the FIRST deposit so any pre-genesis donation is absorbed
+    //    into unredeemable dead shares instead of poisoning the rate; also keeps totalSupply > 0 forever. A donation
+    //    large enough to round this to 0 shares reverts (depositBNB zero-share guard) → redeploy with larger SEED_BNB.
     uint256 seedShares = vault.depositBNB{ value: SEED_BNB }(DEAD);
     console.log("Seed shares minted to dead address:", seedShares);
     require(vault.totalSupply() == seedShares && seedShares > 0, "seed failed");
