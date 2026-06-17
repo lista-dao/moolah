@@ -9,7 +9,8 @@ import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/
 import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
-import { MarketParams } from "moolah/interfaces/IMoolah.sol";
+import { IMoolah, MarketParams, Market, Id } from "moolah/interfaces/IMoolah.sol";
+import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { WAD } from "moolah/libraries/MathLib.sol";
 import { UtilsLib } from "moolah/libraries/UtilsLib.sol";
 import { ConstantsLib } from "./libraries/ConstantsLib.sol";
@@ -28,6 +29,8 @@ import { ICollateralYieldVault } from "./interfaces/ICollateralYieldVault.sol";
 ///         (BOT-only) which stakes BNB->slisBNB, supplies it, and raises the share price. Performance fee follows the
 ///         MoolahVault model (fee-share dilution, high-water `lastTotalAssets`); `fee` is 0 at launch.
 ///         The vault is client-agnostic: per-deployment branding lives only in the token name/symbol.
+/// @dev NOTICE: correctness depends on the underlying SlisBNBProvider / SlisBNBxMinter / Moolah config staying
+///      consistent. Deregistering the provider from the market would lock collateral; governance must manage these.
 contract CollateralYieldVault is
   UUPSUpgradeable,
   AccessControlEnumerableUpgradeable,
@@ -41,6 +44,7 @@ contract CollateralYieldVault is
   using UtilsLib for uint256;
   using SafeERC20 for IERC20;
   using EnumerableSet for EnumerableSet.AddressSet;
+  using MarketParamsLib for MarketParams;
 
   /* IMMUTABLES */
 
@@ -50,6 +54,8 @@ contract CollateralYieldVault is
   IStakeManager public immutable STAKE_MANAGER;
   /// @notice SlisBNBProvider that holds the Moolah collateral position on behalf of this vault.
   ISlisBnbProvider public immutable PROVIDER;
+  /// @notice Moolah lending market contract, read from the provider at construction.
+  IMoolah public immutable MOOLAH;
 
   /* ROLES */
 
@@ -91,6 +97,8 @@ contract CollateralYieldVault is
 
   error ZeroAmount();
   error SharesOutstanding();
+  error MarketNotCreated();
+  error ProviderNotRegistered();
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor(address _provider) {
@@ -101,6 +109,7 @@ contract CollateralYieldVault is
     // slisBNBxMinter is read dynamically at use (the provider may re-set it).
     SLIS_BNB = PROVIDER.TOKEN();
     STAKE_MANAGER = IStakeManager(PROVIDER.STAKE_MANAGER());
+    MOOLAH = IMoolah(PROVIDER.MOOLAH());
     // asset is always slisBNB (18 decimals) => ERC4626 decimals offset is 0 (the inherited default).
   }
 
@@ -120,6 +129,12 @@ contract CollateralYieldVault is
   ) external initializer {
     if (admin == address(0) || manager == address(0) || pauser == address(0)) revert ErrorsLib.ZeroAddress();
     if (_marketParams.collateralToken != SLIS_BNB) revert ErrorsLib.TokenMismatch();
+    // Fail fast on a misconfigured market: it must exist on Moolah and have PROVIDER registered as its slisBNB
+    // collateral provider, otherwise every supply/withdraw (and thus the whole vault) would be bricked or NAV
+    // would silently under-report. The market params are immutable after this, so validate them here.
+    Id id = _marketParams.id();
+    if (MOOLAH.market(id).lastUpdate == 0) revert MarketNotCreated();
+    if (MOOLAH.providers(id, SLIS_BNB) != address(PROVIDER)) revert ProviderNotRegistered();
 
     __AccessControl_init();
     __ReentrancyGuard_init();
@@ -150,6 +165,7 @@ contract CollateralYieldVault is
     uint256 newTotalAssets = _accrueFee();
     lastTotalAssets = newTotalAssets;
     shares = _convertToSharesWithTotals(assets, totalSupply(), newTotalAssets, Math.Rounding.Floor);
+    if (shares == 0) revert ZeroAmount();
     _deposit(_msgSender(), receiver, assets, shares);
   }
 
@@ -159,6 +175,7 @@ contract CollateralYieldVault is
     uint256 newTotalAssets = _accrueFee();
     lastTotalAssets = newTotalAssets;
     assets = _convertToAssetsWithTotals(shares, totalSupply(), newTotalAssets, Math.Rounding.Ceil);
+    if (assets == 0) revert ZeroAmount();
     _deposit(_msgSender(), receiver, assets, shares);
   }
 
@@ -167,8 +184,9 @@ contract CollateralYieldVault is
     _checkWhiteList(receiver);
     if (msg.value == 0) revert ZeroAmount();
 
+    // No interim `lastTotalAssets = newTotalAssets` write: nothing here reads it before the final
+    // `_updateLastTotalAssets(newTotalAssets + assets)` (unlike `deposit`/`mint`, whose `_deposit` reads it).
     uint256 newTotalAssets = _accrueFee();
-    lastTotalAssets = newTotalAssets;
 
     uint256 balBefore = IERC20(SLIS_BNB).balanceOf(address(this));
     STAKE_MANAGER.deposit{ value: msg.value }();
@@ -216,6 +234,8 @@ contract CollateralYieldVault is
   ///         the increment. Mints no user shares => share price rises. Initial `fee` = 0 => increment fully accrues
   ///         to holders. Only the slisBNB minted from this call's `msg.value` is compounded (measured as a balance
   ///         delta), so any unrelated slisBNB sitting in the vault is never swept into the position here.
+  /// @dev NOTICE: rewards injected while totalSupply == 0 accrue to the virtual shares. The deploy-time dead-seed
+  ///      first deposit keeps supply > 0, so this state is not reached in practice.
   function increaseVaultAssets() external payable override onlyRole(BOT) nonReentrant whenNotPaused {
     if (msg.value == 0) revert ZeroAmount();
 
@@ -238,23 +258,31 @@ contract CollateralYieldVault is
   /* VIEWS */
 
   /// @inheritdoc IERC4626
-  /// @dev NAV = the vault's slisBNB collateral tracked by the provider. Note: an external party can raise this by
-  ///      calling `SlisBNBProvider.supplyCollateral(onBehalf=vault)` (a donation that benefits holders).
+  /// @dev NAV = the vault's slisBNB collateral in *this exact Moolah market*, read live from Moolah. Reading the
+  ///      per-market position (not the provider's cross-market `userTotalDeposit`) ensures NAV only ever reflects
+  ///      collateral that the vault can actually withdraw from this market, so slisBNB the vault supplies to any
+  ///      other market cannot inflate the share price. Note: an external party can still raise this by calling
+  ///      `SlisBNBProvider.supplyCollateral(onBehalf=vault)` against this market (a donation that benefits holders).
   function totalAssets() public view override returns (uint256) {
-    return PROVIDER.userTotalDeposit(address(this));
+    return MOOLAH.position(marketParams.id(), address(this)).collateral;
   }
 
+  /// @dev Mirrors the deposit gate (`whenNotPaused` + `_checkWhiteList`): a deposit reverts unless BOTH the caller
+  ///      and the receiver are whitelisted, so reflect the `_msgSender()` whitelist here too.
   function maxDeposit(address receiver) public view override returns (uint256) {
-    if (paused() || !isWhiteList(receiver)) return 0;
+    if (paused() || !isWhiteList(_msgSender()) || !isWhiteList(receiver)) return 0;
     return type(uint256).max;
   }
 
+  /// @dev See {maxDeposit}: reflects both the caller and receiver whitelist so it cannot signal a mint that reverts.
   function maxMint(address receiver) public view override returns (uint256) {
-    if (paused() || !isWhiteList(receiver)) return 0;
+    if (paused() || !isWhiteList(_msgSender()) || !isWhiteList(receiver)) return 0;
     return type(uint256).max;
   }
 
   /// @notice If the whitelist is empty it is treated as open (everyone allowed).
+  /// @dev NOTICE: intentional — launches with the whitelist OFF (open). Enabling it later is a deliberate
+  ///      governance action that, by design, then restricts existing non-listed holders.
   function isWhiteList(address account) public view returns (bool) {
     return userWhiteList.length() == 0 || userWhiteList.contains(account);
   }
@@ -265,13 +293,15 @@ contract CollateralYieldVault is
 
   /* MANAGER: FEE */
 
-  function setFee(uint256 newFee) external onlyRole(MANAGER) {
+  /// @dev NOTICE: `_accrueFee()` charges the old rate on NAV realized so far, but rewards already in the harvester
+  ///      yet not compounded will be charged at the new rate. Bounded by `MAX_FEE`; MANAGER is trusted.
+  function setFee(uint96 newFee) external onlyRole(MANAGER) {
     if (newFee == fee) revert ErrorsLib.AlreadySet();
     if (newFee > ConstantsLib.MAX_FEE) revert ErrorsLib.MaxFeeExceeded();
     if (newFee != 0 && feeRecipient == address(0)) revert ErrorsLib.ZeroFeeRecipient();
 
     _updateLastTotalAssets(_accrueFee());
-    fee = uint96(newFee);
+    fee = newFee;
     emit SetFee(_msgSender(), newFee);
   }
 
@@ -298,8 +328,12 @@ contract CollateralYieldVault is
 
   /* MANAGER: DELEGATE TARGET (MPC) */
 
+  /// @dev NOTICE: `target` must not be one of the minter's fee MPC wallets — delegating there corrupts the fee
+  ///      ledger (the switch's burn cannot tell fee tokens from delegated ones). The vault cannot enumerate those
+  ///      wallets via the minter interface, so governance must ensure this when choosing the target.
   function setDelegateTarget(address target) external onlyRole(MANAGER) {
     if (target == address(0)) revert ErrorsLib.ZeroAddress();
+    if (target == delegateTarget) revert ErrorsLib.AlreadySet(); // minter no-ops on same target; avoid misleading event
     delegateTarget = target;
     // Redirect 100% of the vault's slisBNBx to the chosen MPC (minter read from the provider).
     ISlisBNBxMinter(PROVIDER.slisBNBxMinter()).delegateAllTo(target);
@@ -312,6 +346,8 @@ contract CollateralYieldVault is
   ///         (last-redeemer rounding dust), and reset the vault to a clean empty state.
   /// @dev Gated on `totalSupply() == 0`: with no shares outstanding nothing backs user value, so this can never
   ///      touch share-backed funds. A deploy-time dead seed deposit keeps supply > 0 and prevents this state.
+  /// @dev NOTICE: under the intended dead-seed deployment supply never returns to 0, so this is effectively
+  ///      unreachable. Retained intentionally as a safety net for non-seeded/edge deployments; left as-is.
   function sweep(address to) external onlyRole(MANAGER) nonReentrant returns (uint256 amount) {
     if (totalSupply() != 0) revert SharesOutstanding();
     if (to == address(0)) revert ErrorsLib.ZeroAddress();
@@ -319,8 +355,8 @@ contract CollateralYieldVault is
     if (amount > 0) {
       PROVIDER.withdrawCollateral(marketParams, amount, address(this), to);
       _updateLastTotalAssets(0);
+      emit Swept(to, amount);
     }
-    emit Swept(to, amount);
   }
 
   /// @notice Recover stray tokens / native BNB held by the vault (e.g. directly-donated slisBNB that
@@ -348,11 +384,16 @@ contract CollateralYieldVault is
 
   /* INTERNAL: ERC4626 hooks */
 
+  /// @dev NOTICE: both caller and receiver must be whitelisted, so gasless/meta-tx relayers cannot deposit on a
+  ///      user's behalf (a whitelisted relayer would let anyone bypass the list). Strict by design.
   function _checkWhiteList(address receiver) private view {
     require(isWhiteList(_msgSender()) && isWhiteList(receiver), ErrorsLib.NotWhiteList());
   }
 
   /// @dev super._deposit pulls slisBNB from caller and mints shares; then supply it as collateral.
+  /// @dev NOTICE: supply/withdraw go through the provider's `_syncPosition` -> SlisBNBxMinter.rebalance. A pending
+  ///      module config change (feeRate up / discount down) or a frontrun that exhausts MPC mint cap can make this
+  ///      supply revert (EXCEED_MPC_CAP). Governance must keep MPC caps sufficient; monitor for grief attempts.
   function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override {
     super._deposit(caller, receiver, assets, shares);
     PROVIDER.supplyCollateral(marketParams, assets, address(this), "");
@@ -424,14 +465,17 @@ contract CollateralYieldVault is
   function _accrueFee() internal returns (uint256 newTotalAssets) {
     uint256 feeShares;
     (feeShares, newTotalAssets) = _accruedFeeShares();
-    if (feeShares != 0) _mint(feeRecipient, feeShares);
-    emit AccrueInterest(newTotalAssets, feeShares);
+    if (feeShares != 0) {
+      _mint(feeRecipient, feeShares);
+      emit AccrueInterest(newTotalAssets, feeShares);
+    }
   }
 
   function _accruedFeeShares() internal view returns (uint256 feeShares, uint256 newTotalAssets) {
     newTotalAssets = totalAssets();
     uint256 totalInterest = newTotalAssets.zeroFloorSub(lastTotalAssets);
     if (totalInterest != 0 && fee != 0) {
+      // NOTICE: rounds the fee down (favoring holders); negligible since totalInterest is BOT-injected, not dust.
       uint256 feeAssets = totalInterest.mulDiv(fee, WAD);
       feeShares = _convertToSharesWithTotals(feeAssets, totalSupply(), newTotalAssets - feeAssets, Math.Rounding.Floor);
     }
