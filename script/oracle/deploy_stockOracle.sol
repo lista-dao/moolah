@@ -16,21 +16,22 @@ contract StockOracleDeploy is DeployBase {
   function run() public {
     uint256 deployerPrivateKey = _deployerKey();
     address deployer = vm.addr(deployerPrivateKey);
-    (address resilientOracle, address bot, address[] memory stocks) = _config(deployer);
+    (address resilientOracle, address bot, address pauser, address[] memory stocks) = _config(deployer);
 
     console.log("Deployer:          ", deployer);
     console.log("Bot:               ", bot);
+    console.log("Pauser:            ", pauser);
     console.log("Resilient oracle:  ", resilientOracle);
     vm.startBroadcast(deployerPrivateKey);
 
-    // --- StockOracleSwitch (impl + proxy): admin = manager = deployer, bot = dedicated wallet ---
+    // --- StockOracleSwitch (impl + proxy): admin = manager = deployer, bot + pauser = dedicated wallets ---
     StockOracleSwitch switchImpl = new StockOracleSwitch();
     console.log("StockOracleSwitch implementation: ", address(switchImpl));
     StockOracleSwitch stockSwitch = StockOracleSwitch(
       address(
         new ERC1967Proxy(
           address(switchImpl),
-          abi.encodeWithSelector(switchImpl.initialize.selector, deployer, deployer, bot)
+          abi.encodeWithSelector(switchImpl.initialize.selector, deployer, deployer, bot, pauser)
         )
       )
     );
@@ -68,11 +69,12 @@ contract StockOracleDeploy is DeployBase {
   /// @dev Per-network configuration (resilient oracle, bot wallet, managed bStock list).
   function _config(
     address deployer
-  ) internal view returns (address resilientOracle, address bot, address[] memory stocks) {
+  ) internal view returns (address resilientOracle, address bot, address pauser, address[] memory stocks) {
     if (block.chainid == 56) {
       // ---------------- BSC mainnet ----------------
       resilientOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750; // Lista resilient oracle (multiOracle)
       bot = 0x91fC4BA20685339781888eCA3E9E1c12d40F0e13;
+      pauser = 0xEEfebb1546d88EA0909435DF6f615084DD3c5Bd8; // Lista pauser (same as other Moolah deploys)
       stocks = new address[](6);
       stocks[0] = 0xcdf2f3e0fa43C47A6662a91C9E4a7C5f69762699; // MUB
       stocks[1] = 0x5b1910eAaD6450E50f816082Aa078C41F10C292f; // TSLAB
@@ -84,6 +86,7 @@ contract StockOracleDeploy is DeployBase {
       // ---------------- BSC testnet ----------------
       resilientOracle = 0xb041398567ee5B01aA54A04894796c17f11cF07a;
       bot = deployer;
+      pauser = deployer;
       stocks = new address[](0);
     } else {
       revert("StockOracleDeploy: unsupported chain");

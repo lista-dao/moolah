@@ -19,6 +19,7 @@ contract StockOracleTest is Test {
   address internal admin = makeAddr("admin");
   address internal manager = makeAddr("manager");
   address internal bot = makeAddr("bot");
+  address internal pauser = makeAddr("pauser");
   address internal stranger = makeAddr("stranger");
 
   // tokens
@@ -44,7 +45,7 @@ contract StockOracleTest is Test {
     StockOracleSwitch swImpl = new StockOracleSwitch();
     ERC1967Proxy swProxy = new ERC1967Proxy(
       address(swImpl),
-      abi.encodeWithSelector(StockOracleSwitch.initialize.selector, admin, manager, bot)
+      abi.encodeWithSelector(StockOracleSwitch.initialize.selector, admin, manager, bot, pauser)
     );
     stockSwitch = StockOracleSwitch(address(swProxy));
 

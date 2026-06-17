@@ -14,6 +14,7 @@ contract StockOracleSwitchTest is Test {
   address internal admin = makeAddr("admin");
   address internal manager = makeAddr("manager");
   address internal bot = makeAddr("bot");
+  address internal pauser = makeAddr("pauser");
   address internal stranger = makeAddr("stranger");
 
   // tokens
@@ -24,6 +25,7 @@ contract StockOracleSwitchTest is Test {
   bytes32 internal constant DEFAULT_ADMIN_ROLE = 0x00;
   bytes32 internal MANAGER;
   bytes32 internal BOT;
+  bytes32 internal PAUSER;
 
   // mirror of the events under test
   event StockSet(address indexed token, bool registered);
@@ -34,12 +36,13 @@ contract StockOracleSwitchTest is Test {
     StockOracleSwitch impl = new StockOracleSwitch();
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(StockOracleSwitch.initialize.selector, admin, manager, bot)
+      abi.encodeWithSelector(StockOracleSwitch.initialize.selector, admin, manager, bot, pauser)
     );
     sw = StockOracleSwitch(address(proxy));
 
     MANAGER = sw.MANAGER();
     BOT = sw.BOT();
+    PAUSER = sw.PAUSER();
   }
 
   /// @dev register a stock (which enables it by default) and open the global switch (fully tradable).
@@ -58,6 +61,7 @@ contract StockOracleSwitchTest is Test {
     assertTrue(sw.hasRole(DEFAULT_ADMIN_ROLE, admin), "admin");
     assertTrue(sw.hasRole(MANAGER, manager), "manager");
     assertTrue(sw.hasRole(BOT, bot), "bot");
+    assertTrue(sw.hasRole(PAUSER, pauser), "pauser");
   }
 
   function test_initialize_globalEnabledDefaultsFalse() public view {
@@ -68,6 +72,7 @@ contract StockOracleSwitchTest is Test {
   function test_initialize_botRoleAdminIsManager() public view {
     assertEq(sw.getRoleAdmin(BOT), MANAGER, "BOT admin should be MANAGER");
     assertEq(sw.getRoleAdmin(MANAGER), DEFAULT_ADMIN_ROLE, "MANAGER keeps default admin");
+    assertEq(sw.getRoleAdmin(PAUSER), DEFAULT_ADMIN_ROLE, "PAUSER keeps default admin");
   }
 
   function test_initialize_revertsOnZeroAddress() public {
@@ -76,25 +81,31 @@ contract StockOracleSwitchTest is Test {
     vm.expectRevert(StockOracleSwitch.ZeroAddress.selector);
     new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(StockOracleSwitch.initialize.selector, address(0), manager, bot)
+      abi.encodeWithSelector(StockOracleSwitch.initialize.selector, address(0), manager, bot, pauser)
     );
 
     vm.expectRevert(StockOracleSwitch.ZeroAddress.selector);
     new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(StockOracleSwitch.initialize.selector, admin, address(0), bot)
+      abi.encodeWithSelector(StockOracleSwitch.initialize.selector, admin, address(0), bot, pauser)
     );
 
     vm.expectRevert(StockOracleSwitch.ZeroAddress.selector);
     new ERC1967Proxy(
       address(impl),
-      abi.encodeWithSelector(StockOracleSwitch.initialize.selector, admin, manager, address(0))
+      abi.encodeWithSelector(StockOracleSwitch.initialize.selector, admin, manager, address(0), pauser)
+    );
+
+    vm.expectRevert(StockOracleSwitch.ZeroAddress.selector);
+    new ERC1967Proxy(
+      address(impl),
+      abi.encodeWithSelector(StockOracleSwitch.initialize.selector, admin, manager, bot, address(0))
     );
   }
 
   function test_initialize_cannotReinitialize() public {
     vm.expectRevert(); // Initializable: InvalidInitialization
-    sw.initialize(admin, manager, bot);
+    sw.initialize(admin, manager, bot, pauser);
   }
 
   // ----------------------------------------------------------------------
@@ -293,6 +304,36 @@ contract StockOracleSwitchTest is Test {
     vm.prank(bot);
     vm.expectRevert(StockOracleSwitch.AlreadySet.selector);
     sw.setGlobal(false);
+  }
+
+  // ----------------------------------------------------------------------
+  //                       emergencyClose (PAUSER)
+  // ----------------------------------------------------------------------
+
+  function test_emergencyClose_pauserForcesClosed() public {
+    vm.prank(bot);
+    sw.setGlobal(true);
+    assertTrue(sw.globalEnabled(), "market open");
+
+    vm.expectEmit(false, false, false, true, address(sw));
+    emit GlobalEnabledSet(false);
+    vm.prank(pauser);
+    sw.emergencyClose();
+
+    assertFalse(sw.globalEnabled(), "emergencyClose forces the market closed");
+  }
+
+  function test_emergencyClose_revertsForNonPauser() public {
+    vm.prank(bot); // BOT is not PAUSER
+    vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, bot, PAUSER));
+    sw.emergencyClose();
+  }
+
+  function test_emergencyClose_succeedsWhenAlreadyClosed() public {
+    // globalEnabled defaults false; emergencyClose must still succeed (no AlreadySet guard)
+    vm.prank(pauser);
+    sw.emergencyClose();
+    assertFalse(sw.globalEnabled());
   }
 
   // ----------------------------------------------------------------------

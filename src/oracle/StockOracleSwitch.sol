@@ -11,9 +11,11 @@ import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils
 ///           gated (e.g. the loan token USDT) — {StockOracle} passes them straight through.
 ///         - open/closed (BOT): a per-stock `enabled` flag plus a single `globalEnabled` market-hours
 ///           switch. A registered stock is enabled only while both the global switch and its own flag are on.
+///         PAUSER can force the whole market closed in an emergency (globalEnabled = false).
 contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeable {
   bytes32 public constant MANAGER = keccak256("MANAGER"); // register / un-register stocks; admins BOT
   bytes32 public constant BOT = keccak256("BOT"); // global daily switch + per-stock open / close
+  bytes32 public constant PAUSER = keccak256("PAUSER"); // emergency force-close
 
   /// @dev token => is a managed stock. Unregistered (false) => passthrough (never gated).
   mapping(address => bool) public registered;
@@ -38,15 +40,18 @@ contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeabl
   /// @param admin   DEFAULT_ADMIN_ROLE holder (upgrade + role admin)
   /// @param manager MANAGER role (register / un-register stocks; admins BOT)
   /// @param bot     BOT role (global daily switch + per-stock open / close)
-  function initialize(address admin, address manager, address bot) external initializer {
+  /// @param pauser  PAUSER role (emergency force-close)
+  function initialize(address admin, address manager, address bot, address pauser) external initializer {
     require(admin != address(0), ZeroAddress());
     require(manager != address(0), ZeroAddress());
     require(bot != address(0), ZeroAddress());
+    require(pauser != address(0), ZeroAddress());
     __AccessControl_init();
     __UUPSUpgradeable_init();
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
     _grantRole(MANAGER, manager);
     _grantRole(BOT, bot);
+    _grantRole(PAUSER, pauser);
     // MANAGER administers the BOT role, so it can grant / revoke BOT via grantRole / revokeRole.
     _setRoleAdmin(BOT, MANAGER);
     // globalEnabled stays false on purpose: market is closed until BOT opens it.
@@ -93,6 +98,13 @@ contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeabl
     require(open != globalEnabled, AlreadySet());
     globalEnabled = open;
     emit GlobalEnabledSet(open);
+  }
+
+  /// @notice Emergency: force the whole stock market closed. PAUSER role.
+  /// @dev    No AlreadySet guard — always succeeds so it can be invoked unconditionally in an emergency.
+  function emergencyClose() external onlyRole(PAUSER) {
+    globalEnabled = false;
+    emit GlobalEnabledSet(false);
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
