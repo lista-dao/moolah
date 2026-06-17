@@ -151,7 +151,7 @@ contract StockOracleTest is Test {
     vm.prank(bot);
     stockSwitch.setGlobal(true);
     vm.prank(bot);
-    stockSwitch.disable(stock); // market open, but the stock itself is disabled
+    stockSwitch.close(stock); // market open, but the stock itself is disabled
 
     vm.expectRevert(StockOracle.StockMarketClosed.selector);
     oracle.peek(stock);
@@ -162,7 +162,7 @@ contract StockOracleTest is Test {
     assertEq(oracle.peek(stock), STOCK_PRICE);
 
     vm.prank(bot);
-    stockSwitch.disable(stock);
+    stockSwitch.close(stock);
 
     vm.expectRevert(StockOracle.StockMarketClosed.selector);
     oracle.peek(stock);

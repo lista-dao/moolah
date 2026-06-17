@@ -62,7 +62,7 @@ contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeabl
 
   /// @notice Register or un-register a managed stock. MANAGER role.
   /// @dev    Registering a stock enables it by default; un-registering disables it. BOT can
-  ///         independently toggle the per-stock flag afterwards via enable / disable.
+  ///         independently toggle the per-stock flag afterwards via open / close.
   function setStock(address token, bool isStock) external onlyRole(MANAGER) {
     require(token != address(0), ZeroAddress());
     require(registered[token] != isStock, AlreadySet());
@@ -73,7 +73,7 @@ contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeabl
   }
 
   /// @notice Open a registered stock for trading. BOT role. Only registered stocks can be toggled.
-  function enable(address token) external onlyRole(BOT) {
+  function open(address token) external onlyRole(BOT) {
     require(registered[token], NotRegistered());
     require(!enabled[token], AlreadySet());
     enabled[token] = true;
@@ -81,7 +81,7 @@ contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeabl
   }
 
   /// @notice Close a registered stock. BOT role. Only registered stocks can be toggled.
-  function disable(address token) external onlyRole(BOT) {
+  function close(address token) external onlyRole(BOT) {
     require(registered[token], NotRegistered());
     require(enabled[token], AlreadySet());
     enabled[token] = false;

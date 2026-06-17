@@ -121,7 +121,7 @@ contract StockOracleSwitchTest is Test {
     vm.prank(bot);
     sw.setGlobal(true);
     vm.prank(bot);
-    sw.disable(stock); // BOT closes this specific stock
+    sw.close(stock); // BOT closes this specific stock
     assertFalse(sw.isEnabled(stock), "registered+globalOn but stock disabled -> not enabled");
   }
 
@@ -131,7 +131,7 @@ contract StockOracleSwitchTest is Test {
 
     // disabling the stock alone makes it not enabled again
     vm.prank(bot);
-    sw.disable(stock);
+    sw.close(stock);
     assertFalse(sw.isEnabled(stock), "disabling the stock -> not enabled");
   }
 
@@ -187,50 +187,50 @@ contract StockOracleSwitchTest is Test {
   }
 
   // ----------------------------------------------------------------------
-  //              enable / disable (BOT) — registered-only
+  //              open / close (BOT) — registered-only
   // ----------------------------------------------------------------------
 
-  function test_enable_botReopensAndEmits() public {
+  function test_open_botReopensAndEmits() public {
     // register (auto-enabled) then close, so BOT can re-open it
     vm.prank(manager);
     sw.setStock(stock, true);
     vm.prank(bot);
-    sw.disable(stock);
+    sw.close(stock);
 
     vm.expectEmit(true, false, false, true, address(sw));
     emit StockEnable(stock, true);
 
     vm.prank(bot);
-    sw.enable(stock);
+    sw.open(stock);
 
     assertTrue(sw.enabled(stock));
   }
 
-  function test_enable_revertsForNonBot() public {
+  function test_open_revertsForNonBot() public {
     vm.prank(manager);
     sw.setStock(stock, true);
 
     vm.prank(stranger);
     vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, BOT));
-    sw.enable(stock);
+    sw.open(stock);
   }
 
-  function test_enable_revertsWhenNotRegistered() public {
+  function test_open_revertsWhenNotRegistered() public {
     vm.prank(bot);
     vm.expectRevert(StockOracleSwitch.NotRegistered.selector);
-    sw.enable(stock);
+    sw.open(stock);
   }
 
-  function test_enable_revertsWhenAlreadyEnabled() public {
+  function test_open_revertsWhenAlreadyEnabled() public {
     // registering already enables the stock, so enabling again reverts
     vm.prank(manager);
     sw.setStock(stock, true);
     vm.prank(bot);
     vm.expectRevert(StockOracleSwitch.AlreadySet.selector);
-    sw.enable(stock);
+    sw.open(stock);
   }
 
-  function test_disable_botClosesAndEmits() public {
+  function test_close_botClosesAndEmits() public {
     vm.prank(manager);
     sw.setStock(stock, true); // registered + enabled
 
@@ -238,33 +238,33 @@ contract StockOracleSwitchTest is Test {
     emit StockEnable(stock, false);
 
     vm.prank(bot);
-    sw.disable(stock);
+    sw.close(stock);
 
     assertFalse(sw.enabled(stock));
   }
 
-  function test_disable_revertsForNonBot() public {
+  function test_close_revertsForNonBot() public {
     vm.prank(manager);
     sw.setStock(stock, true);
 
     vm.prank(stranger);
     vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, BOT));
-    sw.disable(stock);
+    sw.close(stock);
   }
 
-  function test_disable_revertsWhenNotRegistered() public {
+  function test_close_revertsWhenNotRegistered() public {
     vm.prank(bot);
     vm.expectRevert(StockOracleSwitch.NotRegistered.selector);
-    sw.disable(stock);
+    sw.close(stock);
   }
 
-  function test_disable_revertsWhenAlreadyDisabled() public {
+  function test_close_revertsWhenAlreadyDisabled() public {
     vm.prank(manager);
     sw.setStock(stock, true); // enabled
     vm.startPrank(bot);
-    sw.disable(stock); // now disabled
+    sw.close(stock); // now disabled
     vm.expectRevert(StockOracleSwitch.AlreadySet.selector);
-    sw.disable(stock);
+    sw.close(stock);
     vm.stopPrank();
   }
 
