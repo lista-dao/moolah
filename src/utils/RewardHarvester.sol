@@ -91,7 +91,9 @@ contract RewardHarvester is UUPSUpgradeable, AccessControlEnumerableUpgradeable,
   /// @dev NOTICE: since distributor claims are permissionless, MANAGER can claim all rewards here and drain them via
   ///      `rescue`. Use a strong multisig for the MANAGER role to mitigate key-compromise.
   function rescue(address token, address to, uint256 amount) external onlyRole(MANAGER) {
-    require(to != address(0), "zero to");
+    // Reject this contract as the recipient: a self-rescue would not move funds out, leaving them subject to the
+    // next harvest's full-balance compound while emitting a misleading Rescued event.
+    require(to != address(0) && to != address(this), "invalid to");
     if (token == address(0)) {
       (bool ok, ) = payable(to).call{ value: amount }("");
       require(ok, "bnb transfer failed");

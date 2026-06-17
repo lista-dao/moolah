@@ -9,7 +9,7 @@ import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/
 import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
-import { IMoolah, MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
+import { IMoolah, MarketParams, Market, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { WAD } from "moolah/libraries/MathLib.sol";
 import { UtilsLib } from "moolah/libraries/UtilsLib.sol";
@@ -97,6 +97,8 @@ contract CollateralYieldVault is
 
   error ZeroAmount();
   error SharesOutstanding();
+  error MarketNotCreated();
+  error ProviderNotRegistered();
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor(address _provider) {
@@ -127,6 +129,12 @@ contract CollateralYieldVault is
   ) external initializer {
     if (admin == address(0) || manager == address(0) || pauser == address(0)) revert ErrorsLib.ZeroAddress();
     if (_marketParams.collateralToken != SLIS_BNB) revert ErrorsLib.TokenMismatch();
+    // Fail fast on a misconfigured market: it must exist on Moolah and have PROVIDER registered as its slisBNB
+    // collateral provider, otherwise every supply/withdraw (and thus the whole vault) would be bricked or NAV
+    // would silently under-report. The market params are immutable after this, so validate them here.
+    Id id = _marketParams.id();
+    if (MOOLAH.market(id).lastUpdate == 0) revert MarketNotCreated();
+    if (MOOLAH.providers(id, SLIS_BNB) != address(PROVIDER)) revert ProviderNotRegistered();
 
     __AccessControl_init();
     __ReentrancyGuard_init();
