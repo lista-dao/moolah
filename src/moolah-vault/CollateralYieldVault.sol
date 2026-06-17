@@ -413,7 +413,8 @@ contract CollateralYieldVault is
     super._withdraw(caller, receiver, owner, assets, shares);
   }
 
-  /// @dev Restrict share transfers to whitelisted holders (mint/burn always allowed).
+  /// @dev When the whitelist is active, share transfers are allowed only between whitelisted holders — BOTH sender
+  ///      and receiver must be listed (mint/burn always allowed). Empty whitelist == open.
   function _update(address from, address to, uint256 value) internal override {
     if (from != address(0) && to != address(0)) {
       require(isWhiteList(from) && isWhiteList(to), ErrorsLib.NotWhiteList());
