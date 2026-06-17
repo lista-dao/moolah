@@ -167,6 +167,7 @@ contract CollateralYieldVault is
     uint256 newTotalAssets = _accrueFee();
     lastTotalAssets = newTotalAssets;
     assets = _convertToAssetsWithTotals(shares, totalSupply(), newTotalAssets, Math.Rounding.Ceil);
+    if (assets == 0) revert ZeroAmount();
     _deposit(_msgSender(), receiver, assets, shares);
   }
 
@@ -175,8 +176,9 @@ contract CollateralYieldVault is
     _checkWhiteList(receiver);
     if (msg.value == 0) revert ZeroAmount();
 
+    // No interim `lastTotalAssets = newTotalAssets` write: nothing here reads it before the final
+    // `_updateLastTotalAssets(newTotalAssets + assets)` (unlike `deposit`/`mint`, whose `_deposit` reads it).
     uint256 newTotalAssets = _accrueFee();
-    lastTotalAssets = newTotalAssets;
 
     uint256 balBefore = IERC20(SLIS_BNB).balanceOf(address(this));
     STAKE_MANAGER.deposit{ value: msg.value }();
@@ -318,8 +320,12 @@ contract CollateralYieldVault is
 
   /* MANAGER: DELEGATE TARGET (MPC) */
 
+  /// @dev NOTICE: `target` must not be one of the minter's fee MPC wallets — delegating there corrupts the fee
+  ///      ledger (the switch's burn cannot tell fee tokens from delegated ones). The vault cannot enumerate those
+  ///      wallets via the minter interface, so governance must ensure this when choosing the target.
   function setDelegateTarget(address target) external onlyRole(MANAGER) {
     if (target == address(0)) revert ErrorsLib.ZeroAddress();
+    if (target == delegateTarget) revert ErrorsLib.AlreadySet(); // minter no-ops on same target; avoid misleading event
     delegateTarget = target;
     // Redirect 100% of the vault's slisBNBx to the chosen MPC (minter read from the provider).
     ISlisBNBxMinter(PROVIDER.slisBNBxMinter()).delegateAllTo(target);
@@ -332,6 +338,8 @@ contract CollateralYieldVault is
   ///         (last-redeemer rounding dust), and reset the vault to a clean empty state.
   /// @dev Gated on `totalSupply() == 0`: with no shares outstanding nothing backs user value, so this can never
   ///      touch share-backed funds. A deploy-time dead seed deposit keeps supply > 0 and prevents this state.
+  /// @dev NOTICE: under the intended dead-seed deployment supply never returns to 0, so this is effectively
+  ///      unreachable. Retained intentionally as a safety net for non-seeded/edge deployments; left as-is.
   function sweep(address to) external onlyRole(MANAGER) nonReentrant returns (uint256 amount) {
     if (totalSupply() != 0) revert SharesOutstanding();
     if (to == address(0)) revert ErrorsLib.ZeroAddress();
