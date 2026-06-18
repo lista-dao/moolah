@@ -32,6 +32,9 @@ interface ISlisBNBxMinter {
   /// @notice Sync delegatee for user; can only be called by a module
   function syncDelegatee(address account, address newDelegatee) external;
 
+  /// @notice Delegate all of the caller's slisBNBx to `newDelegatee`
+  function delegateAllTo(address newDelegatee) external;
+
   /// @notice Get delegatee for user
   function delegation(address account) external view returns (address);
 }

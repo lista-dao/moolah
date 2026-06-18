@@ -56,6 +56,8 @@ interface IStableSwap {
 
   function remove_liquidity_one_coin(uint256 _token_amount, uint256 i, uint256 min_amount) external;
 
+  function exchange(uint256 i, uint256 j, uint256 dx, uint256 min_dy) external payable;
+
   function withdraw_admin_fees() external;
 
   // events
