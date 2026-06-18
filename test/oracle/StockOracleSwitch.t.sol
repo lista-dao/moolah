@@ -316,20 +316,17 @@ contract StockOracleSwitchTest is Test {
     assertTrue(sw.enabled(s2), "s2 reopened");
   }
 
-  function test_batchSetStatus_idempotentSkipsNoOps() public {
+  function test_batchSetStatus_revertsWhenAlreadyInState() public {
     vm.prank(manager);
     sw.setStock(stock, true); // registered + enabled
 
     address[] memory tokens = new address[](1);
     tokens[0] = stock;
 
-    vm.recordLogs();
+    // already enabled -> open() hits AlreadySet -> the whole batch reverts
     vm.prank(bot);
-    sw.batchSetStatus(tokens, true); // already enabled -> no-op, must NOT revert
-    Vm.Log[] memory logs = vm.getRecordedLogs();
-
-    assertEq(logs.length, 0, "no event emitted for a no-op");
-    assertTrue(sw.enabled(stock), "state unchanged");
+    vm.expectRevert(StockOracleSwitch.AlreadySet.selector);
+    sw.batchSetStatus(tokens, true);
   }
 
   function test_batchSetStatus_revertsForNonBot() public {

@@ -79,7 +79,7 @@ contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeabl
   }
 
   /// @notice Open a registered stock for trading. BOT role. Only registered stocks can be toggled.
-  function open(address token) external onlyRole(BOT) {
+  function open(address token) public onlyRole(BOT) {
     require(registered[token], NotRegistered());
     require(!enabled[token], AlreadySet());
     enabled[token] = true;
@@ -87,25 +87,21 @@ contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeabl
   }
 
   /// @notice Close a registered stock. BOT role. Only registered stocks can be toggled.
-  function close(address token) external onlyRole(BOT) {
+  function close(address token) public onlyRole(BOT) {
     require(registered[token], NotRegistered());
     require(enabled[token], AlreadySet());
     enabled[token] = false;
     emit StockEnable(token, false);
   }
 
-  /// @notice Bulk per-stock open/close. BOT role. Sets every token in `tokens` to `status`
-  ///         (true = open, false = close) in one call.
-  /// @dev    Idempotent: a token already in its target state is skipped (no event). Only registered stocks
-  ///         can be toggled — an unregistered token reverts the whole batch.
+  /// @notice Bulk per-stock open/close. BOT role. Opens (`status = true`) or closes (`status = false`)
+  ///         every token in `tokens` in one call by delegating to {open} / {close}.
+  /// @dev    Strict: inherits the {open} / {close} guards, so a token already in the target state
+  ///         (AlreadySet) or not registered (NotRegistered) reverts the whole batch.
   function batchSetStatus(address[] calldata tokens, bool status) external onlyRole(BOT) {
     for (uint256 i; i < tokens.length; ++i) {
-      address token = tokens[i];
-      require(registered[token], NotRegistered());
-      if (enabled[token] != status) {
-        enabled[token] = status;
-        emit StockEnable(token, status);
-      }
+      if (status) open(tokens[i]);
+      else close(tokens[i]);
     }
   }
 
