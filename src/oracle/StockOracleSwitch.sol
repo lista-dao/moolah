@@ -6,15 +6,16 @@ import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils
 
 /// @title StockOracleSwitch
 /// @notice Market open/closed control for tokenized stocks (bStocks), consumed by {StockOracle}.
-/// @dev    Two orthogonal layers:
+/// @dev    Layers:
 ///         - `registered` (MANAGER): whether a token is a managed stock. Unregistered tokens are NOT
 ///           gated (e.g. the loan token USDT) — {StockOracle} passes them straight through.
-///         - open/closed (BOT): a per-stock `enabled` flag plus a single `globalEnabled` market-hours
-///           switch. A registered stock is enabled only while both the global switch and its own flag are on.
+///         - per-stock `enabled` (BOT): toggled individually via open / close, or in bulk via batchSetStatus.
+///         - global market switch `globalEnabled` (MANAGER): the market-hours switch (setGlobal). A
+///           registered stock is enabled only while both the global switch and its own flag are on.
 ///         PAUSER can force the whole market closed in an emergency (globalEnabled = false).
 contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeable {
-  bytes32 public constant MANAGER = keccak256("MANAGER"); // register / un-register stocks; admins BOT
-  bytes32 public constant BOT = keccak256("BOT"); // global daily switch + per-stock open / close
+  bytes32 public constant MANAGER = keccak256("MANAGER"); // register / un-register stocks; global daily switch; admins BOT
+  bytes32 public constant BOT = keccak256("BOT"); // per-stock open / close (single + batch)
   bytes32 public constant PAUSER = keccak256("PAUSER"); // emergency force-close
 
   /// @dev token => is a managed stock. Unregistered (false) => passthrough (never gated).
@@ -38,8 +39,8 @@ contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeabl
   }
 
   /// @param admin   DEFAULT_ADMIN_ROLE holder (upgrade + role admin)
-  /// @param manager MANAGER role (register / un-register stocks; admins BOT)
-  /// @param bot     BOT role (global daily switch + per-stock open / close)
+  /// @param manager MANAGER role (register / un-register stocks; global daily switch; admins BOT)
+  /// @param bot     BOT role (per-stock open / close, single + batch)
   /// @param pauser  PAUSER role (emergency force-close)
   function initialize(address admin, address manager, address bot, address pauser) external initializer {
     require(admin != address(0), ZeroAddress());
@@ -54,7 +55,7 @@ contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeabl
     _grantRole(PAUSER, pauser);
     // MANAGER administers the BOT role, so it can grant / revoke BOT via grantRole / revokeRole.
     _setRoleAdmin(BOT, MANAGER);
-    // globalEnabled stays false on purpose: market is closed until BOT opens it.
+    // globalEnabled stays false on purpose: market is closed until MANAGER opens it.
   }
 
   /// @notice Whether `token` is currently enabled (tradable). Unregistered tokens are always enabled (passthrough).
@@ -93,8 +94,23 @@ contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeabl
     emit StockEnable(token, false);
   }
 
-  /// @notice Toggle the global market switch (daily open/close). BOT role.
-  function setGlobal(bool open) external onlyRole(BOT) {
+  /// @notice Bulk per-stock open/close. BOT role. Sets every token in `tokens` to `status`
+  ///         (true = open, false = close) in one call.
+  /// @dev    Idempotent: a token already in its target state is skipped (no event). Only registered stocks
+  ///         can be toggled — an unregistered token reverts the whole batch.
+  function batchSetStatus(address[] calldata tokens, bool status) external onlyRole(BOT) {
+    for (uint256 i; i < tokens.length; ++i) {
+      address token = tokens[i];
+      require(registered[token], NotRegistered());
+      if (enabled[token] != status) {
+        enabled[token] = status;
+        emit StockEnable(token, status);
+      }
+    }
+  }
+
+  /// @notice Toggle the global market switch (daily open/close). MANAGER role.
+  function setGlobal(bool open) external onlyRole(MANAGER) {
     require(open != globalEnabled, AlreadySet());
     globalEnabled = open;
     emit GlobalEnabledSet(open);
