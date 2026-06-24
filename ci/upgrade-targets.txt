@@ -1,0 +1,14 @@
+# Optional manual override for the upgrade-safety gate.
+#
+# Leave this file empty (comments only) to AUTO-DISCOVER every UUPSUpgradeable
+# contract under src/ at CI time — recommended, so new upgradeable contracts are
+# gated automatically and this list never goes stale.
+#
+# To pin an explicit allow-list instead, add entries one per line:
+#   Contract            (assumes Contract.sol)
+#   File.sol:Contract   (when the file name differs from the contract name)
+#
+# Example:
+# Moolah
+# MoolahVault
+# LendingBroker
