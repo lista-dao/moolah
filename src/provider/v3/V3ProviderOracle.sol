@@ -7,23 +7,26 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 import { IOracle, TokenConfig } from "moolah/interfaces/IOracle.sol";
-import { IV3DexAdapter } from "./interfaces/IV3DexAdapter.sol";
-import { IV3ProviderOracle } from "./interfaces/IV3ProviderOracle.sol";
+import { IV3DexAdapter } from "../interfaces/IV3DexAdapter.sol";
+import { IV3Provider } from "../interfaces/IV3Provider.sol";
+import { IV3ProviderOracle } from "../interfaces/IV3ProviderOracle.sol";
 
 /**
- * @title SlisBNBV3ProviderOracle
+ * @title V3ProviderOracle
  * @author Lista DAO
- * @notice Standalone IOracle for the slisBNB/BNB vLP share token (Moolah `market.oracle` points here).
- *         Prices the share off the DEX adapter's FAIR composition view (staticcall, no double-hop
- *         through the vault) — for slisBNB/BNB that fair price is exchange-rate-implied (StakeManager
- *         rate, not pool spot/TWAP) — pricing each leg via the resilient oracle, then applying a
- *         conservative haircut. Separating pricing from the vault isolates the estimation-bug radius
- *         from vault state.
+ * @notice Standalone IOracle for a V3 LP vLP share token (Moolah `market.oracle` points here). Prices
+ *         the share off the DEX adapter's manipulation-resistant FAIR composition view (staticcall, no
+ *         double-hop through the vault) — that fair price is exchange-rate-implied (slisBNB) or pool
+ *         TWAP clamped to the rate (wstETH/wbETH), never raw pool spot — then values each leg via the
+ *         resilient oracle and applies a conservative haircut. The resilient oracle prices the LST leg
+ *         RATE-DERIVED (peek(LST) == peek(underlying) × exchangeRate / 1e18), so the leg valuation is
+ *         consistent with the rate-anchored composition — see peek()'s AUDIT NOTE. Chain/pair-agnostic:
+ *         the pair is taken from the constructor and validated against the adapter.
  *
  * @dev finding D — when supply > 0, peek(share) reverts on a zero leg price or zero total value so
  *      Moolah never prices collateral off a broken feed; supply == 0 returns 0 (pre-market).
  */
-contract SlisBNBV3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IV3ProviderOracle {
+contract V3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IV3ProviderOracle {
   /* ─────────────────────────── immutables ─────────────────────────── */
 
   /// @inheritdoc IV3ProviderOracle
@@ -35,10 +38,6 @@ contract SlisBNBV3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgr
   address public immutable TOKEN1;
   uint8 public immutable DECIMALS0;
   uint8 public immutable DECIMALS1;
-
-  /// @dev slisBNB/BNB-only pair (token0 < token1; slisBNB < WBNB).
-  address public constant SLISBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B;
-  address public constant WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
 
   bytes32 public constant MANAGER = keccak256("MANAGER");
   uint256 internal constant BPS = 10_000;
@@ -62,18 +61,20 @@ contract SlisBNBV3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgr
   error ZeroAddress();
   error InvalidHaircut();
   error ZeroPrice();
-  error NotSlisBnbWbnbPair();
   error AdapterPairMismatch();
+  error ShareAdapterMismatch();
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor(address _adapter, address _providerShare, address _token0, address _token1) {
     if (_adapter == address(0) || _providerShare == address(0)) revert ZeroAddress();
     if (_token0 == address(0) || _token1 == address(0)) revert ZeroAddress();
-    // slisBNB/BNB-ONLY: reject any other pair, and require the tokens (and their order) match the
-    // adapter's, so peek() prices exactly the composition the adapter reports.
-    if (!(_token0 == SLISBNB && _token1 == WBNB)) revert NotSlisBnbWbnbPair();
+    // The oracle's tokens (and their order) must match the adapter's, so peek() prices exactly the
+    // composition the adapter reports.
     if (_token0 != IV3DexAdapter(_adapter).TOKEN0() || _token1 != IV3DexAdapter(_adapter).TOKEN1())
       revert AdapterPairMismatch();
+    // Cross-validate the wiring: the priced share must be the vault bound to THIS adapter, so peek()
+    // reads composition from the same adapter that issued the share. Guards against a silent mis-wire.
+    if (IV3Provider(_providerShare).ADAPTER() != _adapter) revert ShareAdapterMismatch();
     ADAPTER = _adapter;
     PROVIDER_SHARE = _providerShare;
     TOKEN0 = _token0;
@@ -111,12 +112,23 @@ contract SlisBNBV3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgr
     uint256 supply = IERC20(PROVIDER_SHARE).totalSupply();
     if (supply == 0) return 0; // pre-market
 
-    // Fair composition from the adapter (exchange-rate-implied; not pool spot/TWAP).
+    // Fair composition from the adapter, taken at its manipulation-resistant fair price
+    // (exchange-rate-implied for slisBNB; pool TWAP clamped to the rate for wstETH/wbETH; never raw
+    // pool spot/slot0).
     (uint256 total0, uint256 total1) = IV3DexAdapter(ADAPTER).positionAmountsAt(
       IV3DexAdapter(ADAPTER).fairSqrtPriceX96()
     );
 
-    uint256 price0 = IOracle(resilientOracle).peek(TOKEN0); // 8 decimals
+    // AUDIT NOTE — leg prices are RATE-CONSISTENT with the composition above, NOT an independent
+    // second market price. By deployment invariant, the resilient oracle prices the LST leg (TOKEN0 =
+    // slisBNB / wstETH / wbETH) rate-derived from the SAME on-chain exchange rate used for the
+    // composition:
+    //     peek(LST) == peek(underlying WBNB/WETH) × exchangeRate / 1e18
+    //   (slisBNB → StakeManager.convertSnBnbToBnb; wstETH → stEthPerToken; wbETH → exchangeRate)
+    // i.e. NOT a secondary-market price. So there is no market-vs-rate divergence between the two and
+    // the stETH/ETH (or wbETH/ETH) depeg is excluded from the price by construction (carried by LLTV).
+    // Verified on-chain to the wei (e.g. peek(wstETH) == peek(WETH) × wstETH.stEthPerToken() / 1e18).
+    uint256 price0 = IOracle(resilientOracle).peek(TOKEN0); // 8 decimals (rate-derived for the LST leg)
     uint256 price1 = IOracle(resilientOracle).peek(TOKEN1); // 8 decimals
     if (price0 == 0 || price1 == 0) revert ZeroPrice(); // finding D
 

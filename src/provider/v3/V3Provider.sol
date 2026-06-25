@@ -14,9 +14,9 @@ import { IMoolah, MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { IOracle } from "moolah/interfaces/IOracle.sol";
 
-import { IWBNB } from "./interfaces/IWBNB.sol";
-import { IV3Provider } from "./interfaces/IV3Provider.sol";
-import { IV3DexAdapter } from "./interfaces/IV3DexAdapter.sol";
+import { IWBNB } from "../interfaces/IWBNB.sol";
+import { IV3Provider } from "../interfaces/IV3Provider.sol";
+import { IV3DexAdapter } from "../interfaces/IV3DexAdapter.sol";
 
 /**
  * @title V3Provider
@@ -62,8 +62,9 @@ abstract contract V3Provider is
   uint8 public immutable DECIMALS0;
   uint8 public immutable DECIMALS1;
 
-  /// @dev BSC wrapped native token. BNB sent on deposit is wrapped to WBNB before forwarding.
-  address public constant WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
+  /// @dev Wrapped-native token (WBNB on BSC, WETH on Ethereum), mirrored from the adapter. Native sent
+  ///      on deposit is wrapped to this before forwarding.
+  address public immutable WRAPPED_NATIVE;
 
   bytes32 public constant MANAGER = keccak256("MANAGER");
   bytes32 public constant BOT = keccak256("BOT");
@@ -104,7 +105,7 @@ abstract contract V3Provider is
 
   error ZeroAddress();
   error InvalidCollateralToken();
-  error PoolHasNoWBNB();
+  error PoolHasNoWrappedNative();
   error ZeroAmounts();
   error ZeroShares();
   error Unauthorized();
@@ -126,6 +127,7 @@ abstract contract V3Provider is
     TOKEN1 = IV3DexAdapter(_adapter).TOKEN1();
     DECIMALS0 = IV3DexAdapter(_adapter).DECIMALS0();
     DECIMALS1 = IV3DexAdapter(_adapter).DECIMALS1();
+    WRAPPED_NATIVE = IV3DexAdapter(_adapter).WRAPPED_NATIVE();
     _disableInitializers();
   }
 
@@ -200,24 +202,24 @@ abstract contract V3Provider is
     uint256 _amount0Desired = amount0Desired;
     uint256 _amount1Desired = amount1Desired;
 
-    // Wrap any native BNB into WBNB and use it for the WBNB leg.
+    // Wrap any native coin into the wrapped-native token and use it for that leg.
     if (msg.value > 0) {
-      if (!(TOKEN0 == WBNB || TOKEN1 == WBNB)) revert PoolHasNoWBNB();
-      if (TOKEN0 == WBNB) {
+      if (!(TOKEN0 == WRAPPED_NATIVE || TOKEN1 == WRAPPED_NATIVE)) revert PoolHasNoWrappedNative();
+      if (TOKEN0 == WRAPPED_NATIVE) {
         _amount0Desired = msg.value;
       } else {
         _amount1Desired = msg.value;
       }
-      IWBNB(WBNB).deposit{ value: msg.value }();
+      IWBNB(WRAPPED_NATIVE).deposit{ value: msg.value }();
     }
 
     if (_amount0Desired == 0 && _amount1Desired == 0) revert ZeroAmounts();
 
     // Pull ERC-20 input (skip the side funded by msg.value, already wrapped here).
-    if (_amount0Desired > 0 && !(TOKEN0 == WBNB && msg.value > 0)) {
+    if (_amount0Desired > 0 && !(TOKEN0 == WRAPPED_NATIVE && msg.value > 0)) {
       IERC20(TOKEN0).safeTransferFrom(msg.sender, address(this), _amount0Desired);
     }
-    if (_amount1Desired > 0 && !(TOKEN1 == WBNB && msg.value > 0)) {
+    if (_amount1Desired > 0 && !(TOKEN1 == WRAPPED_NATIVE && msg.value > 0)) {
       IERC20(TOKEN1).safeTransferFrom(msg.sender, address(this), _amount1Desired);
     }
 
@@ -452,10 +454,10 @@ abstract contract V3Provider is
     return msg.sender == onBehalf || MOOLAH.isAuthorized(onBehalf, msg.sender);
   }
 
-  /// @dev Forward a deposit refund to the depositor. WBNB is already unwrapped to native BNB by the
-  ///      adapter when it refunds to this vault, so the WBNB leg is paid out as native BNB.
+  /// @dev Forward a deposit refund to the depositor. The wrapped-native leg is already unwrapped to
+  ///      native coin by the adapter when it refunds to this vault, so it is paid out as native coin.
   function _refund(address token, uint256 amount, address to) internal {
-    if (token == WBNB) {
+    if (token == WRAPPED_NATIVE) {
       (bool ok, ) = payable(to).call{ value: amount }("");
       if (!ok) revert BnbTransferFailed();
     } else {

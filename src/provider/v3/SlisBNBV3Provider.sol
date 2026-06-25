@@ -5,9 +5,9 @@ import { IMoolah, Id } from "moolah/interfaces/IMoolah.sol";
 import { IOracle } from "moolah/interfaces/IOracle.sol";
 
 import { V3Provider } from "./V3Provider.sol";
-import { IV3DexAdapter } from "./interfaces/IV3DexAdapter.sol";
-import { ISlisBNBV3DexAdapter } from "./interfaces/ISlisBNBV3DexAdapter.sol";
-import { ISlisBNBxMinter } from "../utils/interfaces/ISlisBNBx.sol";
+import { IV3DexAdapter } from "../interfaces/IV3DexAdapter.sol";
+import { ISlisBNBV3DexAdapter } from "../interfaces/ISlisBNBV3DexAdapter.sol";
+import { ISlisBNBxMinter } from "../../utils/interfaces/ISlisBNBx.sol";
 
 /**
  * @title SlisBNBV3Provider
@@ -59,7 +59,8 @@ contract SlisBNBV3Provider is V3Provider {
     uint256 minLiquidity,
     uint256 deadline
   ) external onlyRole(BOT) nonReentrant {
-    ISlisBNBV3DexAdapter(ADAPTER).rebalance(minAmount0, minAmount1, minLiquidity, deadline);
+    // slisBNB converts inventory on-chain via the StakeManager — no DEX swapData needed.
+    ISlisBNBV3DexAdapter(ADAPTER).rebalance(minAmount0, minAmount1, minLiquidity, deadline, "");
   }
 
   /* ─────────────────── slisBNBx: sync / view ──────────────────────── */

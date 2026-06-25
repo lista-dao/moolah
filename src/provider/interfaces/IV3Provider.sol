@@ -15,6 +15,11 @@ interface IV3Provider is IProvider {
 
   function TOKEN1() external view returns (address);
 
+  /// @notice Wrapped-native token of the pool's chain (WBNB on BSC, WETH on Ethereum). On exit the
+  ///         provider unwraps whichever leg equals this to the native coin, so consumers (e.g. the
+  ///         liquidator) must treat that leg as native rather than ERC-20.
+  function WRAPPED_NATIVE() external view returns (address);
+
   /// @notice The DEX adapter holding the V3 NFT / idle inventory.
   function ADAPTER() external view returns (address);
 

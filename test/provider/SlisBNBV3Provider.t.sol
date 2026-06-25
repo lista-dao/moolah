@@ -7,12 +7,13 @@ import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import { SlisBNBV3Provider } from "../../src/provider/SlisBNBV3Provider.sol";
-import { SlisBNBV3DexAdapter } from "../../src/provider/SlisBNBV3DexAdapter.sol";
-import { SlisBNBV3ProviderOracle } from "../../src/provider/SlisBNBV3ProviderOracle.sol";
+import { SlisBNBV3Provider } from "../../src/provider/v3/SlisBNBV3Provider.sol";
+import { SlisBNBV3DexAdapter } from "../../src/provider/v3/SlisBNBV3DexAdapter.sol";
+import { SlisBNBV3ProviderOracle } from "../../src/provider/v3/SlisBNBV3ProviderOracle.sol";
+import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
 import { IStakeManager } from "../../src/provider/interfaces/IStakeManager.sol";
-import { V3Provider } from "../../src/provider/V3Provider.sol";
-import { V3DexAdapter } from "../../src/provider/V3DexAdapter.sol";
+import { V3Provider } from "../../src/provider/v3/V3Provider.sol";
+import { V3DexAdapter } from "../../src/provider/v3/V3DexAdapter.sol";
 import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
 import { IV3PoolMinimal } from "../../src/provider/interfaces/IV3PoolMinimal.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
@@ -221,7 +222,7 @@ contract SlisBNBV3ProviderTest is Test {
       payable(
         new ERC1967Proxy(
           address(oracleImpl),
-          abi.encodeCall(SlisBNBV3ProviderOracle.initialize, (admin, manager, address(oracle), uint256(0)))
+          abi.encodeCall(V3ProviderOracle.initialize, (admin, manager, address(oracle), uint256(0)))
         )
       )
     );
