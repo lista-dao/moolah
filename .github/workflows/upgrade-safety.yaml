@@ -1,0 +1,68 @@
+# Drop this into moolah at .github/workflows/upgrade-safety.yaml
+# (and copy check-upgrades.sh + upgrade-targets.txt into moolah's ci/ dir).
+#
+# Gates every PR: builds the storage layout for the base branch and the PR head,
+# then fails if any upgradeable contract has an incompatible storage layout,
+# a SELFDESTRUCT/DELEGATECALL regression, or an unlinked library.
+name: Upgrade safety
+
+on:
+  pull_request:
+
+jobs:
+  upgrade-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Checkout base branch into base/
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          submodules: recursive
+          fetch-depth: 1
+          path: base
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # upgrade-guard is a PUBLIC repo, so no token is needed. Pin a tag (or rev)
+      # for reproducible, supply-chain-safe builds.
+      - name: Install upgrade-guard
+        run: |
+          cargo install --git https://github.com/razww/upgrade-guard \
+            --tag v0.1.1 upgrade-guard --locked
+
+      # Faster alternative: skip the Rust build, download the prebuilt binary.
+      #   - run: |
+      #       gh release download v0.1.1 --repo razww/upgrade-guard \
+      #         --pattern 'upgrade-guard-x86_64-linux*' --dir /tmp/ug
+      #       ( cd /tmp/ug && sha256sum -c upgrade-guard-x86_64-linux.sha256 )
+      #       install -m0755 /tmp/ug/upgrade-guard-x86_64-linux /usr/local/bin/upgrade-guard
+      #     env: { GH_TOKEN: ${{ github.token }} }   # public asset; token avoids rate limits
+
+      - name: Install submodule node_modules (head + base)
+        run: |
+          (cd lib/lista-dao-contracts.git && yarn install)
+          (cd base/lib/lista-dao-contracts.git && yarn install)
+
+      # moolah's `ci` foundry profile sets extra_output = [], so request the
+      # storage layout explicitly on both builds.
+      - name: Build NEW storage layout (PR head)
+        run: forge build --extra-output storageLayout --out out
+
+      - name: Build OLD storage layout (base branch)
+        working-directory: base
+        run: forge build --extra-output storageLayout --out out
+
+      # Targets: if ci/upgrade-targets.txt has entries they are used as-is;
+      # otherwise every UUPSUpgradeable contract under src/ (PR head) is gated.
+      - name: Validate upgrade safety
+        run: ./ci/check-upgrades.sh base/out out ci/upgrade-targets.txt src
