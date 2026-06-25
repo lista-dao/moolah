@@ -30,6 +30,9 @@ interface IV3DexAdapter {
 
   function POOL() external view returns (address);
 
+  /// @notice Wrapped-native token of the chain (WBNB on BSC, WETH on Ethereum).
+  function WRAPPED_NATIVE() external view returns (address);
+
   /// @notice The vault (V3Provider) authorized to drive this adapter.
   function provider() external view returns (address);
 
@@ -107,4 +110,25 @@ interface IV3DexAdapter {
 
   /// @notice Collect accrued fees and re-add them plus idle inventory as liquidity (compound).
   function collectAndCompound() external;
+
+  /* ─────────────────────── rebalance / rate config ────────────────── */
+
+  /// @notice Exchange rate at the last successful center/init (rate-implied pairs; 0 for TWAP pairs).
+  function lastCenterRate() external view returns (uint256);
+
+  /// @notice Min relative exchange-rate drift before rebalance is allowed (BPS; 0 = off).
+  function centerRateThresholdBps() external view returns (uint256);
+
+  /// @notice Set the rate-drift threshold required for rebalance (onlyRole MANAGER).
+  function setCenterRateThresholdBps(uint256 centerRateThresholdBps) external;
+
+  /// @notice Recenter the position to its range and convert inventory to the optimal ratio.
+  ///         onlyProvider — the provider gates the caller with the BOT role.
+  function rebalance(
+    uint256 minAmount0,
+    uint256 minAmount1,
+    uint256 minLiquidity,
+    uint256 deadline,
+    bytes calldata swapData
+  ) external;
 }

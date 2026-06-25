@@ -9,14 +9,17 @@ import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/I
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { TickMath } from "lista-dao-contracts/libraries/TickMath.sol";
 import { LiquidityAmounts } from "lista-dao-contracts/libraries/LiquidityAmounts.sol";
+import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
+import { FullMath } from "lista-dao-contracts/oracle/libraries/FullMath.sol";
 
-import { INonfungiblePositionManager } from "./interfaces/INonfungiblePositionManager.sol";
-import { V3PositionLib } from "./libraries/V3PositionLib.sol";
+import { INonfungiblePositionManager } from "../interfaces/INonfungiblePositionManager.sol";
+import { V3PositionLib } from "../libraries/V3PositionLib.sol";
 import { IListaV3Factory } from "lista-v3/core/interfaces/IListaV3Factory.sol";
 import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
-import { IWBNB } from "./interfaces/IWBNB.sol";
-import { IV3DexAdapter } from "./interfaces/IV3DexAdapter.sol";
-import { IV3PoolMinimal } from "./interfaces/IV3PoolMinimal.sol";
+import { IWBNB } from "../interfaces/IWBNB.sol";
+import { IV3DexAdapter } from "../interfaces/IV3DexAdapter.sol";
+import { IV3Provider } from "../interfaces/IV3Provider.sol";
+import { IV3PoolMinimal } from "../interfaces/IV3PoolMinimal.sol";
 
 /**
  * @title V3DexAdapter
@@ -31,7 +34,7 @@ import { IV3PoolMinimal } from "./interfaces/IV3PoolMinimal.sol";
  *
  * Extension points (slisBNB/BNB subclass overrides):
  *   - fairSqrtPriceX96(): exchange-rate-implied price instead of pool TWAP.
- *   - receive(): widen accepted native-BNB senders (StakeManager instantWithdraw).
+ *   - receive(): widen accepted wrapped-native unwrap senders (e.g. StakeManager instantWithdraw).
  *   - rebalance(): added by the subclass (rate-centered recenter + inventory conversion).
  */
 abstract contract V3DexAdapter is
@@ -53,10 +56,17 @@ abstract contract V3DexAdapter is
   uint8 public immutable DECIMALS0;
   uint8 public immutable DECIMALS1;
 
-  /// @dev BSC wrapped native token.
-  address public constant WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
+  /// @dev Wrapped-native token of the chain (WBNB on BSC, WETH on Ethereum). Native sent on deposit
+  ///      is wrapped to this before forwarding; refunds/withdrawals unwrap it back to native.
+  address public immutable WRAPPED_NATIVE;
 
   bytes32 public constant MANAGER = keccak256("MANAGER");
+
+  uint256 internal constant BPS = 10_000;
+  /// @dev Half-width of the rate-centered range for rate-implied pairs (±1%).
+  uint256 internal constant INITIAL_RANGE_BPS = 100;
+  /// @dev Fallback half-range (ticks) around spot for non-rate (TWAP) pairs.
+  int24 internal constant FALLBACK_HALF_RANGE_TICKS = 500;
 
   /* ──────────────────────────── storage ───────────────────────────── */
 
@@ -74,8 +84,15 @@ abstract contract V3DexAdapter is
   uint256 public idleToken0;
   uint256 public idleToken1;
 
+  /// @dev Exchange rate at the last successful center/init; used as the range center. Rate-implied
+  ///      pairs only (0 for pure-TWAP pairs).
+  uint256 public lastCenterRate;
+
+  /// @dev Min relative exchange-rate drift from lastCenterRate before rebalance is allowed (BPS; 0 = off).
+  uint256 public centerRateThresholdBps;
+
   /// @dev Reserved storage for future base variables (keep subclass storage stable on upgrade).
-  uint256[50] private __gap;
+  uint256[48] private __gap;
 
   /* ───────────────────────────── events ───────────────────────────── */
 
@@ -83,6 +100,9 @@ abstract contract V3DexAdapter is
   event Compounded(uint256 amount0, uint256 amount1, uint128 liquidityAdded);
   event LiquidityAdded(uint128 liquidityAdded, uint256 amount0Used, uint256 amount1Used);
   event LiquidityRemoved(uint256 shares, uint256 totalShares, uint256 amount0, uint256 amount1, address receiver);
+  event CenterRateThresholdChanged(uint256 centerRateThresholdBps);
+  event LastCenterRateUpdated(uint256 oldCenterRate, uint256 newCenterRate);
+  event Rebalanced(int24 oldTickLower, int24 oldTickUpper, int24 newTickLower, int24 newTickUpper, uint256 newTokenId);
 
   /* ───────────────────────────── errors ───────────────────────────── */
 
@@ -94,15 +114,28 @@ abstract contract V3DexAdapter is
   error InvalidTickRange();
   error OnlyProvider();
   error ProviderAlreadySet();
+  error ProviderAdapterMismatch();
   error BnbTransferFailed();
-  error NotWBNB();
+  error NotWrappedNative();
+  error DeadlineExpired();
+  error InsufficientLiquidityMinted();
+  error RateDeviationBelowThreshold();
+  error InvalidThreshold();
 
   /* ─────────────────────────── constructor ────────────────────────── */
 
   /// @custom:oz-upgrades-unsafe-allow constructor
-  constructor(address _positionManager, address _token0, address _token1, uint24 _fee, uint32 _twapPeriod) {
+  constructor(
+    address _positionManager,
+    address _token0,
+    address _token1,
+    uint24 _fee,
+    uint32 _twapPeriod,
+    address _wrappedNative
+  ) {
     if (_positionManager == address(0)) revert ZeroAddress();
     if (_token0 == address(0) || _token1 == address(0)) revert ZeroAddress();
+    if (_wrappedNative == address(0)) revert ZeroAddress();
     if (_token0 >= _token1) revert TokenOrderInvalid();
     if (_fee == 0) revert ZeroFee();
     if (_twapPeriod == 0) revert ZeroTwapPeriod();
@@ -120,6 +153,7 @@ abstract contract V3DexAdapter is
     FEE = _fee;
     POOL = _pool;
     TWAP_PERIOD = _twapPeriod;
+    WRAPPED_NATIVE = _wrappedNative;
     DECIMALS0 = IERC20Metadata(_token0).decimals();
     DECIMALS1 = IERC20Metadata(_token1).decimals();
 
@@ -148,9 +182,13 @@ abstract contract V3DexAdapter is
   }
 
   /// @notice Wire the vault that may drive this adapter. One-time, admin-only.
+  /// @dev Cross-validates the wiring: the vault's immutable ADAPTER (set in its constructor) must point
+  ///      back to THIS adapter. Guards against a silent mis-wire — especially across same-pair adapters —
+  ///      that would permanently brick the adapter (setProvider is one-time) or misprice collateral.
   function setProvider(address _provider) external onlyRole(DEFAULT_ADMIN_ROLE) {
     if (_provider == address(0)) revert ZeroAddress();
     if (provider != address(0)) revert ProviderAlreadySet();
+    if (IV3Provider(_provider).ADAPTER() != address(this)) revert ProviderAdapterMismatch();
     provider = _provider;
     emit ProviderSet(_provider);
   }
@@ -196,7 +234,7 @@ abstract contract V3DexAdapter is
       );
     }
 
-    // Refund unused input (ratio mismatch) to the depositor. WBNB is unwrapped to native BNB.
+    // Refund unused input (ratio mismatch) to the depositor. The wrapped-native token is unwrapped to native coin.
     uint256 refund0 = amount0Desired - amount0Used;
     uint256 refund1 = amount1Desired - amount1Used;
     if (refund0 > 0) _sendToken(TOKEN0, refund0, payable(refundTo));
@@ -246,6 +284,96 @@ abstract contract V3DexAdapter is
     _collectAndCompound();
   }
 
+  /* ─────────────────────── manager / rebalance ────────────────────── */
+
+  /// @inheritdoc IV3DexAdapter
+  function setCenterRateThresholdBps(uint256 _centerRateThresholdBps) external onlyRole(MANAGER) {
+    if (_centerRateThresholdBps > BPS) revert InvalidThreshold();
+    centerRateThresholdBps = _centerRateThresholdBps;
+    emit CenterRateThresholdChanged(_centerRateThresholdBps);
+  }
+
+  /// @inheritdoc IV3DexAdapter
+  function rebalance(
+    uint256 minAmount0,
+    uint256 minAmount1,
+    uint256 minLiquidity,
+    uint256 deadline,
+    bytes calldata swapData
+  ) external onlyProvider nonReentrant {
+    if (block.timestamp > deadline) revert DeadlineExpired();
+
+    // Rate-implied pairs recenter around the LST↔native rate; pure-TWAP pairs (rate == 0) recenter
+    // around the spot tick and skip the rate-drift guard / inventory conversion.
+    uint256 centerRate = _lstNativeRate();
+    bool rateImplied = centerRate != 0;
+    if (rateImplied) _requireCenterRateDeviation(centerRate);
+
+    (int24 newTickLower, int24 newTickUpper) = _initialTickRange(centerRate);
+    int24 oldTickLower = tickLower;
+    int24 oldTickUpper = tickUpper;
+
+    uint256 total0;
+    uint256 total1;
+    if (tokenId != 0) {
+      (total0, total1) = V3PositionLib.collectAll(POSITION_MANAGER, tokenId);
+    }
+    total0 += idleToken0;
+    total1 += idleToken1;
+    idleToken0 = 0;
+    idleToken1 = 0;
+
+    if (tokenId != 0) {
+      uint128 liquidity = _getPositionLiquidity();
+      if (liquidity > 0) {
+        V3PositionLib.decreaseLiquidity(POSITION_MANAGER, tokenId, liquidity, minAmount0, minAmount1);
+      }
+      (uint256 removed0, uint256 removed1) = V3PositionLib.collectAll(POSITION_MANAGER, tokenId);
+      total0 += removed0;
+      total1 += removed1;
+      V3PositionLib.burn(POSITION_MANAGER, tokenId);
+      tokenId = 0;
+    }
+
+    (total0, total1) = _convertToOptimalRatio(total0, total1, newTickLower, newTickUpper, centerRate, swapData);
+
+    tickLower = newTickLower;
+    tickUpper = newTickUpper;
+
+    uint128 mintedLiquidity;
+    if (total0 > 0 || total1 > 0) {
+      (uint256 newTokenId, uint128 liquidity, uint256 used0, uint256 used1) = V3PositionLib.mint(
+        POSITION_MANAGER,
+        TOKEN0,
+        TOKEN1,
+        FEE,
+        newTickLower,
+        newTickUpper,
+        total0,
+        total1,
+        0,
+        0
+      );
+      tokenId = newTokenId;
+      mintedLiquidity = liquidity;
+      idleToken0 = total0 - used0;
+      idleToken1 = total1 - used1;
+    } else {
+      idleToken0 = total0;
+      idleToken1 = total1;
+    }
+
+    if (uint256(mintedLiquidity) < minLiquidity) revert InsufficientLiquidityMinted();
+
+    if (rateImplied) {
+      uint256 oldCenterRate = lastCenterRate;
+      lastCenterRate = centerRate;
+      emit LastCenterRateUpdated(oldCenterRate, centerRate);
+    }
+
+    emit Rebalanced(oldTickLower, oldTickUpper, newTickLower, newTickUpper, tokenId);
+  }
+
   /* ───────────────────────── views (staticcall) ───────────────────── */
 
   /// @inheritdoc IV3DexAdapter
@@ -287,8 +415,12 @@ abstract contract V3DexAdapter is
   }
 
   /// @inheritdoc IV3DexAdapter
+  /// @dev Rate-implied (manipulation-resistant) when the subclass supplies a non-zero LST↔native
+  ///      rate via _lstNativeRate(); otherwise falls back to the pool TWAP.
   function fairSqrtPriceX96() public view virtual returns (uint160) {
-    return TickMath.getSqrtRatioAtTick(_twapTick());
+    uint256 rate = _lstNativeRate();
+    if (rate == 0) return TickMath.getSqrtRatioAtTick(_twapTick());
+    return _sqrtPriceX96FromRate(rate);
   }
 
   /// @inheritdoc IV3DexAdapter
@@ -380,10 +512,10 @@ abstract contract V3DexAdapter is
     if (delta < 0 && (delta % int56(uint56(TWAP_PERIOD)) != 0)) twapTick--;
   }
 
-  /// @dev Send `token` to `to`, unwrapping WBNB to native BNB.
+  /// @dev Send `token` to `to`, unwrapping the wrapped-native token to native coin.
   function _sendToken(address token, uint256 amount, address payable to) internal {
-    if (token == WBNB) {
-      IWBNB(WBNB).withdraw(amount);
+    if (token == WRAPPED_NATIVE) {
+      IWBNB(WRAPPED_NATIVE).withdraw(amount);
       (bool ok, ) = to.call{ value: amount }("");
       if (!ok) revert BnbTransferFailed();
     } else {
@@ -391,9 +523,102 @@ abstract contract V3DexAdapter is
     }
   }
 
-  /// @dev Accepts native BNB from WBNB unwrap. Subclasses widen the allowed senders.
+  /// @dev Accepts native coin from the wrapped-native unwrap. Subclasses widen the allowed senders.
   receive() external payable virtual {
-    if (msg.sender != WBNB) revert NotWBNB();
+    if (msg.sender != WRAPPED_NATIVE) revert NotWrappedNative();
+  }
+
+  /* ─────────────────── rate-centering math (shared) ────────────────── */
+
+  /// @dev Tick range for the position. Rate-implied (centerRate != 0): ±INITIAL_RANGE_BPS around the
+  ///      rate-derived price. Pure-TWAP (centerRate == 0): ±FALLBACK_HALF_RANGE_TICKS around spot.
+  function _initialTickRange(
+    uint256 centerRate
+  ) internal view returns (int24 initialTickLower, int24 initialTickUpper) {
+    int24 tickSpacing = IListaV3Pool(POOL).tickSpacing();
+
+    if (centerRate != 0) {
+      (initialTickLower, initialTickUpper) = _tickRangeForRate(centerRate, tickSpacing);
+    } else {
+      (, int24 currentTick) = IV3PoolMinimal(POOL).slot0();
+      initialTickLower = _floorTick(currentTick - FALLBACK_HALF_RANGE_TICKS, tickSpacing);
+      initialTickUpper = _ceilTick(currentTick + FALLBACK_HALF_RANGE_TICKS, tickSpacing);
+    }
+
+    if (initialTickLower >= initialTickUpper) {
+      initialTickUpper = initialTickLower + tickSpacing;
+    }
+  }
+
+  function _tickRangeForRate(
+    uint256 centerRate,
+    int24 tickSpacing
+  ) internal pure returns (int24 initialTickLower, int24 initialTickUpper) {
+    uint256 lowerRate = (centerRate * (BPS - INITIAL_RANGE_BPS)) / BPS;
+    uint256 upperRate = (centerRate * (BPS + INITIAL_RANGE_BPS)) / BPS;
+    initialTickLower = _floorTick(_tickAtSqrtRatio(_sqrtPriceX96FromRate(lowerRate)), tickSpacing);
+    initialTickUpper = _ceilTick(_tickAtSqrtRatio(_sqrtPriceX96FromRate(upperRate)), tickSpacing);
+  }
+
+  function _requireCenterRateDeviation(uint256 centerRate) internal view {
+    uint256 thresholdBps = centerRateThresholdBps;
+    uint256 previousCenterRate = lastCenterRate;
+    if (thresholdBps == 0 || previousCenterRate == 0) return;
+    uint256 delta = centerRate > previousCenterRate ? centerRate - previousCenterRate : previousCenterRate - centerRate;
+    if ((delta * BPS) / previousCenterRate < thresholdBps) revert RateDeviationBelowThreshold();
+  }
+
+  function _sqrtPriceX96FromRate(uint256 rate) internal pure returns (uint160) {
+    return uint160(Math.sqrt(FullMath.mulDiv(rate, 1 << 192, 1e18)));
+  }
+
+  function _tickAtSqrtRatio(uint160 sqrtPriceX96) internal pure returns (int24) {
+    int24 low = TickMath.MIN_TICK;
+    int24 high = TickMath.MAX_TICK;
+    while (low < high) {
+      int24 mid = int24((int256(low) + int256(high) + 1) / 2);
+      if (TickMath.getSqrtRatioAtTick(mid) <= sqrtPriceX96) {
+        low = mid;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return low;
+  }
+
+  function _floorTick(int24 tick, int24 tickSpacing) internal pure returns (int24) {
+    int24 compressed = tick / tickSpacing;
+    if (tick < 0 && tick % tickSpacing != 0) compressed--;
+    return compressed * tickSpacing;
+  }
+
+  function _ceilTick(int24 tick, int24 tickSpacing) internal pure returns (int24) {
+    int24 compressed = tick / tickSpacing;
+    if (tick > 0 && tick % tickSpacing != 0) compressed++;
+    return compressed * tickSpacing;
+  }
+
+  /* ────────────────────────── extension hooks ─────────────────────── */
+
+  /// @dev LST↔native exchange rate (native per LST, 1e18). 0 ⇒ no rate (pure-TWAP pair): the base
+  ///      uses pool TWAP for the fair price and a spot-centered range. Rate-implied subclasses
+  ///      (slisBNB via StakeManager, wstETH via stEthPerToken) override this.
+  function _lstNativeRate() internal view virtual returns (uint256) {
+    return 0;
+  }
+
+  /// @dev Convert the position's pooled inventory toward the optimal ratio for the target range.
+  ///      Base no-op (TWAP pairs keep raw inventory). Rate-implied subclasses override: slisBNB via
+  ///      StakeManager stake/redeem, wstETH via a router swap with rate-anchored minOut.
+  function _convertToOptimalRatio(
+    uint256 total0,
+    uint256 total1,
+    int24 /* targetTickLower */,
+    int24 /* targetTickUpper */,
+    uint256 /* rate */,
+    bytes calldata /* swapData */
+  ) internal virtual returns (uint256, uint256) {
+    return (total0, total1);
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}

@@ -6,9 +6,11 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import { SlisBNBV3Provider } from "../../src/provider/SlisBNBV3Provider.sol";
-import { SlisBNBV3DexAdapter } from "../../src/provider/SlisBNBV3DexAdapter.sol";
-import { SlisBNBV3ProviderOracle } from "../../src/provider/SlisBNBV3ProviderOracle.sol";
+import { SlisBNBV3Provider } from "../../src/provider/v3/SlisBNBV3Provider.sol";
+import { SlisBNBV3DexAdapter } from "../../src/provider/v3/SlisBNBV3DexAdapter.sol";
+import { V3DexAdapter } from "../../src/provider/v3/V3DexAdapter.sol";
+import { SlisBNBV3ProviderOracle } from "../../src/provider/v3/SlisBNBV3ProviderOracle.sol";
+import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
 import { IStakeManager } from "../../src/provider/interfaces/IStakeManager.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
 import { IMoolah, MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
@@ -212,7 +214,7 @@ contract SlisBNBV3ProviderRateTest is Test {
       payable(
         new ERC1967Proxy(
           address(oracleImpl),
-          abi.encodeCall(SlisBNBV3ProviderOracle.initialize, (admin, manager, address(oracle), uint256(0)))
+          abi.encodeCall(V3ProviderOracle.initialize, (admin, manager, address(oracle), uint256(0)))
         )
       )
     );
@@ -338,7 +340,7 @@ contract SlisBNBV3ProviderRateTest is Test {
     _deposit(10 ether, 10 ether);
 
     vm.prank(bot);
-    vm.expectRevert(SlisBNBV3DexAdapter.RateDeviationBelowThreshold.selector);
+    vm.expectRevert(V3DexAdapter.RateDeviationBelowThreshold.selector);
     provider.rebalance(0, 0, 0, block.timestamp);
   }
 
@@ -346,7 +348,7 @@ contract SlisBNBV3ProviderRateTest is Test {
     _deposit(10 ether, 10 ether);
 
     vm.prank(bot);
-    vm.expectRevert(SlisBNBV3DexAdapter.DeadlineExpired.selector);
+    vm.expectRevert(V3DexAdapter.DeadlineExpired.selector);
     provider.rebalance(0, 0, 0, block.timestamp - 1);
   }
 
@@ -357,7 +359,7 @@ contract SlisBNBV3ProviderRateTest is Test {
     adapter.setCenterRateThresholdBps(0);
 
     vm.prank(bot);
-    vm.expectRevert(SlisBNBV3DexAdapter.InsufficientLiquidityMinted.selector);
+    vm.expectRevert(V3DexAdapter.InsufficientLiquidityMinted.selector);
     provider.rebalance(0, 0, type(uint256).max, block.timestamp);
   }
 

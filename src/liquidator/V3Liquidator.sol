@@ -8,6 +8,7 @@ import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 
 import { IV3Provider } from "../provider/interfaces/IV3Provider.sol";
+import { IWBNB } from "../provider/interfaces/IWBNB.sol";
 import "./Interface.sol";
 
 /**
@@ -38,11 +39,8 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
   bytes32 public constant MANAGER = keccak256("MANAGER");
   bytes32 public constant BOT = keccak256("BOT");
 
-  /// @dev Virtual address used to represent native BNB in token whitelists.
+  /// @dev Virtual address used to represent the native coin in token whitelists.
   address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
-
-  /// @dev BSC wrapped native token — V3Provider unwraps it to native BNB on exit.
-  address public constant WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
 
   /* ──────────────────────────── immutables ─────────────────────────── */
 
@@ -91,13 +89,13 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
    * @param minToken0Amt    Slippage guard passed to V3Provider.redeemShares.
    * @param minToken1Amt    Slippage guard passed to V3Provider.redeemShares.
    * @param swapToken0      Swap TOKEN0 → loanToken after redemption.
-   * @param swapToken1      Swap TOKEN1 / native BNB → loanToken after redemption.
+   * @param swapToken1      Swap TOKEN1 / native coin → loanToken after redemption.
    * @param token0Pair      DEX router / pair for TOKEN0 swap.
    * @param token0Spender   Token0 approval target (set to token0Pair if same).
-   * @param token1Pair      DEX router / pair for TOKEN1 / BNB swap.
+   * @param token1Pair      DEX router / pair for TOKEN1 / native coin swap.
    * @param token1Spender   Token1 approval target (set to token1Pair if same).
    * @param swapToken0Data  Calldata for TOKEN0 swap (e.g. from 1inch aggregator).
-   * @param swapToken1Data  Calldata for TOKEN1 / BNB swap.
+   * @param swapToken1Data  Calldata for TOKEN1 / native coin swap.
    */
   struct V3LiquidateData {
     address v3Provider;
@@ -126,10 +124,10 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
    * @param redeemShares    Redeem V3 shares in callback? If false, contract holds shares.
    * @param token0Pair      DEX pair for TOKEN0 → loanToken swap. address(0) = no swap.
    * @param token0Spender   Approval target for TOKEN0; if address(0), uses token0Pair.
-   * @param token1Pair      DEX pair for TOKEN1 / BNB → loanToken swap. address(0) = no swap.
+   * @param token1Pair      DEX pair for TOKEN1 / native coin → loanToken swap. address(0) = no swap.
    * @param token1Spender   Approval target for TOKEN1; if address(0), uses token1Pair.
    * @param swapToken0Data  Aggregator calldata for TOKEN0 swap.
-   * @param swapToken1Data  Aggregator calldata for TOKEN1 / BNB swap.
+   * @param swapToken1Data  Aggregator calldata for TOKEN1 / native coin swap.
    */
   struct FlashLiquidateParams {
     address v3Provider;
@@ -249,9 +247,9 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
   /**
    * @notice Flash liquidation: Moolah delivers seized V3 shares to this contract inside
    *         the onMoolahLiquidate callback.  The callback optionally:
-   *           1. Redeems V3 shares → TOKEN0 + TOKEN1 (TOKEN1 arrives as native BNB if WBNB).
+   *           1. Redeems V3 shares → TOKEN0 + TOKEN1 (the wrapped-native leg arrives as the native coin).
    *           2. Swaps TOKEN0 → loanToken.
-   *           3. Swaps TOKEN1 / BNB → loanToken.
+   *           3. Swaps TOKEN1 → loanToken.
    *           4. Approves loanToken to Moolah to satisfy repayment.
    *
    *         If `params.redeemShares == false`, shares are held as ERC-20 and the contract
@@ -308,12 +306,12 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
 
   /**
    * @notice Redeem V3 shares held by this contract.
-   *         TOKEN1 arrives as native BNB if the V3Provider pool contains WBNB.
+   *         The wrapped-native leg arrives as the native coin (the provider unwraps it on exit).
    * @param v3Provider V3Provider whose shares to redeem.
    * @param shares     Number of shares to redeem.
    * @param minAmt0    Min TOKEN0 to receive (slippage guard).
-   * @param minAmt1    Min TOKEN1 / BNB to receive (slippage guard).
-   * @param receiver   Recipient of TOKEN0 and TOKEN1 / BNB.
+   * @param minAmt1    Min TOKEN1 to receive (slippage guard).
+   * @param receiver   Recipient of TOKEN0 and TOKEN1 (native coin for the wrapped-native leg).
    */
   function redeemV3Shares(
     address v3Provider,
@@ -398,8 +396,12 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
     if (d.redeemShares) {
       address token0 = IV3Provider(d.v3Provider).TOKEN0();
       address token1 = IV3Provider(d.v3Provider).TOKEN1();
+      // The provider unwraps whichever leg equals its wrapped-native token to the native coin on exit
+      // (WBNB→BNB on BSC, WETH→ETH on Ethereum), so that leg must be sold via call{value}; every other
+      // leg is an ERC-20 sold via approve + call. Read it from the provider — never hardcode a chain.
+      address wrappedNative = IV3Provider(d.v3Provider).WRAPPED_NATIVE();
 
-      // Redeem V3 shares → TOKEN0 as ERC-20, TOKEN1 as ERC-20 or native BNB (if WBNB).
+      // Redeem V3 shares → TOKEN0 + TOKEN1; the wrapped-native leg arrives as the native coin.
       (uint256 amount0, uint256 amount1) = IV3Provider(d.v3Provider).redeemShares(
         d.seized,
         d.minToken0Amt,
@@ -409,24 +411,20 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
 
       // Swap TOKEN0 → loanToken (skip if already loanToken or no swap requested).
       if (d.swapToken0 && amount0 > 0 && token0 != d.loanToken) {
-        token0.safeApprove(d.token0Spender, amount0);
-        (bool ok, ) = d.token0Pair.call(d.swapToken0Data);
-        require(ok, SwapFailed());
-        token0.safeApprove(d.token0Spender, 0);
+        _swapRedeemedLeg(token0 == wrappedNative, d.token0Pair, d.token0Spender, token0, amount0, d.swapToken0Data);
       }
 
-      // Swap TOKEN1 / native BNB → loanToken.
-      // V3Provider always unwraps WBNB to native BNB, so use call{value} for WBNB pools.
+      // Swap TOKEN1 → loanToken.
       if (d.swapToken1 && amount1 > 0 && token1 != d.loanToken) {
-        if (token1 == WBNB) {
-          (bool ok, ) = d.token1Pair.call{ value: amount1 }(d.swapToken1Data);
-          require(ok, SwapFailed());
-        } else {
-          token1.safeApprove(d.token1Spender, amount1);
-          (bool ok, ) = d.token1Pair.call(d.swapToken1Data);
-          require(ok, SwapFailed());
-          token1.safeApprove(d.token1Spender, 0);
-        }
+        _swapRedeemedLeg(token1 == wrappedNative, d.token1Pair, d.token1Spender, token1, amount1, d.swapToken1Data);
+      }
+
+      // If the loan token IS the wrapped-native, its leg was redeemed as the native coin and its swap
+      // was skipped (loanToken→loanToken is a no-op). Wrap the native balance back so the ERC-20
+      // repayment check below — and Moolah's subsequent transferFrom — see the loanToken balance.
+      if (d.loanToken == wrappedNative) {
+        uint256 nativeBalance = address(this).balance;
+        if (nativeBalance > 0) IWBNB(wrappedNative).deposit{ value: nativeBalance }();
       }
 
       if (d.loanToken.balanceOf(address(this)) < repaidAssets) revert NoProfit();
@@ -437,6 +435,29 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
   }
 
   /* ─────────────────────────── internals ──────────────────────────── */
+
+  /// @dev Sell a redeemed collateral leg into loanToken inside the liquidation callback. The wrapped-
+  ///      native leg arrives as the native coin (the provider unwraps it on exit), so it is sold via
+  ///      call{value}; every other leg is an ERC-20 sold via approve + call. `isNativeLeg` is decided
+  ///      by the provider's WRAPPED_NATIVE(), so this works on any chain and for either token position.
+  function _swapRedeemedLeg(
+    bool isNativeLeg,
+    address pair,
+    address spender,
+    address token,
+    uint256 amount,
+    bytes memory swapData
+  ) private {
+    if (isNativeLeg) {
+      (bool ok, ) = pair.call{ value: amount }(swapData);
+      require(ok, SwapFailed());
+    } else {
+      token.safeApprove(spender, amount);
+      (bool ok, ) = pair.call(swapData);
+      require(ok, SwapFailed());
+      token.safeApprove(spender, 0);
+    }
+  }
 
   function _sellToken(
     address pair,
