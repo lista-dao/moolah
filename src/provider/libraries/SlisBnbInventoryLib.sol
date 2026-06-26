@@ -26,9 +26,11 @@ library SlisBnbInventoryLib {
 
   uint128 internal constant RATIO_SAMPLE_LIQUIDITY = 1e18;
   uint256 internal constant RATE_SCALE = 1e18;
+  uint256 internal constant BPS = 10_000;
 
   error OneDirection();
   error NotSlisBnbWbnbPool();
+  error InstantWithdrawSlippage();
 
   /// @notice Convert the over-weight leg so free inventory matches the target range's optimal
   ///         token0/token1 injection ratio at the exchange-rate-implied price.
@@ -43,7 +45,8 @@ library SlisBnbInventoryLib {
     uint160 exchangeRateSqrtPriceX96,
     int24 targetTickLower,
     int24 targetTickUpper,
-    uint256 token1PerToken0Rate
+    uint256 token1PerToken0Rate,
+    uint256 maxInstantWithdrawSlippageBps
   ) external returns (uint256, uint256) {
     if (total0 == 0 && total1 == 0) return (total0, total1);
     if (token1PerToken0Rate == 0) return (total0, total1);
@@ -78,15 +81,28 @@ library SlisBnbInventoryLib {
       token1ToToken0
     );
 
-    return _convert(stakeManager, slisBnb, wbnb, token0, token1, total0, total1, bnbToStake, slisBnbToRedeem);
+    return
+      _convert(
+        stakeManager,
+        slisBnb,
+        wbnb,
+        token0,
+        token1,
+        total0,
+        total1,
+        bnbToStake,
+        slisBnbToRedeem,
+        maxInstantWithdrawSlippageBps
+      );
   }
 
   /// @notice Convert free inventory between the WBNB and slisBNB legs and return adjusted totals.
   ///         - `bnbToStake`: unwrap that much WBNB and stake it (deposit) into slisBNB.
   ///         - `slisBnbToRedeem`: instant-redeem that much slisBNB into BNB, re-wrapped to WBNB.
   ///         Goes through the StakeManager at its on-chain exchange rate (not the pool), so it is
-  ///         not market-manipulable; instantWithdraw deducts a deterministic fee. Amounts moved are
-  ///         measured by balance delta so the returned totals stay exact, and capped to availability.
+  ///         not market-manipulable; instantWithdraw deducts a deterministic fee bounded by
+  ///         `maxInstantWithdrawSlippageBps`. Amounts moved are measured by balance delta so the
+  ///         returned totals stay exact, and capped to availability.
   function convert(
     IStakeManager stakeManager,
     address slisBnb,
@@ -96,9 +112,22 @@ library SlisBnbInventoryLib {
     uint256 total0,
     uint256 total1,
     uint256 bnbToStake,
-    uint256 slisBnbToRedeem
+    uint256 slisBnbToRedeem,
+    uint256 maxInstantWithdrawSlippageBps
   ) external returns (uint256, uint256) {
-    return _convert(stakeManager, slisBnb, wbnb, token0, token1, total0, total1, bnbToStake, slisBnbToRedeem);
+    return
+      _convert(
+        stakeManager,
+        slisBnb,
+        wbnb,
+        token0,
+        token1,
+        total0,
+        total1,
+        bnbToStake,
+        slisBnbToRedeem,
+        maxInstantWithdrawSlippageBps
+      );
   }
 
   function _convert(
@@ -110,7 +139,8 @@ library SlisBnbInventoryLib {
     uint256 total0,
     uint256 total1,
     uint256 bnbToStake,
-    uint256 slisBnbToRedeem
+    uint256 slisBnbToRedeem,
+    uint256 maxInstantWithdrawSlippageBps
   ) private returns (uint256, uint256) {
     if (bnbToStake == 0 && slisBnbToRedeem == 0) return (total0, total1);
     if (bnbToStake > 0 && slisBnbToRedeem > 0) revert OneDirection();
@@ -139,10 +169,20 @@ library SlisBnbInventoryLib {
       uint256 slisAvail = wbnbIs0 ? total1 : total0;
       uint256 amt = slisBnbToRedeem > slisAvail ? slisAvail : slisBnbToRedeem;
       if (amt > 0) {
+        // Rate-anchored slippage floor: instantWithdraw must return at least the StakeManager
+        // exchange-rate value of `amt`, minus the configured tolerance. This bounds the deterministic
+        // instant-withdraw fee (and any rate anomaly). `convertSnBnbToBnb` is the on-chain accounting
+        // rate (not pool/market) so the floor is not manipulable.
+        uint256 minBnbOut = FullMath.mulDiv(
+          stakeManager.convertSnBnbToBnb(amt),
+          BPS - maxInstantWithdrawSlippageBps,
+          BPS
+        );
         uint256 bBefore = address(this).balance;
         IERC20(slisBnb).safeIncreaseAllowance(address(stakeManager), amt);
         stakeManager.instantWithdraw(amt);
         uint256 bnbOut = address(this).balance - bBefore;
+        if (bnbOut < minBnbOut) revert InstantWithdrawSlippage();
         if (bnbOut > 0) IWBNB(wbnb).deposit{ value: bnbOut }();
         if (wbnbIs0) {
           total0 += bnbOut;

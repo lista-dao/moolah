@@ -7,12 +7,14 @@ import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import { SlisBNBV3Provider } from "../../src/provider/SlisBNBV3Provider.sol";
-import { SlisBNBV3DexAdapter } from "../../src/provider/SlisBNBV3DexAdapter.sol";
-import { SlisBNBV3ProviderOracle } from "../../src/provider/SlisBNBV3ProviderOracle.sol";
+import { SlisBNBV3Provider } from "../../src/provider/v3/SlisBNBV3Provider.sol";
+import { SlisBNBV3DexAdapter } from "../../src/provider/v3/SlisBNBV3DexAdapter.sol";
+import { SlisBNBV3ProviderOracle } from "../../src/provider/v3/SlisBNBV3ProviderOracle.sol";
+import { SlisBnbInventoryLib } from "../../src/provider/libraries/SlisBnbInventoryLib.sol";
+import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
 import { IStakeManager } from "../../src/provider/interfaces/IStakeManager.sol";
-import { V3Provider } from "../../src/provider/V3Provider.sol";
-import { V3DexAdapter } from "../../src/provider/V3DexAdapter.sol";
+import { V3Provider } from "../../src/provider/v3/V3Provider.sol";
+import { V3DexAdapter } from "../../src/provider/v3/V3DexAdapter.sol";
 import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
 import { IV3PoolMinimal } from "../../src/provider/interfaces/IV3PoolMinimal.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
@@ -101,6 +103,42 @@ contract MockStakeManager {
   function instantWithdraw(uint256 amount) external returns (uint256 bnbAmount) {
     IERC20(slisBnb).transferFrom(msg.sender, address(this), amount);
     bnbAmount = (amount * rate) / 1e18;
+    (bool ok, ) = msg.sender.call{ value: bnbAmount }("");
+    require(ok, "bnb send failed");
+  }
+
+  receive() external payable {}
+}
+
+/// @dev StakeManager stand-in that UNDER-delivers on instantWithdraw (applies a `feeBps` haircut) while
+///      convertSnBnbToBnb still reports the full rate — exercises the rebalance slippage floor.
+contract LossyMockStakeManager {
+  uint256 public immutable rate; // BNB per slisBNB, 1e18
+  address public immutable slisBnb;
+  uint256 public immutable feeBps;
+
+  constructor(uint256 _rate, address _slisBnb, uint256 _feeBps) {
+    rate = _rate;
+    slisBnb = _slisBnb;
+    feeBps = _feeBps;
+  }
+
+  function convertSnBnbToBnb(uint256 amount) external view returns (uint256) {
+    return (amount * rate) / 1e18; // full rate (no fee) — the rebalance floor anchors to this
+  }
+
+  function convertBnbToSnBnb(uint256 amount) external view returns (uint256) {
+    return (amount * 1e18) / rate;
+  }
+
+  function deposit() external payable {
+    uint256 out = (msg.value * 1e18) / rate;
+    IERC20(slisBnb).transfer(msg.sender, out);
+  }
+
+  function instantWithdraw(uint256 amount) external returns (uint256 bnbAmount) {
+    IERC20(slisBnb).transferFrom(msg.sender, address(this), amount);
+    bnbAmount = ((amount * rate) / 1e18) * (10_000 - feeBps) / 10_000; // haircut
     (bool ok, ) = msg.sender.call{ value: bnbAmount }("");
     require(ok, "bnb send failed");
   }
@@ -221,7 +259,7 @@ contract SlisBNBV3ProviderTest is Test {
       payable(
         new ERC1967Proxy(
           address(oracleImpl),
-          abi.encodeCall(SlisBNBV3ProviderOracle.initialize, (admin, manager, address(oracle), uint256(0)))
+          abi.encodeCall(V3ProviderOracle.initialize, (admin, manager, address(oracle), uint256(0)))
         )
       )
     );
@@ -1085,6 +1123,61 @@ contract SlisBNBV3ProviderTest is Test {
     // The slisBNB adapter converts inventory to the rate-optimal ratio via the StakeManager and
     // re-mints; value is preserved within ~2% (instant-withdraw/stake conversion rounding).
     assertApproxEqRel(valueAfter, valueBefore, 0.02e18, "total value should be preserved within 2% after rebalance");
+  }
+
+  /* ─────── rebalance instantWithdraw slippage floor (rate-anchored minOut) ─────── */
+
+  /// @dev Re-etch the StakeManager so instantWithdraw under-delivers by `feeBps` vs the rate value.
+  function _etchLossyStakeManager(uint256 feeBps) internal {
+    uint256 rate = IStakeManager(STAKE_MANAGER).convertSnBnbToBnb(1e18);
+    LossyMockStakeManager lossy = new LossyMockStakeManager(rate, SLISBNB, feeBps);
+    vm.etch(STAKE_MANAGER, address(lossy).code);
+  }
+
+  /// @notice A below-range rebalance must redeem slisBNB→BNB; if instantWithdraw returns less than the
+  ///         rate-anchored floor (here a 5% haircut vs the default 1% tolerance) the conversion reverts.
+  function test_rebalance_revertsOnInstantWithdrawSlippage() public {
+    _etchLossyStakeManager(500); // 5% haircut
+    _deposit(user, 10 ether, 10 ether);
+    _pushPriceBelowRange(); // position → fully slisBNB ⇒ rebalance instant-withdraws slisBNB→BNB
+
+    vm.prank(manager);
+    adapter.setCenterRateThresholdBps(0);
+
+    vm.prank(bot);
+    vm.expectRevert(SlisBnbInventoryLib.InstantWithdrawSlippage.selector);
+    provider.rebalance(0, 0, 0, block.timestamp);
+  }
+
+  /// @notice Raising the tolerance above the realized haircut lets the same conversion through.
+  function test_rebalance_instantWithdrawSlippage_passesWhenToleranceRaised() public {
+    _etchLossyStakeManager(500); // 5% haircut
+    _deposit(user, 10 ether, 10 ether);
+    _pushPriceBelowRange();
+
+    vm.startPrank(manager);
+    adapter.setCenterRateThresholdBps(0);
+    adapter.setInstantWithdrawSlippageBps(600); // 6% tolerance > 5% haircut
+    vm.stopPrank();
+
+    vm.prank(bot);
+    provider.rebalance(0, 0, 0, block.timestamp);
+    assertLt(adapter.tickLower(), adapter.tickUpper(), "rebalanced once tolerance covers the haircut");
+  }
+
+  function test_setInstantWithdrawSlippageBps_onlyManagerAndCapped() public {
+    uint256 overCap = adapter.MAX_INSTANT_WITHDRAW_SLIPPAGE_BPS() + 1;
+
+    vm.expectRevert(); // not MANAGER
+    adapter.setInstantWithdrawSlippageBps(50);
+
+    vm.prank(manager);
+    vm.expectRevert(SlisBNBV3DexAdapter.InvalidSlippage.selector);
+    adapter.setInstantWithdrawSlippageBps(overCap);
+
+    vm.prank(manager);
+    adapter.setInstantWithdrawSlippageBps(250);
+    assertEq(adapter.instantWithdrawSlippageBps(), 250, "slippage tolerance updated");
   }
 
   /* ─────────── rebalance after price leaves range (fully WBNB) ──────── */
