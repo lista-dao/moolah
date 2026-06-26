@@ -122,6 +122,13 @@ interface IV3DexAdapter {
   /// @notice Set the rate-drift threshold required for rebalance (onlyRole MANAGER).
   function setCenterRateThresholdBps(uint256 centerRateThresholdBps) external;
 
+  /// @notice Whether `swapPair` is a whitelisted venue for the rebalance inventory-conversion swap.
+  function swapPairWhitelist(address swapPair) external view returns (bool);
+
+  /// @notice Whitelist (or remove) a swap venue for the rebalance inventory conversion (onlyRole
+  ///         MANAGER). A venue may never be TOKEN0 / TOKEN1 / POOL / POSITION_MANAGER.
+  function setSwapPairWhitelist(address swapPair, bool status) external;
+
   /// @notice Recenter the position to its range and convert inventory to the optimal ratio.
   ///         onlyProvider — the provider gates the caller with the BOT role.
   function rebalance(

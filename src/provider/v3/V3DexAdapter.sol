@@ -14,6 +14,7 @@ import { FullMath } from "lista-dao-contracts/oracle/libraries/FullMath.sol";
 
 import { INonfungiblePositionManager } from "../interfaces/INonfungiblePositionManager.sol";
 import { V3PositionLib } from "../libraries/V3PositionLib.sol";
+import { SwapInventoryLib } from "../libraries/SwapInventoryLib.sol";
 import { IListaV3Factory } from "lista-v3/core/interfaces/IListaV3Factory.sol";
 import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
 import { IWBNB } from "../interfaces/IWBNB.sol";
@@ -32,10 +33,13 @@ import { IV3PoolMinimal } from "../interfaces/IV3PoolMinimal.sol";
  *         Splitting NFT custody + DEX math out of the vault keeps each runtime under EIP-170 and
  *         isolates the position state from the share-accounting / pricing logic.
  *
- * Extension points (slisBNB/BNB subclass overrides):
- *   - fairSqrtPriceX96(): exchange-rate-implied price instead of pool TWAP.
- *   - receive(): widen accepted wrapped-native unwrap senders (e.g. StakeManager instantWithdraw).
- *   - rebalance(): added by the subclass (rate-centered recenter + inventory conversion).
+ *         The rebalance (rate-centered recenter) and the DEX-agnostic, backend-built inventory-conversion
+ *         swap (+ swap-pair whitelist) live here and are shared by every rate-implied pair.
+ *
+ * Extension points (rate-implied subclasses override):
+ *   - _lstNativeRate(): the LST↔native exchange rate — the range center and the fair-price anchor.
+ *   - fairSqrtPriceX96(): the valuation price (rate-implied by default; wstETH/wbETH clamp the pool TWAP
+ *     to the rate). receive() may also be overridden to widen accepted native senders.
  */
 abstract contract V3DexAdapter is
   UUPSUpgradeable,
@@ -91,8 +95,13 @@ abstract contract V3DexAdapter is
   /// @dev Min relative exchange-rate drift from lastCenterRate before rebalance is allowed (BPS; 0 = off).
   uint256 public centerRateThresholdBps;
 
+  /// @dev Whitelisted swap venues the rebalance inventory conversion may call. The BOT backend builds the
+  ///      swap calldata; the adapter only allows whitelisted targets (à la {Liquidator}'s pairWhitelist).
+  ///      Chain/venue-agnostic: a DEX pool, an aggregator, or any router that converts TOKEN0<->TOKEN1.
+  mapping(address => bool) public swapPairWhitelist;
+
   /// @dev Reserved storage for future base variables (keep subclass storage stable on upgrade).
-  uint256[48] private __gap;
+  uint256[47] private __gap;
 
   /* ───────────────────────────── events ───────────────────────────── */
 
@@ -103,6 +112,7 @@ abstract contract V3DexAdapter is
   event CenterRateThresholdChanged(uint256 centerRateThresholdBps);
   event LastCenterRateUpdated(uint256 oldCenterRate, uint256 newCenterRate);
   event Rebalanced(int24 oldTickLower, int24 oldTickUpper, int24 newTickLower, int24 newTickUpper, uint256 newTokenId);
+  event SwapPairWhitelistSet(address indexed swapPair, bool status);
 
   /* ───────────────────────────── errors ───────────────────────────── */
 
@@ -121,6 +131,8 @@ abstract contract V3DexAdapter is
   error InsufficientLiquidityMinted();
   error RateDeviationBelowThreshold();
   error InvalidThreshold();
+  error NotWhitelistedPair();
+  error InvalidSwapPair();
 
   /* ─────────────────────────── constructor ────────────────────────── */
 
@@ -291,6 +303,19 @@ abstract contract V3DexAdapter is
     if (_centerRateThresholdBps > BPS) revert InvalidThreshold();
     centerRateThresholdBps = _centerRateThresholdBps;
     emit CenterRateThresholdChanged(_centerRateThresholdBps);
+  }
+
+  /// @notice Whitelist (or remove) a swap venue the rebalance inventory conversion may call. Backend-built
+  ///         calldata can only target whitelisted venues.
+  /// @dev Defense-in-depth: a swap venue must never be a token / pool / NPM the adapter holds or trusts,
+  ///      else crafted swapData could move the adapter's own inventory (e.g. TOKEN0.transfer) or position.
+  function setSwapPairWhitelist(address swapPair, bool status) external onlyRole(MANAGER) {
+    if (swapPair == address(0)) revert ZeroAddress();
+    if (
+      status && (swapPair == TOKEN0 || swapPair == TOKEN1 || swapPair == POOL || swapPair == address(POSITION_MANAGER))
+    ) revert InvalidSwapPair();
+    swapPairWhitelist[swapPair] = status;
+    emit SwapPairWhitelistSet(swapPair, status);
   }
 
   /// @inheritdoc IV3DexAdapter
@@ -523,9 +548,11 @@ abstract contract V3DexAdapter is
     }
   }
 
-  /// @dev Accepts native coin from the wrapped-native unwrap. Subclasses widen the allowed senders.
+  /// @dev Accepts native coin from the wrapped-native unwrap, or from a whitelisted swap venue that
+  ///      settles the wrapped-native leg as the native coin (e.g. a StakeManager instant-redeem). The
+  ///      rebalance swap wraps that native back into the wrapped-native token (see {SwapInventoryLib}).
   receive() external payable virtual {
-    if (msg.sender != WRAPPED_NATIVE) revert NotWrappedNative();
+    if (msg.sender != WRAPPED_NATIVE && !swapPairWhitelist[msg.sender]) revert NotWrappedNative();
   }
 
   /* ─────────────────── rate-centering math (shared) ────────────────── */
@@ -607,18 +634,39 @@ abstract contract V3DexAdapter is
     return 0;
   }
 
-  /// @dev Convert the position's pooled inventory toward the optimal ratio for the target range.
-  ///      Base no-op (TWAP pairs keep raw inventory). Rate-implied subclasses override: slisBNB via
-  ///      StakeManager stake/redeem, wstETH via a router swap with rate-anchored minOut.
+  /// @dev DEX-agnostic, backend-built rebalance inventory conversion, shared by all rate-implied pairs
+  ///      (slisBNB/WBNB, wstETH/WETH, wbETH/WETH). `swapData` (when non-empty) ABI-encodes
+  ///      (address swapPair, bool sellToken0, uint256 amountIn, uint256 amountOutMin, bytes innerSwapData):
+  ///      the adapter requires `swapPair` whitelisted and forwards `innerSwapData` via a low-level call,
+  ///      bounding the swap by the allowance + the backend's `amountOutMin` (see {SwapInventoryLib}).
+  ///      Empty swapData ⇒ recenter without converting inventory (also the TWAP-pair default).
   function _convertToOptimalRatio(
     uint256 total0,
     uint256 total1,
     int24 /* targetTickLower */,
     int24 /* targetTickUpper */,
     uint256 /* rate */,
-    bytes calldata /* swapData */
+    bytes calldata swapData
   ) internal virtual returns (uint256, uint256) {
-    return (total0, total1);
+    if (swapData.length == 0) return (total0, total1);
+    (address swapPair, bool sellToken0, uint256 amountIn, uint256 amountOutMin, bytes memory inner) = abi.decode(
+      swapData,
+      (address, bool, uint256, uint256, bytes)
+    );
+    if (!swapPairWhitelist[swapPair]) revert NotWhitelistedPair();
+    return
+      SwapInventoryLib.swap(
+        swapPair,
+        TOKEN0,
+        TOKEN1,
+        sellToken0,
+        amountIn,
+        amountOutMin,
+        inner,
+        total0,
+        total1,
+        WRAPPED_NATIVE
+      );
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}

@@ -52,15 +52,17 @@ contract SlisBNBV3Provider is V3Provider {
   /* ─────────────────────────── rebalance ──────────────────────────── */
 
   /// @notice Recenter the managed position to the exchange-rate-derived range (adapter does the work).
-  ///         BOT-gated here; the adapter's rebalance is onlyProvider.
+  ///         BOT-gated here; the adapter's rebalance is onlyProvider. `swapData` is built by the BOT
+  ///         backend and encodes (swapPair, sellToken0, amountIn, amountOutMin, innerSwapData) for the
+  ///         inventory-conversion swap (empty ⇒ recenter only).
   function rebalance(
     uint256 minAmount0,
     uint256 minAmount1,
     uint256 minLiquidity,
-    uint256 deadline
+    uint256 deadline,
+    bytes calldata swapData
   ) external onlyRole(BOT) nonReentrant {
-    // slisBNB converts inventory on-chain via the StakeManager — no DEX swapData needed.
-    ISlisBNBV3DexAdapter(ADAPTER).rebalance(minAmount0, minAmount1, minLiquidity, deadline, "");
+    ISlisBNBV3DexAdapter(ADAPTER).rebalance(minAmount0, minAmount1, minLiquidity, deadline, swapData);
   }
 
   /* ─────────────────── slisBNBx: sync / view ──────────────────────── */
