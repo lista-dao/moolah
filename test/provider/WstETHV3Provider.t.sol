@@ -200,7 +200,8 @@ contract WstETHV3ProviderTest is Test {
   }
 
   /// @dev Encode the backend rebalance blob the adapter decodes: (swapPair, sellToken0, amountIn,
-  ///      amountOutMin, innerSwapData). Empty blob ⇒ recenter without converting inventory.
+  ///      amountOutMin, nativeIn, innerSwapData). nativeIn=false here (DEX venues; no native-in on ETH).
+  ///      Empty blob ⇒ recenter without converting inventory.
   function _swapData(
     address swapPair,
     bool sellToken0,
@@ -208,7 +209,7 @@ contract WstETHV3ProviderTest is Test {
     uint256 amountOutMin,
     bytes memory inner
   ) internal pure returns (bytes memory) {
-    return abi.encode(swapPair, sellToken0, amountIn, amountOutMin, inner);
+    return abi.encode(swapPair, sellToken0, amountIn, amountOutMin, false, inner);
   }
 
   /// @dev Inner calldata the adapter low-level-calls on the whitelisted MockSwap: pull `amountIn` of

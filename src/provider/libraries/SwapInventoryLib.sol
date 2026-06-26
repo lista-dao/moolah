@@ -10,20 +10,24 @@ import { IWBNB } from "../interfaces/IWBNB.sol";
  * @author Lista DAO
  * @notice DEX-agnostic inventory-conversion swap shared by the V3 LP adapters during rebalance. Mirrors
  *         {Liquidator}'s aggregator pattern: the (BOT) backend builds `swapData` for ANY whitelisted venue
- *         (1inch / 0x / Uniswap / a StakeManager instant-redeem / …); the adapter just forwards it via a
- *         low-level `swapPair.call(swapData)` and enforces the result with MEASURED balance deltas —
- *         `spent <= amountIn` and `received >= amountOutMin`. No on-chain routing or price math.
+ *         (1inch / 0x / Uniswap / a StakeManager instant-redeem or stake / …); the adapter just forwards
+ *         it via a low-level call and enforces the result with MEASURED balance deltas — `spent <= amountIn`
+ *         and `received >= amountOutMin`. No on-chain routing or price math.
  *
- *         A venue may settle the wrapped-native leg as the NATIVE coin instead of the ERC20 (e.g. a Lista
- *         StakeManager `instantWithdraw` that pays out BNB). When the output leg is the wrapped-native
- *         token, any native delivered by the call is wrapped back into it before `received` is measured —
- *         so instant-redeem venues are supported without any special-casing in the adapter.
+ *         The wrapped-native leg may be settled in the NATIVE coin on either side, so the venue's calling
+ *         convention is symmetric:
+ *           - native OUT (e.g. instantWithdraw → BNB): any native the call delivers is wrapped back into
+ *             the wrapped-native ERC20 before `received` is measured;
+ *           - native IN  (e.g. StakeManager.deposit{value}): set `nativeIn` and the wrapped-native input is
+ *             unwrapped to the native coin and forwarded as `msg.value` (instead of an ERC20 allowance).
+ *         Any native delivered is ALWAYS wrapped (never stranded); if neither leg is the wrapped-native it
+ *         reverts {UnexpectedNative}.
  *
  * @dev Invoked via DELEGATECALL, so `address(this)` is the adapter: token custody, allowances and any
  *      native received resolve to the adapter, and the swap output must land in the adapter (otherwise
  *      `received` is 0 and the swap reverts). The adapter whitelists `swapPair`; `amountIn`/`amountOutMin`/
- *      `swapData` come from the backend. `amountIn` is capped to the available balance, and the allowance
- *      to `swapPair` is set to `amountIn` then reset to 0 after the call.
+ *      `nativeIn`/`swapData` come from the backend. `amountIn` is capped to the available balance; the ERC-20
+ *      allowance to `swapPair` is set to `amountIn` then reset to 0 after the call.
  */
 library SwapInventoryLib {
   using SafeERC20 for IERC20;
@@ -31,11 +35,12 @@ library SwapInventoryLib {
   error SwapFailed();
   error ExceedAmountIn();
   error InsufficientOutput();
+  error UnexpectedNative();
 
   /// @notice Execute one backend-built swap. `sellToken0` ⇒ sell token0 for token1, else token1 for
-  ///         token0. `wrappedNative` is the adapter's wrapped-native token: native delivered by the
-  ///         venue for the wrapped-native output leg is wrapped into it. Returns (total0, total1)
-  ///         adjusted by the MEASURED spent/received deltas.
+  ///         token0. `nativeIn` ⇒ the venue takes the native coin for the wrapped-native input leg
+  ///         (unwrap + call{value}); otherwise the input is an ERC-20 (approve + call). `wrappedNative` is
+  ///         the adapter's wrapped-native token. Returns (total0, total1) adjusted by MEASURED deltas.
   function swap(
     address swapPair,
     address token0,
@@ -46,7 +51,8 @@ library SwapInventoryLib {
     bytes memory swapData,
     uint256 total0,
     uint256 total1,
-    address wrappedNative
+    address wrappedNative,
+    bool nativeIn
   ) external returns (uint256, uint256) {
     if (amountIn == 0) return (total0, total1);
 
@@ -61,17 +67,27 @@ library SwapInventoryLib {
     uint256 beforeOut = IERC20(tokenOut).balanceOf(address(this));
     uint256 beforeNative = address(this).balance;
 
-    IERC20(tokenIn).forceApprove(swapPair, amountIn);
-    (bool ok, ) = swapPair.call(swapData);
-    if (!ok) revert SwapFailed();
-    IERC20(tokenIn).forceApprove(swapPair, 0); // clear any residual allowance
+    if (nativeIn) {
+      // Native-input venue (e.g. StakeManager.deposit{value}): only the wrapped-native leg can be paid
+      // as the native coin. Unwrap the wrapped-native ERC-20 and forward it as msg.value.
+      if (tokenIn != wrappedNative) revert UnexpectedNative();
+      IWBNB(wrappedNative).withdraw(amountIn);
+      (bool ok, ) = swapPair.call{ value: amountIn }(swapData);
+      if (!ok) revert SwapFailed();
+    } else {
+      IERC20(tokenIn).forceApprove(swapPair, amountIn);
+      (bool ok, ) = swapPair.call(swapData);
+      if (!ok) revert SwapFailed();
+      IERC20(tokenIn).forceApprove(swapPair, 0); // clear any residual allowance
+    }
 
-    // A venue may settle the wrapped-native output leg as the native coin (e.g. StakeManager
-    // instantWithdraw → BNB). Wrap whatever native THIS call delivered so the tokenOut delta captures it.
-    if (tokenOut == wrappedNative) {
-      uint256 cur = address(this).balance;
-      uint256 nativeIn = cur > beforeNative ? cur - beforeNative : 0;
-      if (nativeIn > 0) IWBNB(wrappedNative).deposit{ value: nativeIn }();
+    // Wrap any native this call delivered — a native-out venue's proceeds (instantWithdraw → BNB) or a
+    // native-in venue's unspent refund — back into the wrapped-native ERC-20, so it is booked into the
+    // totals via the spent/received deltas and never stranded. Native can only belong to the
+    // wrapped-native leg; if neither leg is it, there is nowhere to book the native ⇒ revert.
+    if (address(this).balance > beforeNative) {
+      if (tokenIn != wrappedNative && tokenOut != wrappedNative) revert UnexpectedNative();
+      IWBNB(wrappedNative).deposit{ value: address(this).balance - beforeNative }();
     }
 
     uint256 spent = beforeIn - IERC20(tokenIn).balanceOf(address(this));

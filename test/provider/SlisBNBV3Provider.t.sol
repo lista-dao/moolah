@@ -120,6 +120,18 @@ contract MockSwap {
   }
 }
 
+/// @dev A venue that pulls an ERC-20 input but (incorrectly) pays the output in the NATIVE coin — used to
+///      prove the adapter wraps stray native (never strands it) and then reverts on the missing ERC-20 out.
+contract NativeSwap {
+  function swap(address tokenIn, uint256 amountIn, uint256 nativeOut, address to) external {
+    IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
+    (bool ok, ) = to.call{ value: nativeOut }("");
+    require(ok, "native send failed");
+  }
+
+  receive() external payable {}
+}
+
 /// @notice Functional integration tests for the slisBNB/BNB V3 LP topology (3-contract split:
 ///         SlisBNBV3DexAdapter + SlisBNBV3Provider vault + SlisBNBV3ProviderOracle), forked against the
 ///         live PancakeSwap V3 slisBNB/WBNB 1bp pool + a faithful slisBNB StakeManager stand-in.
@@ -1126,7 +1138,7 @@ contract SlisBNBV3ProviderTest is Test {
     deal(WBNB, address(mockSwap), fairOut);
 
     bytes memory inner = abi.encodeCall(MockSwap.swap, (SLISBNB, WBNB, amountIn, fairOut, address(adapter)));
-    bytes memory data = abi.encode(address(mockSwap), true, amountIn, (fairOut * 99) / 100, inner);
+    bytes memory data = abi.encode(address(mockSwap), true, amountIn, (fairOut * 99) / 100, false, inner);
 
     vm.prank(bot);
     provider.rebalance(0, 0, 0, block.timestamp, data);
@@ -1143,7 +1155,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     MockSwap rogue = new MockSwap(); // never whitelisted
     bytes memory inner = abi.encodeCall(MockSwap.swap, (SLISBNB, WBNB, 0.5 ether, 0.5 ether, address(adapter)));
-    bytes memory data = abi.encode(address(rogue), true, uint256(0.5 ether), uint256(0), inner);
+    bytes memory data = abi.encode(address(rogue), true, uint256(0.5 ether), uint256(0), false, inner);
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.NotWhitelistedPair.selector);
@@ -1185,7 +1197,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint256 fairOut = (amountIn * rate) / 1e18;
 
     bytes memory inner = abi.encodeCall(IStakeManager.instantWithdraw, (amountIn));
-    bytes memory data = abi.encode(STAKE_MANAGER, true, amountIn, (fairOut * 99) / 100, inner);
+    bytes memory data = abi.encode(STAKE_MANAGER, true, amountIn, (fairOut * 99) / 100, false, inner);
 
     vm.prank(bot);
     provider.rebalance(0, 0, 0, block.timestamp, data);
@@ -1197,6 +1209,7 @@ contract SlisBNBV3ProviderTest is Test {
       2e16,
       "instantWithdraw conversion ~value-neutral"
     );
+    assertEq(address(adapter).balance, 0, "native fully wrapped, none stranded");
   }
 
   /// @notice The backend amountOutMin is enforced on the measured output: a venue under-delivering
@@ -1213,7 +1226,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     // Venue pays only half, but the backend demanded the full fair output as amountOutMin.
     bytes memory inner = abi.encodeCall(MockSwap.swap, (SLISBNB, WBNB, amountIn, fairOut / 2, address(adapter)));
-    bytes memory data = abi.encode(address(mockSwap), true, amountIn, fairOut, inner);
+    bytes memory data = abi.encode(address(mockSwap), true, amountIn, fairOut, false, inner);
 
     vm.prank(bot);
     vm.expectRevert(SwapInventoryLib.InsufficientOutput.selector);
@@ -1233,11 +1246,64 @@ contract SlisBNBV3ProviderTest is Test {
     deal(SLISBNB, address(mockSwap), fairOut);
 
     bytes memory inner = abi.encodeCall(MockSwap.swap, (WBNB, SLISBNB, amountIn, fairOut, address(adapter)));
-    bytes memory data = abi.encode(address(mockSwap), false, amountIn, (fairOut * 99) / 100, inner);
+    bytes memory data = abi.encode(address(mockSwap), false, amountIn, (fairOut * 99) / 100, false, inner);
 
     vm.prank(bot);
     provider.rebalance(0, 0, 0, block.timestamp, data);
     assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "WBNB->slisBNB swap ~value-neutral");
+  }
+
+  /// @notice Native-input venue (nativeIn=true): StakeManager.deposit{value} takes BNB. The adapter
+  ///         unwraps the WBNB input → native, forwards it as msg.value, and books the minted slisBNB.
+  ///         Confirms the WBNB→slisBNB-via-deposit path works (the second native direction).
+  function test_rebalance_depositAsSwapVenue() public {
+    vm.prank(manager);
+    adapter.setSwapPairWhitelist(STAKE_MANAGER, true);
+
+    _deposit(user, 10 ether, 10 ether);
+    uint256 peekBefore = providerOracle.peek(address(provider));
+    uint256 oldTokenId = adapter.tokenId();
+
+    vm.prank(manager);
+    adapter.setCenterRateThresholdBps(0);
+
+    // Sell 0.5 WBNB → slisBNB via deposit{value}: WBNB unwrapped to BNB, deposit mints slisBNB.
+    uint256 rate = IStakeManager(STAKE_MANAGER).convertSnBnbToBnb(1e18);
+    uint256 amountIn = 0.5 ether; // WBNB in
+    uint256 fairOut = (amountIn * 1e18) / rate; // slisBNB minted
+
+    bytes memory inner = abi.encodeCall(IStakeManager.deposit, ());
+    bytes memory data = abi.encode(STAKE_MANAGER, false, amountIn, (fairOut * 99) / 100, true, inner); // nativeIn=true
+
+    vm.prank(bot);
+    provider.rebalance(0, 0, 0, block.timestamp, data);
+
+    assertGt(adapter.tokenId(), oldTokenId, "position re-minted after deposit conversion");
+    assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "deposit conversion ~value-neutral");
+    assertEq(address(adapter).balance, 0, "native fully consumed/wrapped, none stranded");
+  }
+
+  /// @notice A venue that delivers the NATIVE coin for the non-wrapped-native output leg cannot strand
+  ///         BNB: the adapter wraps it (so it isn't lost), but the expected ERC-20 output is then 0 and
+  ///         the backend amountOutMin guard reverts the rebalance.
+  function test_rebalance_wrongNativeOutput_reverts() public {
+    NativeSwap bad = new NativeSwap();
+    vm.deal(address(bad), 10 ether);
+    vm.prank(manager);
+    adapter.setSwapPairWhitelist(address(bad), true);
+
+    _deposit(user, 10 ether, 10 ether);
+    vm.prank(manager);
+    adapter.setCenterRateThresholdBps(0);
+
+    // sellToken0=false ⇒ tokenOut = slisBNB. The venue takes WBNB but pays native BNB (wrong leg).
+    uint256 amountIn = 0.5 ether;
+    bytes memory inner = abi.encodeCall(NativeSwap.swap, (WBNB, amountIn, 0.4 ether, address(adapter)));
+    bytes memory data = abi.encode(address(bad), false, amountIn, uint256(0.4 ether), false, inner);
+
+    vm.prank(bot);
+    vm.expectRevert(SwapInventoryLib.InsufficientOutput.selector); // slisBNB received = 0 < amountOutMin
+    provider.rebalance(0, 0, 0, block.timestamp, data);
   }
 
   /* ─────────── rebalance after price leaves range (fully WBNB) ──────── */
