@@ -16,7 +16,6 @@ import { IOracle } from "moolah/interfaces/IOracle.sol";
 import { CreateMarketPhase2Deploy } from "../../script/eth/phase2/deploy_createMarket.sol";
 import { MoolahVaultWETHDeploy } from "../../script/eth/phase2/deploy_moolahVault_weth.sol";
 import { MoolahVaultConfigWETHDeploy } from "../../script/eth/phase2/deploy_moolahVaultConfig_weth.sol";
-import { LiquidationWhitelistPhase2Deploy } from "../../script/eth/phase2/deploy_liquidationWhitelist.sol";
 import { MoolahVaultTransferRoleWETHDeploy } from "../../script/eth/phase2/deploy_moolahVault_transferRole_weth.sol";
 import { VaultConfigUsdtUsdcPhase2Deploy } from "../../script/eth/phase2/deploy_vaultConfig_usdt_usdc.sol";
 
@@ -243,14 +242,14 @@ contract EthPhase2ForkTest is Test {
   }
 
   // ═══════════════════════════════════════════════════
-  //  Step 5: Liquidation whitelist — calls deploy_liquidationWhitelist.sol run()
+  //  Step 5: Liquidation whitelist (Manager Safe batch — no script)
   // ═══════════════════════════════════════════════════
 
   function test_step5_liquidationWhitelist() public {
     _enableLltvIfNeeded();
     _runCreateMarkets();
 
-    new LiquidationWhitelistPhase2Deploy().run();
+    _runLiquidationWhitelist();
 
     Id[4] memory ids = harness.marketIds();
     address liq = 0x5Bf5c3B5f5c29dBC647d2557Cc22B00ED29f301C;
@@ -370,7 +369,7 @@ contract EthPhase2ForkTest is Test {
     assertEq(wethVault.supplyQueueLength(), 2);
 
     // Step 5
-    new LiquidationWhitelistPhase2Deploy().run();
+    _runLiquidationWhitelist();
     for (uint256 i = 0; i < 4; i++) {
       assertTrue(liquidatorContract.marketWhitelist(Id.unwrap(ids[i])));
     }
@@ -456,6 +455,55 @@ contract EthPhase2ForkTest is Test {
   function _runTransferRole() internal {
     vm.setEnv("WETH_VAULT", vm.toString(address(wethVault)));
     new MoolahVaultTransferRoleWETHDeploy().run();
+  }
+
+  /// @dev Simulates the Manager Safe batch TX for Step 5 (liquidation whitelist)
+  function _runLiquidationWhitelist() internal {
+    Id[4] memory fixedIds = harness.marketIds();
+
+    // Convert fixed-size Id[4] to dynamic Id[]
+    Id[] memory ids = new Id[](4);
+    bytes32[] memory idBytes = new bytes32[](4);
+    for (uint256 i = 0; i < 4; i++) {
+      ids[i] = fixedIds[i];
+      idBytes[i] = Id.unwrap(fixedIds[i]);
+    }
+
+    // Part A: Moolah.batchToggleLiquidationWhitelist
+    address[] memory liquidators = new address[](3);
+    liquidators[0] = 0x5Bf5c3B5f5c29dBC647d2557Cc22B00ED29f301C;
+    liquidators[1] = 0x08E83A96F4dA5DecC0e6E9084dDe049A3E84ca04;
+    liquidators[2] = 0x796302e041d1715a8b1f16Fd7d7CBA38bb031DE5;
+
+    address[][] memory accountInfo = new address[][](4);
+    for (uint256 i = 0; i < 4; i++) {
+      accountInfo[i] = liquidators;
+    }
+
+    address WBTC_cbBTC_LP = 0x5432E4FE5736B9B7ddc1Be34ac45bdB557f2bE22;
+    address smartProviderAddr = 0x893666d84B374f96Ab500f56728283eeBB94A9ac;
+
+    vm.startPrank(testDeployer);
+    moolah.batchToggleLiquidationWhitelist(ids, accountInfo, true);
+
+    // Part B: Liquidator — market whitelist + token whitelist
+    liquidatorContract.batchSetMarketWhitelist(idBytes, true);
+    if (!liquidatorContract.tokenWhitelist(WBTC_cbBTC_LP)) {
+      liquidatorContract.setTokenWhitelist(WBTC_cbBTC_LP, true);
+    }
+
+    // Part C: SmartProvider whitelist (idempotent — skip if already set)
+    if (!liquidatorContract.smartProviders(smartProviderAddr)) {
+      address[] memory sps = new address[](1);
+      sps[0] = smartProviderAddr;
+      liquidatorContract.batchSetSmartProviders(sps, true);
+    }
+    if (!publicLiquidatorContract.smartProviders(smartProviderAddr)) {
+      address[] memory sps = new address[](1);
+      sps[0] = smartProviderAddr;
+      publicLiquidatorContract.batchSetSmartProviders(sps, true);
+    }
+    vm.stopPrank();
   }
 
   function _findAdmin(address target) internal view returns (address) {
