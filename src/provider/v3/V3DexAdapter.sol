@@ -580,7 +580,7 @@ abstract contract V3DexAdapter is
   function _tickRangeForRate(
     uint256 centerRate,
     int24 tickSpacing
-  ) internal pure returns (int24 initialTickLower, int24 initialTickUpper) {
+  ) internal view returns (int24 initialTickLower, int24 initialTickUpper) {
     uint256 lowerRate = (centerRate * (BPS - INITIAL_RANGE_BPS)) / BPS;
     uint256 upperRate = (centerRate * (BPS + INITIAL_RANGE_BPS)) / BPS;
     initialTickLower = _floorTick(_tickAtSqrtRatio(_sqrtPriceX96FromRate(lowerRate)), tickSpacing);
@@ -595,8 +595,19 @@ abstract contract V3DexAdapter is
     if ((delta * BPS) / previousCenterRate < thresholdBps) revert RateDeviationBelowThreshold();
   }
 
-  function _sqrtPriceX96FromRate(uint256 rate) internal pure returns (uint160) {
-    return uint160(Math.sqrt(FullMath.mulDiv(rate, 1 << 192, 1e18)));
+  /// @dev Convert an exchange `rate` — token1-per-token0 scaled by 1e18 (1e18 ⇒ 1 WHOLE token0 is worth
+  ///      1 WHOLE token1; subclasses return it in these human/whole-token terms) — into the pool
+  ///      sqrtPriceX96, which encodes the RAW (smallest-unit) price token1/token0. The two tokens may have
+  ///      different decimals (the wrapped-native is 18; the paired token need not be), so adjust by the
+  ///      decimal difference:  token1_raw/token0_raw = (rate / 1e18) · 10^(DECIMALS1 − DECIMALS0).
+  function _sqrtPriceX96FromRate(uint256 rate) internal view returns (uint160) {
+    uint256 priceX192; // (token1_raw / token0_raw) · 2^192
+    if (DECIMALS1 >= DECIMALS0) {
+      priceX192 = FullMath.mulDiv(rate * (uint256(10) ** (DECIMALS1 - DECIMALS0)), 1 << 192, 1e18);
+    } else {
+      priceX192 = FullMath.mulDiv(rate, 1 << 192, 1e18 * (uint256(10) ** (DECIMALS0 - DECIMALS1)));
+    }
+    return uint160(Math.sqrt(priceX192));
   }
 
   function _tickAtSqrtRatio(uint160 sqrtPriceX96) internal pure returns (int24) {
@@ -636,10 +647,11 @@ abstract contract V3DexAdapter is
 
   /// @dev DEX-agnostic, backend-built rebalance inventory conversion, shared by all rate-implied pairs
   ///      (slisBNB/WBNB, wstETH/WETH, wbETH/WETH). `swapData` (when non-empty) ABI-encodes
-  ///      (address swapPair, bool sellToken0, uint256 amountIn, uint256 amountOutMin, bytes innerSwapData):
-  ///      the adapter requires `swapPair` whitelisted and forwards `innerSwapData` via a low-level call,
-  ///      bounding the swap by the allowance + the backend's `amountOutMin` (see {SwapInventoryLib}).
-  ///      Empty swapData ⇒ recenter without converting inventory (also the TWAP-pair default).
+  ///      (address swapPair, bool sellToken0, uint256 amountIn, uint256 amountOutMin, bool nativeIn,
+  ///      bytes innerSwapData): the adapter requires `swapPair` whitelisted and forwards `innerSwapData`
+  ///      via a low-level call, bounding the swap by the backend's `amountOutMin` (see {SwapInventoryLib}).
+  ///      `nativeIn` ⇒ a native-input venue (the wrapped-native leg is unwrapped + sent as msg.value, e.g.
+  ///      StakeManager.deposit). Empty swapData ⇒ recenter without converting (also the TWAP-pair default).
   function _convertToOptimalRatio(
     uint256 total0,
     uint256 total1,
@@ -649,10 +661,8 @@ abstract contract V3DexAdapter is
     bytes calldata swapData
   ) internal virtual returns (uint256, uint256) {
     if (swapData.length == 0) return (total0, total1);
-    (address swapPair, bool sellToken0, uint256 amountIn, uint256 amountOutMin, bytes memory inner) = abi.decode(
-      swapData,
-      (address, bool, uint256, uint256, bytes)
-    );
+    (address swapPair, bool sellToken0, uint256 amountIn, uint256 amountOutMin, bool nativeIn, bytes memory inner) = abi
+      .decode(swapData, (address, bool, uint256, uint256, bool, bytes));
     if (!swapPairWhitelist[swapPair]) revert NotWhitelistedPair();
     return
       SwapInventoryLib.swap(
@@ -665,7 +675,8 @@ abstract contract V3DexAdapter is
         inner,
         total0,
         total1,
-        WRAPPED_NATIVE
+        WRAPPED_NATIVE,
+        nativeIn
       );
   }
 

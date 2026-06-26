@@ -39,6 +39,11 @@ contract V3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   uint8 public immutable DECIMALS0;
   uint8 public immutable DECIMALS1;
 
+  /// @dev Decimals of the priced share token (ERC4626 ⇒ == the accounting asset's decimals). Moolah reads
+  ///      `collateralToken.decimals()` to interpret peek(), so the share price must be quoted per ONE WHOLE
+  ///      share (10 ** SHARE_DECIMALS share-wei), not hardcoded to 1e18.
+  uint8 public immutable SHARE_DECIMALS;
+
   bytes32 public constant MANAGER = keccak256("MANAGER");
   uint256 internal constant BPS = 10_000;
   /// @dev Hard cap on the configurable haircut (10%).
@@ -81,6 +86,7 @@ contract V3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     TOKEN1 = _token1;
     DECIMALS0 = IERC20Metadata(_token0).decimals();
     DECIMALS1 = IERC20Metadata(_token1).decimals();
+    SHARE_DECIMALS = IERC20Metadata(_providerShare).decimals();
     _disableInitializers();
   }
 
@@ -135,8 +141,9 @@ contract V3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     uint256 totalValue = (total0 * price0) / (10 ** DECIMALS0) + (total1 * price1) / (10 ** DECIMALS1);
     if (totalValue == 0) revert ZeroPrice(); // finding D
 
-    // 8-decimal USD price per 1e18 shares, minus the conservative haircut.
-    uint256 raw = (totalValue * 1e18) / supply;
+    // 8-decimal USD price per ONE WHOLE share (10 ** SHARE_DECIMALS share-wei) — Moolah interprets peek()
+    // using collateralToken.decimals() — minus the conservative haircut.
+    uint256 raw = (totalValue * (10 ** SHARE_DECIMALS)) / supply;
     return (raw * (BPS - haircutBps)) / BPS;
   }
 
