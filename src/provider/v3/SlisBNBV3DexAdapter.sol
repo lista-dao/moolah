@@ -25,9 +25,24 @@ contract SlisBNBV3DexAdapter is V3DexAdapter, ISlisBNBV3DexAdapter {
   /// @dev BSC wrapped native token (forwarded to the base as WRAPPED_NATIVE).
   address public constant WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
 
+  /// @dev Hard cap on the rebalance instant-withdraw slippage tolerance (10%).
+  uint256 public constant MAX_INSTANT_WITHDRAW_SLIPPAGE_BPS = 1_000;
+
+  /* ──────────────────────────── storage ───────────────────────────── */
+
+  /// @dev Max tolerated shortfall (BPS) of the rebalance instantWithdraw BNB output vs the StakeManager
+  ///      exchange-rate value of the redeemed slisBNB. Bounds the instant-withdraw fee / any rate
+  ///      anomaly; the conversion reverts if the realized BNB falls below this rate-anchored floor.
+  uint256 public instantWithdrawSlippageBps;
+
+  /* ───────────────────────────── events ───────────────────────────── */
+
+  event InstantWithdrawSlippageChanged(uint256 instantWithdrawSlippageBps);
+
   /* ───────────────────────────── errors ───────────────────────────── */
 
   error NotSlisBnbWbnbPair();
+  error InvalidSlippage();
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor(
@@ -45,7 +60,7 @@ contract SlisBNBV3DexAdapter is V3DexAdapter, ISlisBNBV3DexAdapter {
 
   /**
    * @param _admin   Default admin (upgrade / roles).
-   * @param _manager Manager role (sets centerRateThresholdBps).
+   * @param _manager Manager role (sets centerRateThresholdBps + instantWithdrawSlippageBps).
    */
   function initialize(address _admin, address _manager) external initializer {
     uint256 initialCenterRate = _lstNativeRate();
@@ -53,6 +68,18 @@ contract SlisBNBV3DexAdapter is V3DexAdapter, ISlisBNBV3DexAdapter {
     __V3DexAdapter_init(_admin, _manager, initialTickLower, initialTickUpper);
     lastCenterRate = initialCenterRate;
     centerRateThresholdBps = INITIAL_RANGE_BPS;
+    instantWithdrawSlippageBps = 100; // default 1% tolerance; MANAGER tunes to the live fee + buffer
+    emit InstantWithdrawSlippageChanged(100);
+  }
+
+  /* ───────────────────────── manager config ───────────────────────── */
+
+  /// @notice Set the rebalance instant-withdraw slippage tolerance (BPS). 0 ⇒ require the full
+  ///         rate value (no fee tolerated). onlyRole MANAGER.
+  function setInstantWithdrawSlippageBps(uint256 _instantWithdrawSlippageBps) external onlyRole(MANAGER) {
+    if (_instantWithdrawSlippageBps > MAX_INSTANT_WITHDRAW_SLIPPAGE_BPS) revert InvalidSlippage();
+    instantWithdrawSlippageBps = _instantWithdrawSlippageBps;
+    emit InstantWithdrawSlippageChanged(_instantWithdrawSlippageBps);
   }
 
   /* ───────────────────────── hook overrides ───────────────────────── */
@@ -85,7 +112,8 @@ contract SlisBNBV3DexAdapter is V3DexAdapter, ISlisBNBV3DexAdapter {
         _sqrtPriceX96FromRate(rate),
         targetTickLower,
         targetTickUpper,
-        rate
+        rate,
+        instantWithdrawSlippageBps
       );
   }
 
