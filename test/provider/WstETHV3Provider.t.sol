@@ -200,7 +200,8 @@ contract WstETHV3ProviderTest is Test {
   }
 
   /// @dev Encode the backend rebalance blob the adapter decodes: (swapPair, sellToken0, amountIn,
-  ///      amountOutMin, innerSwapData). Empty blob ⇒ recenter without converting inventory.
+  ///      amountOutMin, nativeIn, innerSwapData). nativeIn=false here (DEX venues; no native-in on ETH).
+  ///      Empty blob ⇒ recenter without converting inventory.
   function _swapData(
     address swapPair,
     bool sellToken0,
@@ -208,7 +209,7 @@ contract WstETHV3ProviderTest is Test {
     uint256 amountOutMin,
     bytes memory inner
   ) internal pure returns (bytes memory) {
-    return abi.encode(swapPair, sellToken0, amountIn, amountOutMin, inner);
+    return abi.encode(swapPair, sellToken0, amountIn, amountOutMin, false, inner);
   }
 
   /// @dev Inner calldata the adapter low-level-calls on the whitelisted MockSwap: pull `amountIn` of
@@ -440,7 +441,7 @@ contract WstETHV3ProviderTest is Test {
     bytes memory data = _swapData(address(rogue), true, 0.5 ether, 0, inner);
 
     vm.prank(bot);
-    vm.expectRevert(WstETHV3DexAdapter.NotWhitelistedPair.selector);
+    vm.expectRevert(V3DexAdapter.NotWhitelistedPair.selector);
     provider.rebalance(0, 0, 0, block.timestamp, data);
   }
 
@@ -485,13 +486,13 @@ contract WstETHV3ProviderTest is Test {
   function test_setSwapPairWhitelist_rejectsSensitiveAddresses() public {
     address npm = address(adapter.POSITION_MANAGER());
     vm.startPrank(manager);
-    vm.expectRevert(WstETHV3DexAdapter.InvalidSwapPair.selector);
+    vm.expectRevert(V3DexAdapter.InvalidSwapPair.selector);
     adapter.setSwapPairWhitelist(WSTETH, true);
-    vm.expectRevert(WstETHV3DexAdapter.InvalidSwapPair.selector);
+    vm.expectRevert(V3DexAdapter.InvalidSwapPair.selector);
     adapter.setSwapPairWhitelist(WETH, true);
-    vm.expectRevert(WstETHV3DexAdapter.InvalidSwapPair.selector);
+    vm.expectRevert(V3DexAdapter.InvalidSwapPair.selector);
     adapter.setSwapPairWhitelist(POOL, true);
-    vm.expectRevert(WstETHV3DexAdapter.InvalidSwapPair.selector);
+    vm.expectRevert(V3DexAdapter.InvalidSwapPair.selector);
     adapter.setSwapPairWhitelist(npm, true);
     vm.stopPrank();
   }
