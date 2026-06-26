@@ -10,11 +10,11 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SlisBNBV3Provider } from "../../src/provider/v3/SlisBNBV3Provider.sol";
 import { SlisBNBV3DexAdapter } from "../../src/provider/v3/SlisBNBV3DexAdapter.sol";
 import { SlisBNBV3ProviderOracle } from "../../src/provider/v3/SlisBNBV3ProviderOracle.sol";
-import { SlisBnbInventoryLib } from "../../src/provider/libraries/SlisBnbInventoryLib.sol";
 import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
 import { IStakeManager } from "../../src/provider/interfaces/IStakeManager.sol";
 import { V3Provider } from "../../src/provider/v3/V3Provider.sol";
 import { V3DexAdapter } from "../../src/provider/v3/V3DexAdapter.sol";
+import { SwapInventoryLib } from "../../src/provider/libraries/SwapInventoryLib.sol";
 import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
 import { IV3PoolMinimal } from "../../src/provider/interfaces/IV3PoolMinimal.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
@@ -110,40 +110,14 @@ contract MockStakeManager {
   receive() external payable {}
 }
 
-/// @dev StakeManager stand-in that UNDER-delivers on instantWithdraw (applies a `feeBps` haircut) while
-///      convertSnBnbToBnb still reports the full rate — exercises the rebalance slippage floor.
-contract LossyMockStakeManager {
-  uint256 public immutable rate; // BNB per slisBNB, 1e18
-  address public immutable slisBnb;
-  uint256 public immutable feeBps;
-
-  constructor(uint256 _rate, address _slisBnb, uint256 _feeBps) {
-    rate = _rate;
-    slisBnb = _slisBnb;
-    feeBps = _feeBps;
+/// @dev Minimal DEX-agnostic swap venue the rebalance backend routes through (the slisBNB conversion is
+///      now a backend-built swap, not a StakeManager special case): pulls `amountIn` of tokenIn from the
+///      caller (the adapter, which forceApproved it) and sends a fixed `amountOut` of tokenOut to `to`.
+contract MockSwap {
+  function swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut, address to) external {
+    IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
+    IERC20(tokenOut).transfer(to, amountOut);
   }
-
-  function convertSnBnbToBnb(uint256 amount) external view returns (uint256) {
-    return (amount * rate) / 1e18; // full rate (no fee) — the rebalance floor anchors to this
-  }
-
-  function convertBnbToSnBnb(uint256 amount) external view returns (uint256) {
-    return (amount * 1e18) / rate;
-  }
-
-  function deposit() external payable {
-    uint256 out = (msg.value * 1e18) / rate;
-    IERC20(slisBnb).transfer(msg.sender, out);
-  }
-
-  function instantWithdraw(uint256 amount) external returns (uint256 bnbAmount) {
-    IERC20(slisBnb).transferFrom(msg.sender, address(this), amount);
-    bnbAmount = ((amount * rate) / 1e18) * (10_000 - feeBps) / 10_000; // haircut
-    (bool ok, ) = msg.sender.call{ value: bnbAmount }("");
-    require(ok, "bnb send failed");
-  }
-
-  receive() external payable {}
 }
 
 /// @notice Functional integration tests for the slisBNB/BNB V3 LP topology (3-contract split:
@@ -183,6 +157,7 @@ contract SlisBNBV3ProviderTest is Test {
   SlisBNBV3DexAdapter adapter;
   SlisBNBV3ProviderOracle providerOracle;
   MockOracle oracle;
+  MockSwap mockSwap;
   MarketParams marketParams;
   Id marketId;
 
@@ -247,6 +222,11 @@ contract SlisBNBV3ProviderTest is Test {
     // 3) Wire adapter → provider (one-time, admin).
     vm.prank(admin);
     adapter.setProvider(address(provider));
+
+    // DEX-agnostic swap venue stand-in: whitelist it so backend-built rebalance swapData may target it.
+    mockSwap = new MockSwap();
+    vm.prank(manager);
+    adapter.setSwapPairWhitelist(address(mockSwap), true);
 
     // 4) Share oracle (Moolah market.oracle points here).
     SlisBNBV3ProviderOracle oracleImpl = new SlisBNBV3ProviderOracle(
@@ -559,7 +539,7 @@ contract SlisBNBV3ProviderTest is Test {
     // manager cannot rebalance — revert fires on role check before amounts matter.
     vm.prank(manager);
     vm.expectRevert();
-    provider.rebalance(1, 1, 1, block.timestamp);
+    provider.rebalance(1, 1, 1, block.timestamp, "");
 
     // Disable the rate-drift guard — a pool swap does NOT move the StakeManager rate, so the
     // default 1% center-rate threshold would block this rebalance with RateDeviationBelowThreshold.
@@ -572,7 +552,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint256 min1 = (total1 * 999) / 1000;
     uint256 oldTokenId = adapter.tokenId();
     vm.prank(bot);
-    provider.rebalance(min0, min1, 0, block.timestamp);
+    provider.rebalance(min0, min1, 0, block.timestamp, "");
 
     assertGt(adapter.tokenId(), oldTokenId, "position NFT should be re-minted");
     assertLt(adapter.tickLower(), adapter.tickUpper());
@@ -591,7 +571,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint256 min0 = (total0 * 999) / 1000;
     uint256 min1 = (total1 * 999) / 1000;
     vm.prank(bot);
-    provider.rebalance(min0, min1, 0, block.timestamp);
+    provider.rebalance(min0, min1, 0, block.timestamp, "");
 
     // Share count is unchanged after rebalance.
     assertEq(_collateral(user), shares, "shares should be unchanged after rebalance");
@@ -1113,71 +1093,151 @@ contract SlisBNBV3ProviderTest is Test {
 
     // Rebalance uses an internally derived range; caller only supplies execution guards.
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, block.timestamp);
+    provider.rebalance(0, 0, 0, block.timestamp, "");
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
 
     (uint256 total0After, uint256 total1After) = provider.getTotalAmounts();
     uint256 valueAfter = _valueUSD(total0After, total1After);
 
-    // The slisBNB adapter converts inventory to the rate-optimal ratio via the StakeManager and
-    // re-mints; value is preserved within ~2% (instant-withdraw/stake conversion rounding).
-    assertApproxEqRel(valueAfter, valueBefore, 0.02e18, "total value should be preserved within 2% after rebalance");
+    // Recenter-only (empty swapData ⇒ no inventory conversion): the all-slisBNB inventory is re-minted
+    // into the rate-derived range (excess held as idle), so total VALUE is preserved within ~2%. The
+    // actual slisBNB↔WBNB conversion is exercised by the swap-venue tests below.
+    assertApproxEqRel(valueAfter, valueBefore, 0.02e18, "recenter-only preserves total value within 2%");
   }
 
-  /* ─────── rebalance instantWithdraw slippage floor (rate-anchored minOut) ─────── */
+  /* ─────── rebalance inventory conversion via a whitelisted swap venue (DEX-agnostic) ─────── */
 
-  /// @dev Re-etch the StakeManager so instantWithdraw under-delivers by `feeBps` vs the rate value.
-  function _etchLossyStakeManager(uint256 feeBps) internal {
+  /// @notice The rebalance converts inventory through a backend-built swap against a whitelisted venue
+  ///         (the slisBNB conversion is now a swap, not a StakeManager special case). A fair-rate
+  ///         slisBNB→WBNB swap is value-neutral and the position is re-minted.
+  function test_rebalance_swapExecutesThroughWhitelistedVenue() public {
+    _deposit(user, 10 ether, 10 ether);
+    uint256 peekBefore = providerOracle.peek(address(provider));
+    uint256 oldTokenId = adapter.tokenId();
+
+    vm.prank(manager);
+    adapter.setCenterRateThresholdBps(0);
+
+    // Sell 0.5 slisBNB → WBNB at the StakeManager rate; fund the venue with the WBNB it pays out.
     uint256 rate = IStakeManager(STAKE_MANAGER).convertSnBnbToBnb(1e18);
-    LossyMockStakeManager lossy = new LossyMockStakeManager(rate, SLISBNB, feeBps);
-    vm.etch(STAKE_MANAGER, address(lossy).code);
+    uint256 amountIn = 0.5 ether;
+    uint256 fairOut = (amountIn * rate) / 1e18;
+    deal(WBNB, address(mockSwap), fairOut);
+
+    bytes memory inner = abi.encodeCall(MockSwap.swap, (SLISBNB, WBNB, amountIn, fairOut, address(adapter)));
+    bytes memory data = abi.encode(address(mockSwap), true, amountIn, (fairOut * 99) / 100, inner);
+
+    vm.prank(bot);
+    provider.rebalance(0, 0, 0, block.timestamp, data);
+
+    assertGt(adapter.tokenId(), oldTokenId, "position re-minted after swap");
+    assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "fair swap ~value-neutral");
   }
 
-  /// @notice A below-range rebalance must redeem slisBNB→BNB; if instantWithdraw returns less than the
-  ///         rate-anchored floor (here a 5% haircut vs the default 1% tolerance) the conversion reverts.
-  function test_rebalance_revertsOnInstantWithdrawSlippage() public {
-    _etchLossyStakeManager(500); // 5% haircut
+  /// @notice The adapter only allows whitelisted swap venues; a non-whitelisted target reverts.
+  function test_rebalance_revertsNotWhitelistedPair() public {
     _deposit(user, 10 ether, 10 ether);
-    _pushPriceBelowRange(); // position → fully slisBNB ⇒ rebalance instant-withdraws slisBNB→BNB
-
     vm.prank(manager);
     adapter.setCenterRateThresholdBps(0);
 
+    MockSwap rogue = new MockSwap(); // never whitelisted
+    bytes memory inner = abi.encodeCall(MockSwap.swap, (SLISBNB, WBNB, 0.5 ether, 0.5 ether, address(adapter)));
+    bytes memory data = abi.encode(address(rogue), true, uint256(0.5 ether), uint256(0), inner);
+
     vm.prank(bot);
-    vm.expectRevert(SlisBnbInventoryLib.InstantWithdrawSlippage.selector);
-    provider.rebalance(0, 0, 0, block.timestamp);
+    vm.expectRevert(V3DexAdapter.NotWhitelistedPair.selector);
+    provider.rebalance(0, 0, 0, block.timestamp, data);
   }
 
-  /// @notice Raising the tolerance above the realized haircut lets the same conversion through.
-  function test_rebalance_instantWithdrawSlippage_passesWhenToleranceRaised() public {
-    _etchLossyStakeManager(500); // 5% haircut
-    _deposit(user, 10 ether, 10 ether);
-    _pushPriceBelowRange();
-
+  /// @notice Defense-in-depth: a swap venue may never be the position's own tokens / pool / NPM.
+  function test_setSwapPairWhitelist_rejectsSensitiveAddresses() public {
+    address npm = address(adapter.POSITION_MANAGER());
     vm.startPrank(manager);
-    adapter.setCenterRateThresholdBps(0);
-    adapter.setInstantWithdrawSlippageBps(600); // 6% tolerance > 5% haircut
+    vm.expectRevert(V3DexAdapter.InvalidSwapPair.selector);
+    adapter.setSwapPairWhitelist(SLISBNB, true);
+    vm.expectRevert(V3DexAdapter.InvalidSwapPair.selector);
+    adapter.setSwapPairWhitelist(WBNB, true);
+    vm.expectRevert(V3DexAdapter.InvalidSwapPair.selector);
+    adapter.setSwapPairWhitelist(POOL, true);
+    vm.expectRevert(V3DexAdapter.InvalidSwapPair.selector);
+    adapter.setSwapPairWhitelist(npm, true);
     vm.stopPrank();
-
-    vm.prank(bot);
-    provider.rebalance(0, 0, 0, block.timestamp);
-    assertLt(adapter.tickLower(), adapter.tickUpper(), "rebalanced once tolerance covers the haircut");
   }
 
-  function test_setInstantWithdrawSlippageBps_onlyManagerAndCapped() public {
-    uint256 overCap = adapter.MAX_INSTANT_WITHDRAW_SLIPPAGE_BPS() + 1;
+  /// @notice instantWithdraw is just another whitelisted swap venue: the StakeManager settles slisBNB→
+  ///         native BNB, which the adapter wraps back to WBNB. Confirms the simplified, swap-pair-agnostic
+  ///         path still supports instant-redeem (no StakeManager special-casing on chain).
+  function test_rebalance_instantWithdrawAsSwapVenue() public {
+    vm.prank(manager);
+    adapter.setSwapPairWhitelist(STAKE_MANAGER, true);
 
-    vm.expectRevert(); // not MANAGER
-    adapter.setInstantWithdrawSlippageBps(50);
+    _deposit(user, 10 ether, 10 ether);
+    uint256 peekBefore = providerOracle.peek(address(provider));
+    uint256 oldTokenId = adapter.tokenId();
 
     vm.prank(manager);
-    vm.expectRevert(SlisBNBV3DexAdapter.InvalidSlippage.selector);
-    adapter.setInstantWithdrawSlippageBps(overCap);
+    adapter.setCenterRateThresholdBps(0);
 
+    // Sell 0.5 slisBNB via instantWithdraw → native BNB → wrapped to WBNB by the adapter.
+    uint256 rate = IStakeManager(STAKE_MANAGER).convertSnBnbToBnb(1e18);
+    uint256 amountIn = 0.5 ether;
+    uint256 fairOut = (amountIn * rate) / 1e18;
+
+    bytes memory inner = abi.encodeCall(IStakeManager.instantWithdraw, (amountIn));
+    bytes memory data = abi.encode(STAKE_MANAGER, true, amountIn, (fairOut * 99) / 100, inner);
+
+    vm.prank(bot);
+    provider.rebalance(0, 0, 0, block.timestamp, data);
+
+    assertGt(adapter.tokenId(), oldTokenId, "position re-minted after instantWithdraw conversion");
+    assertApproxEqRel(
+      providerOracle.peek(address(provider)),
+      peekBefore,
+      2e16,
+      "instantWithdraw conversion ~value-neutral"
+    );
+  }
+
+  /// @notice The backend amountOutMin is enforced on the measured output: a venue under-delivering
+  ///         vs amountOutMin reverts the whole rebalance (replaces the old instant-withdraw slippage guard).
+  function test_rebalance_swap_revertsBelowAmountOutMin() public {
+    _deposit(user, 10 ether, 10 ether);
     vm.prank(manager);
-    adapter.setInstantWithdrawSlippageBps(250);
-    assertEq(adapter.instantWithdrawSlippageBps(), 250, "slippage tolerance updated");
+    adapter.setCenterRateThresholdBps(0);
+
+    uint256 rate = IStakeManager(STAKE_MANAGER).convertSnBnbToBnb(1e18);
+    uint256 amountIn = 0.5 ether;
+    uint256 fairOut = (amountIn * rate) / 1e18;
+    deal(WBNB, address(mockSwap), fairOut);
+
+    // Venue pays only half, but the backend demanded the full fair output as amountOutMin.
+    bytes memory inner = abi.encodeCall(MockSwap.swap, (SLISBNB, WBNB, amountIn, fairOut / 2, address(adapter)));
+    bytes memory data = abi.encode(address(mockSwap), true, amountIn, fairOut, inner);
+
+    vm.prank(bot);
+    vm.expectRevert(SwapInventoryLib.InsufficientOutput.selector);
+    provider.rebalance(0, 0, 0, block.timestamp, data);
+  }
+
+  /// @notice The other swap direction (sellToken0 = false): sell WBNB → slisBNB, value-neutral.
+  function test_rebalance_swapToken1ToToken0() public {
+    _deposit(user, 10 ether, 10 ether);
+    uint256 peekBefore = providerOracle.peek(address(provider));
+    vm.prank(manager);
+    adapter.setCenterRateThresholdBps(0);
+
+    uint256 rate = IStakeManager(STAKE_MANAGER).convertSnBnbToBnb(1e18);
+    uint256 amountIn = 0.5 ether; // WBNB in
+    uint256 fairOut = (amountIn * 1e18) / rate; // slisBNB out
+    deal(SLISBNB, address(mockSwap), fairOut);
+
+    bytes memory inner = abi.encodeCall(MockSwap.swap, (WBNB, SLISBNB, amountIn, fairOut, address(adapter)));
+    bytes memory data = abi.encode(address(mockSwap), false, amountIn, (fairOut * 99) / 100, inner);
+
+    vm.prank(bot);
+    provider.rebalance(0, 0, 0, block.timestamp, data);
+    assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "WBNB->slisBNB swap ~value-neutral");
   }
 
   /* ─────────── rebalance after price leaves range (fully WBNB) ──────── */
@@ -1222,16 +1282,16 @@ contract SlisBNBV3ProviderTest is Test {
 
     // Rebalance uses an internally derived range; caller only supplies execution guards.
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, block.timestamp);
+    provider.rebalance(0, 0, 0, block.timestamp, "");
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
 
     (uint256 total0After, uint256 total1After) = provider.getTotalAmounts();
     uint256 valueAfter = _valueUSD(total0After, total1After);
 
-    // Inventory converted to the rate-optimal ratio via the StakeManager and re-minted; value
-    // preserved within ~2% (instant-withdraw/stake conversion rounding).
-    assertApproxEqRel(valueAfter, valueBefore, 0.02e18, "total value should be preserved within 2% after rebalance");
+    // Recenter-only (empty swapData ⇒ no inventory conversion): the all-WBNB inventory is re-minted into
+    // the rate-derived range (excess held as idle), so total VALUE is preserved within ~2%.
+    assertApproxEqRel(valueAfter, valueBefore, 0.02e18, "recenter-only preserves total value within 2%");
   }
 
   /* ──────────── minAmount slippage guard tests ────────────────────── */
@@ -1251,7 +1311,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     // minAmount0 = total0 (exact), minAmount1 = 0 (position has no WBNB).
     vm.prank(bot);
-    provider.rebalance(total0, 0, 0, block.timestamp);
+    provider.rebalance(total0, 0, 0, block.timestamp, "");
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
   }
@@ -1269,7 +1329,7 @@ contract SlisBNBV3ProviderTest is Test {
     // minAmount0 one unit above actual → should revert with NPM slippage check.
     vm.prank(bot);
     vm.expectRevert();
-    provider.rebalance(total0 + 1, 0, 0, block.timestamp);
+    provider.rebalance(total0 + 1, 0, 0, block.timestamp, "");
   }
 
   /// @dev When price is above range the position is 100% WBNB (token1).
@@ -1287,7 +1347,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     // minAmount0 = 0 (no slisBNB), minAmount1 = total1 (exact).
     vm.prank(bot);
-    provider.rebalance(0, total1, 0, block.timestamp);
+    provider.rebalance(0, total1, 0, block.timestamp, "");
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
   }
@@ -1305,7 +1365,7 @@ contract SlisBNBV3ProviderTest is Test {
     // minAmount1 one unit above actual → should revert with NPM slippage check.
     vm.prank(bot);
     vm.expectRevert();
-    provider.rebalance(0, total1 + 1, 0, block.timestamp);
+    provider.rebalance(0, total1 + 1, 0, block.timestamp, "");
   }
 
   function test_withdraw_minAmount_tooHigh_reverts() public {
@@ -1854,7 +1914,7 @@ contract SlisBNBV3ProviderTest is Test {
     adapter.setCenterRateThresholdBps(0);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, block.timestamp);
+    provider.rebalance(0, 0, 0, block.timestamp, "");
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
   }
@@ -1869,7 +1929,7 @@ contract SlisBNBV3ProviderTest is Test {
     adapter.setCenterRateThresholdBps(0);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, block.timestamp);
+    provider.rebalance(0, 0, 0, block.timestamp, "");
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
   }

@@ -440,7 +440,7 @@ contract WstETHV3ProviderTest is Test {
     bytes memory data = _swapData(address(rogue), true, 0.5 ether, 0, inner);
 
     vm.prank(bot);
-    vm.expectRevert(WstETHV3DexAdapter.NotWhitelistedPair.selector);
+    vm.expectRevert(V3DexAdapter.NotWhitelistedPair.selector);
     provider.rebalance(0, 0, 0, block.timestamp, data);
   }
 
@@ -485,13 +485,13 @@ contract WstETHV3ProviderTest is Test {
   function test_setSwapPairWhitelist_rejectsSensitiveAddresses() public {
     address npm = address(adapter.POSITION_MANAGER());
     vm.startPrank(manager);
-    vm.expectRevert(WstETHV3DexAdapter.InvalidSwapPair.selector);
+    vm.expectRevert(V3DexAdapter.InvalidSwapPair.selector);
     adapter.setSwapPairWhitelist(WSTETH, true);
-    vm.expectRevert(WstETHV3DexAdapter.InvalidSwapPair.selector);
+    vm.expectRevert(V3DexAdapter.InvalidSwapPair.selector);
     adapter.setSwapPairWhitelist(WETH, true);
-    vm.expectRevert(WstETHV3DexAdapter.InvalidSwapPair.selector);
+    vm.expectRevert(V3DexAdapter.InvalidSwapPair.selector);
     adapter.setSwapPairWhitelist(POOL, true);
-    vm.expectRevert(WstETHV3DexAdapter.InvalidSwapPair.selector);
+    vm.expectRevert(V3DexAdapter.InvalidSwapPair.selector);
     adapter.setSwapPairWhitelist(npm, true);
     vm.stopPrank();
   }

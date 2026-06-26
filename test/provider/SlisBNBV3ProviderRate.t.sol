@@ -66,7 +66,7 @@ contract PoolSwapper {
 ///      (the real-time slisBNB→BNB redeem the rebalance inventory conversion relies on), so we etch this
 ///      faithful mock at the StakeManager address. It mirrors deposit()/instantWithdraw()/convert* at a
 ///      fixed rate (seeded from the live rate) and performs real BNB↔slisBNB transfers, so the
-///      balance-delta accounting in SlisBnbInventoryLib is exercised exactly as it will be in prod.
+///      balance-delta accounting in the rebalance inventory conversion is exercised as it will be in prod.
 contract MockStakeManager {
   uint256 public immutable rate; // BNB per slisBNB, 1e18
   address public immutable slisBnb;
@@ -328,7 +328,7 @@ contract SlisBNBV3ProviderRateTest is Test {
     adapter.setCenterRateThresholdBps(0);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, block.timestamp);
+    provider.rebalance(0, 0, 0, block.timestamp, "");
 
     assertGt(adapter.tokenId(), oldTokenId, "position should be re-minted");
     assertLt(adapter.tickLower(), adapter.tickUpper(), "rate-derived range should be valid");
@@ -341,7 +341,7 @@ contract SlisBNBV3ProviderRateTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.RateDeviationBelowThreshold.selector);
-    provider.rebalance(0, 0, 0, block.timestamp);
+    provider.rebalance(0, 0, 0, block.timestamp, "");
   }
 
   function test_rebalance_revertsAfterDeadline() public {
@@ -349,7 +349,7 @@ contract SlisBNBV3ProviderRateTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.DeadlineExpired.selector);
-    provider.rebalance(0, 0, 0, block.timestamp - 1);
+    provider.rebalance(0, 0, 0, block.timestamp - 1, "");
   }
 
   function test_rebalance_revertsWhenMinLiquidityTooHigh() public {
@@ -360,7 +360,7 @@ contract SlisBNBV3ProviderRateTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.InsufficientLiquidityMinted.selector);
-    provider.rebalance(0, 0, type(uint256).max, block.timestamp);
+    provider.rebalance(0, 0, type(uint256).max, block.timestamp, "");
   }
 
   function _tick() internal view returns (int24 tick) {
