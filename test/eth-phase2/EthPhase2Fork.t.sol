@@ -381,8 +381,8 @@ contract EthPhase2ForkTest is Test {
     assertTrue(wethVault.hasRole(DEFAULT_ADMIN_ROLE, tr.getAdmin()));
     assertFalse(wethVault.hasRole(DEFAULT_ADMIN_ROLE, testDeployer));
 
-    // ─── Final Verification: All market params match SOP specification ───
-    _verifySopMarketParams(ids);
+    // ─── Final Verification: Full SOP compliance check ───
+    _verifySopCompliance(ids);
 
     console.log("E2E deployment flow completed successfully!");
   }
@@ -467,8 +467,8 @@ contract EthPhase2ForkTest is Test {
     revert("no admin found");
   }
 
-  /// @dev Verify all 4 market params match the SOP specification exactly
-  function _verifySopMarketParams(Id[4] memory ids) internal view {
+  /// @dev Comprehensive SOP compliance verification — markets, vault config, whitelist, and roles
+  function _verifySopCompliance(Id[4] memory ids) internal view {
     // ─── SOP expected addresses ───
     address WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address wstETH = 0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0;
@@ -488,13 +488,17 @@ contract EthPhase2ForkTest is Test {
     bytes32 sopId2 = 0x6e7ea0bf6dfe17dd26bf4b2ed967a51d976623164953d67d5531a464e66294e9;
     bytes32 sopId3 = 0x50e0abea86ce30f753c33beab7057a180d99f943b3681a4799d8931617881a99;
 
-    // Verify market IDs match SOP
+    // ════════════════════════════════════════
+    // 1. Verify Market IDs
+    // ════════════════════════════════════════
     assertEq(Id.unwrap(ids[0]), sopId0, "SOP: market #1 ID mismatch");
     assertEq(Id.unwrap(ids[1]), sopId1, "SOP: market #2 ID mismatch");
     assertEq(Id.unwrap(ids[2]), sopId2, "SOP: market #5 ID mismatch");
     assertEq(Id.unwrap(ids[3]), sopId3, "SOP: market #6 ID mismatch");
 
-    // Verify market #1: WETH/wstETH (96.5%)
+    // ════════════════════════════════════════
+    // 2. Verify Market Params
+    // ════════════════════════════════════════
     (address p0Loan, address p0Coll, address p0Oracle, address p0Irm, uint256 p0Lltv) = moolah.idToMarketParams(ids[0]);
     assertEq(p0Loan, WETH, "SOP #1: loanToken");
     assertEq(p0Coll, wstETH, "SOP #1: collateralToken");
@@ -502,7 +506,6 @@ contract EthPhase2ForkTest is Test {
     assertEq(p0Irm, irm, "SOP #1: irm");
     assertEq(p0Lltv, lltv965, "SOP #1: lltv");
 
-    // Verify market #2: WETH/wBETH (96.5%)
     (address p1Loan, address p1Coll, address p1Oracle, address p1Irm, uint256 p1Lltv) = moolah.idToMarketParams(ids[1]);
     assertEq(p1Loan, WETH, "SOP #2: loanToken");
     assertEq(p1Coll, wBETH, "SOP #2: collateralToken");
@@ -510,7 +513,6 @@ contract EthPhase2ForkTest is Test {
     assertEq(p1Irm, irm, "SOP #2: irm");
     assertEq(p1Lltv, lltv965, "SOP #2: lltv");
 
-    // Verify market #5: USDT/WBTC_cbBTC (80%)
     (address p2Loan, address p2Coll, address p2Oracle, address p2Irm, uint256 p2Lltv) = moolah.idToMarketParams(ids[2]);
     assertEq(p2Loan, USDT, "SOP #5: loanToken");
     assertEq(p2Coll, WBTC_cbBTC, "SOP #5: collateralToken");
@@ -518,12 +520,79 @@ contract EthPhase2ForkTest is Test {
     assertEq(p2Irm, irm, "SOP #5: irm");
     assertEq(p2Lltv, lltv80, "SOP #5: lltv");
 
-    // Verify market #6: USDC/WBTC_cbBTC (80%)
     (address p3Loan, address p3Coll, address p3Oracle, address p3Irm, uint256 p3Lltv) = moolah.idToMarketParams(ids[3]);
     assertEq(p3Loan, USDC, "SOP #6: loanToken");
     assertEq(p3Coll, WBTC_cbBTC, "SOP #6: collateralToken");
     assertEq(p3Oracle, smartProvider, "SOP #6: oracle");
     assertEq(p3Irm, irm, "SOP #6: irm");
     assertEq(p3Lltv, lltv80, "SOP #6: lltv");
+
+    // ════════════════════════════════════════
+    // 3. Verify Vault Configuration
+    // ════════════════════════════════════════
+    address sopFeeRecipient = 0xd10a024602E042dcb9C19e21682c3b896c8B0d30;
+
+    assertEq(wethVault.fee(), 0.1 ether, "SOP vault: fee should be 10%");
+    assertEq(wethVault.feeRecipient(), sopFeeRecipient, "SOP vault: feeRecipient");
+    assertEq(wethVault.asset(), WETH, "SOP vault: asset should be WETH");
+    assertEq(wethVault.supplyQueueLength(), 2, "SOP vault: supplyQueue length");
+
+    // Verify caps
+    (uint184 cap0, , ) = wethVault.config(ids[0]);
+    (uint184 cap1, , ) = wethVault.config(ids[1]);
+    assertEq(uint256(cap0), 28_600 ether, "SOP vault: wstETH cap");
+    assertEq(uint256(cap1), 5_720 ether, "SOP vault: wBETH cap");
+
+    // Verify supply queue order: [wstETH, wBETH]
+    assertEq(Id.unwrap(wethVault.supplyQueue(0)), Id.unwrap(ids[0]), "SOP vault: supplyQueue[0] = wstETH");
+    assertEq(Id.unwrap(wethVault.supplyQueue(1)), Id.unwrap(ids[1]), "SOP vault: supplyQueue[1] = wBETH");
+
+    // Verify withdraw queue order: [wBETH, wstETH] (reverse)
+    assertEq(Id.unwrap(wethVault.withdrawQueue(0)), Id.unwrap(ids[1]), "SOP vault: withdrawQueue[0] = wBETH");
+    assertEq(Id.unwrap(wethVault.withdrawQueue(1)), Id.unwrap(ids[0]), "SOP vault: withdrawQueue[1] = wstETH");
+
+    // ════════════════════════════════════════
+    // 4. Verify Liquidation Whitelist
+    // ════════════════════════════════════════
+    address liq = 0x5Bf5c3B5f5c29dBC647d2557Cc22B00ED29f301C;
+    address bot = 0x08E83A96F4dA5DecC0e6E9084dDe049A3E84ca04;
+    address pub = 0x796302e041d1715a8b1f16Fd7d7CBA38bb031DE5;
+
+    // Part A: Moolah liquidation whitelist — 4 markets × 3 addresses
+    for (uint256 i = 0; i < 4; i++) {
+      assertTrue(moolah.isLiquidationWhitelist(ids[i], liq), "SOP whitelist: Liquidator on Moolah");
+      assertTrue(moolah.isLiquidationWhitelist(ids[i], bot), "SOP whitelist: Bot on Moolah");
+      assertTrue(moolah.isLiquidationWhitelist(ids[i], pub), "SOP whitelist: PublicLiquidator on Moolah");
+    }
+
+    // Part B: Liquidator contract — market whitelist + token whitelist
+    for (uint256 i = 0; i < 4; i++) {
+      assertTrue(liquidatorContract.marketWhitelist(Id.unwrap(ids[i])), "SOP whitelist: Liquidator market");
+    }
+    assertTrue(liquidatorContract.tokenWhitelist(WBTC_cbBTC), "SOP whitelist: WBTC_cbBTC token");
+
+    // Part C: SmartProvider whitelist
+    assertTrue(liquidatorContract.smartProviders(smartProvider), "SOP whitelist: Liquidator SmartProvider");
+    assertTrue(publicLiquidatorContract.smartProviders(smartProvider), "SOP whitelist: PublicLiquidator SmartProvider");
+
+    // ════════════════════════════════════════
+    // 5. Verify Role Transfer
+    // ════════════════════════════════════════
+    address sopAdmin = 0xa18ae79AEDA3e711E0CD64cfe1Cd06402d400D61; // Admin TimeLock
+    address sopManager = 0x375fdA2Bf66f4CE85EAB29AB6407dCd4a4C428BA; // Manager TimeLock
+    address sopAllocator = 0x85CE862C5BB61938FFcc97DA4A80C8aaE43C6A27; // Allocator Safe
+    address sopCurator = 0x375fdA2Bf66f4CE85EAB29AB6407dCd4a4C428BA; // Manager TimeLock
+
+    // Correct roles assigned
+    assertTrue(wethVault.hasRole(DEFAULT_ADMIN_ROLE, sopAdmin), "SOP role: admin on AdminTimeLock");
+    assertTrue(wethVault.hasRole(MANAGER_ROLE, sopManager), "SOP role: MANAGER on ManagerTimeLock");
+    assertTrue(wethVault.hasRole(CURATOR, sopCurator), "SOP role: CURATOR on ManagerTimeLock");
+    assertTrue(wethVault.hasRole(ALLOCATOR_ROLE, sopAllocator), "SOP role: ALLOCATOR on AllocatorSafe");
+
+    // Deployer revoked
+    assertFalse(wethVault.hasRole(DEFAULT_ADMIN_ROLE, testDeployer), "SOP role: deployer lost admin");
+    assertFalse(wethVault.hasRole(MANAGER_ROLE, testDeployer), "SOP role: deployer lost MANAGER");
+    assertFalse(wethVault.hasRole(CURATOR, testDeployer), "SOP role: deployer lost CURATOR");
+    assertFalse(wethVault.hasRole(ALLOCATOR_ROLE, testDeployer), "SOP role: deployer lost ALLOCATOR");
   }
 }
