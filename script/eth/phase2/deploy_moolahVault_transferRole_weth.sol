@@ -9,15 +9,33 @@ import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 contract MoolahVaultTransferRoleWETHDeploy is DeployBase {
   MoolahVault wethVault;
 
-  address admin = 0xa18ae79AEDA3e711E0CD64cfe1Cd06402d400D61; // Admin TimeLock
-  address manager = 0x375fdA2Bf66f4CE85EAB29AB6407dCd4a4C428BA; // Manager TimeLock
-  address allocator = 0x85CE862C5BB61938FFcc97DA4A80C8aaE43C6A27;
-  address curator = 0x375fdA2Bf66f4CE85EAB29AB6407dCd4a4C428BA;
+  address admin;
+  address manager;
+  address allocator;
+  address curator;
 
   bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
   bytes32 public constant MANAGER = keccak256("MANAGER");
   bytes32 public constant CURATOR = keccak256("CURATOR");
   bytes32 public constant ALLOCATOR = keccak256("ALLOCATOR");
+
+  function setUp() public {
+    if (block.chainid == 1) {
+      // ──── ETH mainnet ────
+      admin = 0xa18ae79AEDA3e711E0CD64cfe1Cd06402d400D61; // Admin TimeLock
+      manager = 0x375fdA2Bf66f4CE85EAB29AB6407dCd4a4C428BA; // Manager TimeLock
+      allocator = 0x85CE862C5BB61938FFcc97DA4A80C8aaE43C6A27;
+      curator = 0x375fdA2Bf66f4CE85EAB29AB6407dCd4a4C428BA;
+    } else if (block.chainid == 11155111) {
+      // ──── Sepolia testnet — all roles to admin EOA (no TimeLock) ────
+      admin = 0x6616EF47F4d997137a04C2AD7FF8e5c228dA4f06;
+      manager = 0x6616EF47F4d997137a04C2AD7FF8e5c228dA4f06;
+      allocator = 0x6616EF47F4d997137a04C2AD7FF8e5c228dA4f06;
+      curator = 0x6616EF47F4d997137a04C2AD7FF8e5c228dA4f06;
+    } else {
+      revert("MoolahVaultTransferRoleWETHDeploy: unsupported chain");
+    }
+  }
 
   function run() public {
     wethVault = MoolahVault(vm.envAddress("WETH_VAULT"));
