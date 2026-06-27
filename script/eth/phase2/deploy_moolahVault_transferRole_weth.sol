@@ -45,6 +45,8 @@ contract MoolahVaultTransferRoleWETHDeploy is DeployBase {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
+    require(admin != deployer, "admin must differ from deployer - would brick vault");
+
     vm.startBroadcast(deployerPrivateKey);
 
     wethVault.grantRole(DEFAULT_ADMIN_ROLE, admin);
