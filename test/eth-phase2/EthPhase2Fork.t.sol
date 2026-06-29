@@ -93,7 +93,7 @@ contract TransferRoleHarness is MoolahVaultTransferRoleWETHDeploy {
 ///   Calls the REAL deploy scripts' run() directly.
 ///   PRIVATE_KEY env var is set in setUp so _deployerKey() works.
 ///
-///   Run: forge test --match-contract EthPhase2ForkTest --fork-url $ETHEREUM_RPC_URL -vvv
+///   Run: forge test --match-contract EthPhase2ForkTest --fork-url $ETH_RPC -vvv
 contract EthPhase2ForkTest is Test {
   using MarketParamsLib for MarketParams;
 
@@ -125,7 +125,7 @@ contract EthPhase2ForkTest is Test {
   MoolahVault wethVault;
 
   function setUp() public {
-    vm.createSelectFork(vm.envString("ETHEREUM_RPC_URL"));
+    vm.createSelectFork(vm.envString("ETH_RPC"));
 
     // Set PRIVATE_KEY env so deploy scripts' _deployerKey() works
     testDeployer = vm.addr(TEST_KEY);
