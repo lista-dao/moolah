@@ -2,6 +2,7 @@
 pragma solidity 0.8.34;
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import { Id, MarketParams, Market, IMoolah } from "moolah/interfaces/IMoolah.sol";
 import { MarketAllocation } from "../interfaces/IMoolahVault.sol";
 import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
@@ -21,6 +22,7 @@ library MoolahVaultLib {
   using UtilsLib for uint256;
   using MoolahBalancesLib for IMoolah;
   using MarketParamsLib for MarketParams;
+  using EnumerableSet for EnumerableSet.AddressSet;
 
   /// @notice Execute the reallocate loop: withdraw from over-allocated markets and supply to under-allocated ones.
   /// @param moolah       Moolah protocol instance
@@ -215,6 +217,23 @@ library MoolahVaultLib {
 
       totalSuppliable += supplyCap.zeroFloorSub(supplyAssets);
     }
+  }
+
+  /// @notice Add or remove an account from the whitelist.
+  /// @param _whiteList  Whitelist set (storage ref from vault)
+  /// @param account  The account to add or remove
+  /// @param enabled  True to add, false to remove
+  function setWhiteList(EnumerableSet.AddressSet storage _whiteList, address account, bool enabled) public {
+    if (account == address(0)) revert ErrorsLib.ZeroAddress();
+    if (enabled) {
+      if (_whiteList.contains(account)) revert ErrorsLib.AlreadySet();
+      _whiteList.add(account);
+    } else {
+      if (!_whiteList.contains(account)) revert ErrorsLib.NotSet();
+      _whiteList.remove(account);
+    }
+
+    emit EventsLib.SetWhiteList(account, enabled);
   }
 
   /// @dev Returns the withdrawable amount of assets from a market, given the market's
