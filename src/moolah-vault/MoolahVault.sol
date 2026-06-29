@@ -16,6 +16,8 @@ import { PendingUint192, PendingAddress, PendingLib } from "./libraries/PendingL
 import { ConstantsLib } from "./libraries/ConstantsLib.sol";
 import { ErrorsLib } from "./libraries/ErrorsLib.sol";
 import { EventsLib } from "./libraries/EventsLib.sol";
+import { MoolahVaultLib } from "./libraries/MoolahVaultLib.sol";
+import { VaultConfigLib } from "./libraries/VaultConfigLib.sol";
 import { WAD } from "moolah/libraries/MathLib.sol";
 import { UtilsLib } from "moolah/libraries/UtilsLib.sol";
 import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
@@ -201,16 +203,7 @@ contract MoolahVault is
   /// @param account The account to add or remove.
   /// @param enabled True to add, false to remove.
   function setWhiteList(address account, bool enabled) external onlyRole(MANAGER) {
-    if (account == address(0)) revert ErrorsLib.ZeroAddress();
-    if (enabled) {
-      if (whiteList.contains(account)) revert ErrorsLib.AlreadySet();
-      whiteList.add(account);
-    } else {
-      if (!whiteList.contains(account)) revert ErrorsLib.NotSet();
-      whiteList.remove(account);
-    }
-
-    emit EventsLib.SetWhiteList(account, enabled);
+    VaultConfigLib.setWhiteList(whiteList, account, enabled);
   }
 
   /// @inheritdoc IMoolahVaultBase
@@ -251,115 +244,17 @@ contract MoolahVault is
 
   /// @inheritdoc IMoolahVaultBase
   function setSupplyQueue(Id[] calldata newSupplyQueue) external onlyRole(ALLOCATOR) {
-    uint256 length = newSupplyQueue.length;
-
-    if (length > ConstantsLib.MAX_QUEUE_LENGTH) revert ErrorsLib.MaxQueueLengthExceeded();
-
-    for (uint256 i; i < length; ++i) {
-      if (config[newSupplyQueue[i]].cap == 0) revert ErrorsLib.UnauthorizedMarket(newSupplyQueue[i]);
-    }
-
-    supplyQueue = newSupplyQueue;
-
-    emit EventsLib.SetSupplyQueue(_msgSender(), newSupplyQueue);
+    VaultConfigLib.setSupplyQueue(config, supplyQueue, newSupplyQueue);
   }
 
   /// @inheritdoc IMoolahVaultBase
   function updateWithdrawQueue(uint256[] calldata indexes) external onlyRole(ALLOCATOR) {
-    uint256 newLength = indexes.length;
-    uint256 currLength = withdrawQueue.length;
-
-    bool[] memory seen = new bool[](currLength);
-    Id[] memory newWithdrawQueue = new Id[](newLength);
-
-    for (uint256 i; i < newLength; ++i) {
-      uint256 prevIndex = indexes[i];
-
-      // If prevIndex >= currLength, it will revert with native "Index out of bounds".
-      Id id = withdrawQueue[prevIndex];
-      if (seen[prevIndex]) revert ErrorsLib.DuplicateMarket(id);
-      seen[prevIndex] = true;
-
-      newWithdrawQueue[i] = id;
-    }
-
-    for (uint256 i; i < currLength; ++i) {
-      if (!seen[i]) {
-        Id id = withdrawQueue[i];
-
-        if (config[id].cap != 0) revert ErrorsLib.InvalidMarketRemovalNonZeroCap(id);
-
-        if (MOOLAH.position(id, address(this)).supplyShares != 0) {
-          if (config[id].removableAt == 0) revert ErrorsLib.InvalidMarketRemovalNonZeroSupply(id);
-
-          if (block.timestamp < config[id].removableAt) {
-            revert ErrorsLib.InvalidMarketRemovalTimelockNotElapsed(id);
-          }
-        }
-
-        delete config[id];
-      }
-    }
-
-    withdrawQueue = newWithdrawQueue;
-
-    emit EventsLib.SetWithdrawQueue(_msgSender(), newWithdrawQueue);
+    VaultConfigLib.updateWithdrawQueue(config, withdrawQueue, MOOLAH, indexes);
   }
 
   /// @inheritdoc IMoolahVaultBase
   function reallocate(MarketAllocation[] calldata allocations) external onlyAllocatorOrBot {
-    uint256 totalSupplied;
-    uint256 totalWithdrawn;
-    for (uint256 i; i < allocations.length; ++i) {
-      MarketAllocation memory allocation = allocations[i];
-      Id id = allocation.marketParams.id();
-
-      (uint256 supplyAssets, uint256 supplyShares, ) = _accruedSupplyBalance(allocation.marketParams, id);
-      uint256 withdrawn = supplyAssets.zeroFloorSub(allocation.assets);
-
-      if (withdrawn > 0) {
-        if (!config[id].enabled) revert ErrorsLib.MarketNotEnabled(id);
-
-        // Guarantees that unknown frontrunning donations can be withdrawn, in order to disable a market.
-        uint256 shares;
-        if (allocation.assets == 0) {
-          shares = supplyShares;
-          withdrawn = 0;
-        }
-
-        (uint256 withdrawnAssets, uint256 withdrawnShares) = MOOLAH.withdraw(
-          allocation.marketParams,
-          withdrawn,
-          shares,
-          address(this),
-          address(this)
-        );
-
-        emit EventsLib.ReallocateWithdraw(_msgSender(), id, withdrawnAssets, withdrawnShares);
-
-        totalWithdrawn += withdrawnAssets;
-      } else {
-        uint256 suppliedAssets = allocation.assets == type(uint256).max
-          ? totalWithdrawn.zeroFloorSub(totalSupplied)
-          : allocation.assets.zeroFloorSub(supplyAssets);
-
-        if (suppliedAssets == 0) continue;
-
-        uint256 supplyCap = config[id].cap;
-        if (supplyCap == 0) revert ErrorsLib.UnauthorizedMarket(id);
-
-        if (supplyAssets + suppliedAssets > supplyCap) revert ErrorsLib.SupplyCapExceeded(id);
-
-        // The market's loan asset is guaranteed to be the vault's asset because it has a non-zero supply cap.
-        (, uint256 suppliedShares) = MOOLAH.supply(allocation.marketParams, suppliedAssets, 0, address(this), hex"");
-
-        emit EventsLib.ReallocateSupply(_msgSender(), id, suppliedAssets, suppliedShares);
-
-        totalSupplied += suppliedAssets;
-      }
-    }
-
-    if (totalWithdrawn != totalSupplied) revert ErrorsLib.InconsistentReallocation();
+    MoolahVaultLib.reallocate(config, MOOLAH, allocations);
   }
 
   /// @inheritdoc IMoolahVaultBase
@@ -564,20 +459,8 @@ contract MoolahVault is
   }
 
   /// @dev Returns the maximum amount of assets that the vault can supply on Moolah.
-  function _maxDeposit() internal view returns (uint256 totalSuppliable) {
-    for (uint256 i; i < supplyQueue.length; ++i) {
-      Id id = supplyQueue[i];
-
-      uint256 supplyCap = config[id].cap;
-      if (supplyCap == 0) continue;
-
-      uint256 supplyShares = MOOLAH.position(id, address(this)).supplyShares;
-      (uint256 totalSupplyAssets, uint256 totalSupplyShares, , ) = MOOLAH.expectedMarketBalances(_marketParams(id));
-      // `supplyAssets` needs to be rounded up for `totalSuppliable` to be rounded down.
-      uint256 supplyAssets = supplyShares.toAssetsUp(totalSupplyAssets, totalSupplyShares);
-
-      totalSuppliable += supplyCap.zeroFloorSub(supplyAssets);
-    }
+  function _maxDeposit() internal view returns (uint256) {
+    return MoolahVaultLib.maxDeposit(config, supplyQueue, MOOLAH);
   }
 
   /// @inheritdoc ERC4626Upgradeable
@@ -735,106 +618,18 @@ contract MoolahVault is
 
   /// @dev Supplies `assets` to Moolah.
   function _supplyMoolah(uint256 assets) internal {
-    for (uint256 i; i < supplyQueue.length; ++i) {
-      Id id = supplyQueue[i];
-
-      uint256 supplyCap = config[id].cap;
-      if (supplyCap == 0) continue;
-
-      MarketParams memory marketParams = _marketParams(id);
-
-      MOOLAH.accrueInterest(marketParams);
-
-      Market memory market = MOOLAH.market(id);
-      uint256 supplyShares = MOOLAH.position(id, address(this)).supplyShares;
-      // `supplyAssets` needs to be rounded up for `toSupply` to be rounded down.
-      uint256 supplyAssets = supplyShares.toAssetsUp(market.totalSupplyAssets, market.totalSupplyShares);
-
-      uint256 toSupply = UtilsLib.min(supplyCap.zeroFloorSub(supplyAssets), assets);
-
-      if (toSupply > 0) {
-        // Using try/catch to skip markets that revert.
-        try MOOLAH.supply(marketParams, toSupply, 0, address(this), hex"") {
-          assets -= toSupply;
-        } catch {}
-      }
-
-      if (assets == 0) return;
-    }
-
-    if (assets != 0) revert ErrorsLib.AllCapsReached();
+    MoolahVaultLib.supplyMoolah(config, supplyQueue, MOOLAH, assets);
   }
 
   /// @dev Withdraws `assets` from Moolah.
   function _withdrawMoolah(uint256 assets) internal {
-    for (uint256 i; i < withdrawQueue.length; ++i) {
-      Id id = withdrawQueue[i];
-      MarketParams memory marketParams = _marketParams(id);
-      (uint256 supplyAssets, , Market memory market) = _accruedSupplyBalance(marketParams, id);
-
-      uint256 toWithdraw = UtilsLib.min(
-        _withdrawable(marketParams, market.totalSupplyAssets, market.totalBorrowAssets, supplyAssets),
-        assets
-      );
-
-      if (toWithdraw > 0) {
-        // Using try/catch to skip markets that revert.
-        try MOOLAH.withdraw(marketParams, toWithdraw, 0, address(this), address(this)) {
-          assets -= toWithdraw;
-        } catch {}
-      }
-
-      if (assets == 0) return;
-    }
-
-    if (assets != 0) revert ErrorsLib.NotEnoughLiquidity();
+    MoolahVaultLib.withdrawMoolah(withdrawQueue, MOOLAH, assets);
   }
 
   /// @dev Simulates a withdraw of `assets` from Moolah.
   /// @return The remaining assets to be withdrawn.
   function _simulateWithdrawMoolah(uint256 assets) internal view returns (uint256) {
-    for (uint256 i; i < withdrawQueue.length; ++i) {
-      Id id = withdrawQueue[i];
-      MarketParams memory marketParams = _marketParams(id);
-
-      uint256 supplyShares = MOOLAH.position(id, address(this)).supplyShares;
-      (uint256 totalSupplyAssets, uint256 totalSupplyShares, uint256 totalBorrowAssets, ) = MOOLAH
-        .expectedMarketBalances(marketParams);
-
-      // The vault withdrawing from Moolah cannot fail because:
-      // 1. oracle.price() is never called (the vault doesn't borrow)
-      // 2. the amount is capped to the liquidity available on Moolah
-      // 3. virtually accruing interest didn't fail
-      assets = assets.zeroFloorSub(
-        _withdrawable(
-          marketParams,
-          totalSupplyAssets,
-          totalBorrowAssets,
-          supplyShares.toAssetsDown(totalSupplyAssets, totalSupplyShares)
-        )
-      );
-
-      if (assets == 0) break;
-    }
-
-    return assets;
-  }
-
-  /// @dev Returns the withdrawable amount of assets from the market defined by `marketParams`, given the market's
-  /// total supply and borrow assets and the vault's assets supplied.
-  function _withdrawable(
-    MarketParams memory marketParams,
-    uint256 totalSupplyAssets,
-    uint256 totalBorrowAssets,
-    uint256 supplyAssets
-  ) internal view returns (uint256) {
-    // Inside a flashloan callback, liquidity on Moolah may be limited to the singleton's balance.
-    uint256 availableLiquidity = UtilsLib.min(
-      totalSupplyAssets - totalBorrowAssets,
-      ERC20Upgradeable(marketParams.loanToken).balanceOf(address(MOOLAH))
-    );
-
-    return UtilsLib.min(supplyAssets, availableLiquidity);
+    return MoolahVaultLib.simulateWithdrawMoolah(withdrawQueue, MOOLAH, assets);
   }
 
   /* FEE MANAGEMENT */
