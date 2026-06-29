@@ -244,17 +244,72 @@ contract MoolahVault is
 
   /// @inheritdoc IMoolahVaultBase
   function setSupplyQueue(Id[] calldata newSupplyQueue) external onlyRole(ALLOCATOR) {
-    VaultConfigLib.setSupplyQueue(config, supplyQueue, newSupplyQueue);
+    uint256 length = newSupplyQueue.length;
+
+    if (length > ConstantsLib.MAX_QUEUE_LENGTH) revert ErrorsLib.MaxQueueLengthExceeded();
+
+    for (uint256 i; i < length; ++i) {
+      if (config[newSupplyQueue[i]].cap == 0) revert ErrorsLib.UnauthorizedMarket(newSupplyQueue[i]);
+    }
+
+    supplyQueue = newSupplyQueue;
+
+    emit EventsLib.SetSupplyQueue(_msgSender(), newSupplyQueue);
   }
 
   /// @inheritdoc IMoolahVaultBase
   function updateWithdrawQueue(uint256[] calldata indexes) external onlyRole(ALLOCATOR) {
-    VaultConfigLib.updateWithdrawQueue(config, withdrawQueue, MOOLAH, indexes);
+    uint256 newLength = indexes.length;
+    uint256 currLength = withdrawQueue.length;
+
+    bool[] memory seen = new bool[](currLength);
+    Id[] memory newWithdrawQueue = new Id[](newLength);
+
+    for (uint256 i; i < newLength; ++i) {
+      uint256 prevIndex = indexes[i];
+
+      // If prevIndex >= currLength, it will revert with native "Index out of bounds".
+      Id id = withdrawQueue[prevIndex];
+      if (seen[prevIndex]) revert ErrorsLib.DuplicateMarket(id);
+      seen[prevIndex] = true;
+
+      newWithdrawQueue[i] = id;
+    }
+
+    for (uint256 i; i < currLength; ++i) {
+      if (!seen[i]) {
+        Id id = withdrawQueue[i];
+
+        if (config[id].cap != 0) revert ErrorsLib.InvalidMarketRemovalNonZeroCap(id);
+
+        if (MOOLAH.position(id, address(this)).supplyShares != 0) {
+          if (config[id].removableAt == 0) revert ErrorsLib.InvalidMarketRemovalNonZeroSupply(id);
+
+          if (block.timestamp < config[id].removableAt) {
+            revert ErrorsLib.InvalidMarketRemovalTimelockNotElapsed(id);
+          }
+        }
+
+        delete config[id];
+      }
+    }
+
+    withdrawQueue = newWithdrawQueue;
+
+    emit EventsLib.SetWithdrawQueue(_msgSender(), newWithdrawQueue);
   }
 
   /// @inheritdoc IMoolahVaultBase
   function reallocate(MarketAllocation[] calldata allocations) external onlyAllocatorOrBot {
-    MoolahVaultLib.reallocate(config, MOOLAH, allocations);
+    uint256 len = allocations.length;
+    bool[] memory enabled = new bool[](len);
+    uint184[] memory caps = new uint184[](len);
+    for (uint256 i; i < len; ++i) {
+      Id id = allocations[i].marketParams.id();
+      enabled[i] = config[id].enabled;
+      caps[i] = config[id].cap;
+    }
+    MoolahVaultLib.reallocate(MOOLAH, allocations, enabled, caps);
   }
 
   /// @inheritdoc IMoolahVaultBase
@@ -460,7 +515,14 @@ contract MoolahVault is
 
   /// @dev Returns the maximum amount of assets that the vault can supply on Moolah.
   function _maxDeposit() internal view returns (uint256) {
-    return MoolahVaultLib.maxDeposit(config, supplyQueue, MOOLAH);
+    uint256 len = supplyQueue.length;
+    Id[] memory queue = new Id[](len);
+    uint184[] memory caps = new uint184[](len);
+    for (uint256 i; i < len; ++i) {
+      queue[i] = supplyQueue[i];
+      caps[i] = config[supplyQueue[i]].cap;
+    }
+    return MoolahVaultLib.maxDeposit(MOOLAH, queue, caps);
   }
 
   /// @inheritdoc ERC4626Upgradeable
@@ -618,18 +680,25 @@ contract MoolahVault is
 
   /// @dev Supplies `assets` to Moolah.
   function _supplyMoolah(uint256 assets) internal {
-    MoolahVaultLib.supplyMoolah(config, supplyQueue, MOOLAH, assets);
+    uint256 len = supplyQueue.length;
+    Id[] memory queue = new Id[](len);
+    uint184[] memory caps = new uint184[](len);
+    for (uint256 i; i < len; ++i) {
+      queue[i] = supplyQueue[i];
+      caps[i] = config[supplyQueue[i]].cap;
+    }
+    MoolahVaultLib.supplyMoolah(MOOLAH, queue, caps, assets);
   }
 
   /// @dev Withdraws `assets` from Moolah.
   function _withdrawMoolah(uint256 assets) internal {
-    MoolahVaultLib.withdrawMoolah(withdrawQueue, MOOLAH, assets);
+    MoolahVaultLib.withdrawMoolah(MOOLAH, withdrawQueue, assets);
   }
 
   /// @dev Simulates a withdraw of `assets` from Moolah.
   /// @return The remaining assets to be withdrawn.
   function _simulateWithdrawMoolah(uint256 assets) internal view returns (uint256) {
-    return MoolahVaultLib.simulateWithdrawMoolah(withdrawQueue, MOOLAH, assets);
+    return MoolahVaultLib.simulateWithdrawMoolah(MOOLAH, withdrawQueue, assets);
   }
 
   /* FEE MANAGEMENT */
