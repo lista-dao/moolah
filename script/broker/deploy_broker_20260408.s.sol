@@ -55,7 +55,7 @@ contract DeployXautBrokers is DeployBase {
 
   function _deployBroker(string memory label, address relayer, address oracle, address deployer) internal {
     // Deploy implementation
-    LendingBroker impl = new LendingBroker(MOOLAH, relayer, oracle, address(0));
+    LendingBroker impl = new LendingBroker(MOOLAH, address(0));
     console.log(string.concat("LendingBroker(", label, ") impl: "), address(impl));
 
     // Deploy proxy
