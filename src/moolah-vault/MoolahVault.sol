@@ -17,7 +17,6 @@ import { ConstantsLib } from "./libraries/ConstantsLib.sol";
 import { ErrorsLib } from "./libraries/ErrorsLib.sol";
 import { EventsLib } from "./libraries/EventsLib.sol";
 import { MoolahVaultLib } from "./libraries/MoolahVaultLib.sol";
-import { VaultConfigLib } from "./libraries/VaultConfigLib.sol";
 import { WAD } from "moolah/libraries/MathLib.sol";
 import { UtilsLib } from "moolah/libraries/UtilsLib.sol";
 import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
@@ -203,7 +202,7 @@ contract MoolahVault is
   /// @param account The account to add or remove.
   /// @param enabled True to add, false to remove.
   function setWhiteList(address account, bool enabled) external onlyRole(MANAGER) {
-    VaultConfigLib.setWhiteList(whiteList, account, enabled);
+    MoolahVaultLib.setWhiteList(whiteList, account, enabled);
   }
 
   /// @inheritdoc IMoolahVaultBase
