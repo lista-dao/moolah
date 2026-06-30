@@ -10,8 +10,7 @@ import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 contract MoolahVaultDeploy is DeployBase {
   address moolah = 0xf820fB4680712CD7263a0D3D024D5b5aEA82Fd70;
 
-  address USDT = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
-  address USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
+  address WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
 
   struct VaultConfig {
     address asset;
@@ -24,9 +23,8 @@ contract MoolahVaultDeploy is DeployBase {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    VaultConfig[] memory configs = new VaultConfig[](2);
-    configs[0] = VaultConfig({ asset: USDT, name: "Lista USDT Savings Vault", symbol: "ListaSafeUSDT" });
-    configs[1] = VaultConfig({ asset: USDC, name: "Lista USDC Savings Vault", symbol: "ListaSafeUSDC" });
+    VaultConfig[] memory configs = new VaultConfig[](1);
+    configs[0] = VaultConfig({ asset: WETH, name: "Lista WETH Savings Vault", symbol: "ListaSafeWETH" });
 
     vm.startBroadcast(deployerPrivateKey);
     for (uint256 i = 0; i < configs.length; i++) {
