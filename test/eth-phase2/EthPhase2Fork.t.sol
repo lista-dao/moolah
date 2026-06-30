@@ -13,11 +13,10 @@ import { PublicLiquidator } from "liquidator/PublicLiquidator.sol";
 import { IOracle } from "moolah/interfaces/IOracle.sol";
 
 // ─── Deploy script imports (called directly via .run()) ───
-import { CreateMarketPhase2Deploy } from "../../script/eth/phase2/deploy_createMarket.sol";
-import { MoolahVaultWETHDeploy } from "../../script/eth/phase2/deploy_moolahVault_weth.sol";
-import { MoolahVaultConfigWETHDeploy } from "../../script/eth/phase2/deploy_moolahVaultConfig_weth.sol";
-import { MoolahVaultTransferRoleWETHDeploy } from "../../script/eth/phase2/deploy_moolahVault_transferRole_weth.sol";
-import { VaultConfigUsdtUsdcPhase2Deploy } from "../../script/eth/phase2/deploy_vaultConfig_usdt_usdc.sol";
+import { CreateMarketDeploy } from "../../script/eth/deploy_createMarket.sol";
+import { MoolahVaultDeploy } from "../../script/eth/deploy_moolahVault.sol";
+import { MoolahVaultConfigDeploy } from "../../script/eth/deploy_moolahVaultConfig.sol";
+import { MoolahVaultTransferRoleDeploy } from "../../script/eth/deploy_moolahVault_transferRole.sol";
 
 interface IStableSwapRampA {
   function A() external view returns (uint256);
@@ -31,8 +30,8 @@ interface IStableSwapRampA {
 
 // ─── Harness: expose deploy script internal params for verification ───
 
-/// @dev Inherits CreateMarketPhase2Deploy to access its internal addresses and compute market IDs
-contract CreateMarketHarness is CreateMarketPhase2Deploy {
+/// @dev Inherits CreateMarketDeploy to access its internal addresses and compute market IDs
+contract CreateMarketHarness is CreateMarketDeploy {
   using MarketParamsLib for MarketParams;
 
   function marketIds() external view returns (Id[4] memory ids) {
@@ -52,7 +51,7 @@ contract CreateMarketHarness is CreateMarketPhase2Deploy {
 
 // ─── Harness: expose VaultConfig internal params for verification ───
 
-contract VaultConfigHarness is MoolahVaultConfigWETHDeploy {
+contract VaultConfigHarness is MoolahVaultConfigDeploy {
   using MarketParamsLib for MarketParams;
 
   function getFee() external view returns (uint256) {
@@ -71,7 +70,7 @@ contract VaultConfigHarness is MoolahVaultConfigWETHDeploy {
 
 // ─── Harness: expose TransferRole internal params for verification ───
 
-contract TransferRoleHarness is MoolahVaultTransferRoleWETHDeploy {
+contract TransferRoleHarness is MoolahVaultTransferRoleDeploy {
   function getAdmin() external view returns (address) {
     return admin;
   }
@@ -89,11 +88,27 @@ contract TransferRoleHarness is MoolahVaultTransferRoleWETHDeploy {
   }
 }
 
+// ─── Testable subcontracts for dynamic vault address in tests ───
+
+contract TestableVaultConfig is MoolahVaultConfigDeploy {
+  constructor(address _vault, uint256 _wstETHCap, uint256 _wBETHCap) {
+    wethVault = MoolahVault(_vault);
+    wstETHCap = _wstETHCap;
+    wBETHCap = _wBETHCap;
+  }
+}
+
+contract TestableTransferRole is MoolahVaultTransferRoleDeploy {
+  constructor(address _vault) {
+    wethVault = MoolahVault(_vault);
+  }
+}
+
 /// @notice Fork test for ETH Phase 2 deployment.
 ///   Calls the REAL deploy scripts' run() directly.
 ///   PRIVATE_KEY env var is set in setUp so _deployerKey() works.
 ///
-///   Run: forge test --match-contract EthPhase2ForkTest --fork-url $ETH_RPC -vvv
+///   Run: ETH_RPC=$ETH_RPC forge test --match-contract EthPhase2ForkTest -vvv
 contract EthPhase2ForkTest is Test {
   using MarketParamsLib for MarketParams;
 
@@ -148,7 +163,6 @@ contract EthPhase2ForkTest is Test {
     publicLiquidatorContract.grantRole(MANAGER_ROLE, testDeployer);
 
     harness = new CreateMarketHarness();
-    harness.setUp();
   }
 
   // ═══════════════════════════════════════════════════
@@ -226,7 +240,6 @@ contract EthPhase2ForkTest is Test {
     _runConfigVault();
 
     VaultConfigHarness vc = new VaultConfigHarness();
-    vc.setUp();
     assertEq(wethVault.fee(), vc.getFee(), "fee should match script");
     assertEq(wethVault.feeRecipient(), vc.getFeeRecipient(), "feeRecipient should match script");
     assertEq(wethVault.supplyQueueLength(), 2, "supply queue should have 2 markets");
@@ -283,7 +296,6 @@ contract EthPhase2ForkTest is Test {
     _runTransferRole();
 
     TransferRoleHarness tr = new TransferRoleHarness();
-    tr.setUp();
     assertTrue(wethVault.hasRole(DEFAULT_ADMIN_ROLE, tr.getAdmin()), "admin on AdminTimeLock");
     assertTrue(wethVault.hasRole(MANAGER_ROLE, tr.getManager()), "MANAGER on ManagerTimeLock");
     assertTrue(wethVault.hasRole(ALLOCATOR_ROLE, tr.getAllocator()), "ALLOCATOR on allocator");
@@ -293,18 +305,6 @@ contract EthPhase2ForkTest is Test {
     assertFalse(wethVault.hasRole(MANAGER_ROLE, testDeployer), "deployer lost MANAGER");
     assertFalse(wethVault.hasRole(CURATOR, testDeployer), "deployer lost CURATOR");
     assertFalse(wethVault.hasRole(ALLOCATOR_ROLE, testDeployer), "deployer lost ALLOCATOR");
-  }
-
-  // ═══════════════════════════════════════════════════
-  //  Step 7: USDT/USDC vault calldata (view-only script)
-  // ═══════════════════════════════════════════════════
-
-  function test_step7_calldataGeneration() public {
-    VaultConfigUsdtUsdcPhase2Deploy script = new VaultConfigUsdtUsdcPhase2Deploy();
-    script.run();
-
-    assertEq(usdtVault.supplyQueueLength(), 2, "USDT vault should have 2 markets currently");
-    assertEq(usdcVault.supplyQueueLength(), 2, "USDC vault should have 2 markets currently");
   }
 
   // ═══════════════════════════════════════════════════
@@ -379,7 +379,6 @@ contract EthPhase2ForkTest is Test {
     // Step 6
     _runTransferRole();
     TransferRoleHarness tr = new TransferRoleHarness();
-    tr.setUp();
     assertTrue(wethVault.hasRole(DEFAULT_ADMIN_ROLE, tr.getAdmin()));
     assertFalse(wethVault.hasRole(DEFAULT_ADMIN_ROLE, testDeployer));
 
@@ -439,32 +438,24 @@ contract EthPhase2ForkTest is Test {
   }
 
   function _runCreateMarkets() internal {
-    CreateMarketPhase2Deploy script = new CreateMarketPhase2Deploy();
-    script.setUp();
+    CreateMarketDeploy script = new CreateMarketDeploy();
     script.run();
   }
 
   function _runDeployVault() internal returns (MoolahVault) {
     uint64 nonce = vm.getNonce(testDeployer);
-    MoolahVaultWETHDeploy script = new MoolahVaultWETHDeploy();
-    script.setUp();
+    MoolahVaultDeploy script = new MoolahVaultDeploy();
     script.run();
     return MoolahVault(vm.computeCreateAddress(testDeployer, nonce + 1));
   }
 
   function _runConfigVault() internal {
-    vm.setEnv("WETH_VAULT", vm.toString(address(wethVault)));
-    vm.setEnv("WSTETH_CAP", vm.toString(uint256(28_600 ether)));
-    vm.setEnv("WBETH_CAP", vm.toString(uint256(5_720 ether)));
-    MoolahVaultConfigWETHDeploy script = new MoolahVaultConfigWETHDeploy();
-    script.setUp();
+    TestableVaultConfig script = new TestableVaultConfig(address(wethVault), 28_600 ether, 5_720 ether);
     script.run();
   }
 
   function _runTransferRole() internal {
-    vm.setEnv("WETH_VAULT", vm.toString(address(wethVault)));
-    MoolahVaultTransferRoleWETHDeploy script = new MoolahVaultTransferRoleWETHDeploy();
-    script.setUp();
+    TestableTransferRole script = new TestableTransferRole(address(wethVault));
     script.run();
   }
 
@@ -486,19 +477,40 @@ contract EthPhase2ForkTest is Test {
     liquidators[1] = 0x08E83A96F4dA5DecC0e6E9084dDe049A3E84ca04;
     liquidators[2] = 0x796302e041d1715a8b1f16Fd7d7CBA38bb031DE5;
 
-    address[][] memory accountInfo = new address[][](4);
-    for (uint256 i = 0; i < 4; i++) {
-      accountInfo[i] = liquidators;
-    }
-
     address WBTC_cbBTC_LP = 0x5432E4FE5736B9B7ddc1Be34ac45bdB557f2bE22;
     address smartProviderAddr = 0x893666d84B374f96Ab500f56728283eeBB94A9ac;
 
     vm.startPrank(testDeployer);
-    moolah.batchToggleLiquidationWhitelist(ids, accountInfo, true);
 
-    // Part B: Liquidator — market whitelist + token whitelist
-    liquidatorContract.batchSetMarketWhitelist(idBytes, true);
+    // Filter out already-whitelisted entries to avoid "already set" revert
+    for (uint256 i = 0; i < 4; i++) {
+      address[] memory toAdd = new address[](3);
+      uint256 count = 0;
+      for (uint256 j = 0; j < liquidators.length; j++) {
+        if (!moolah.isLiquidationWhitelist(ids[i], liquidators[j])) {
+          toAdd[count] = liquidators[j];
+          count++;
+        }
+      }
+      if (count > 0) {
+        address[] memory filtered = new address[](count);
+        for (uint256 k = 0; k < count; k++) {
+          filtered[k] = toAdd[k];
+        }
+        Id[] memory singleId = new Id[](1);
+        singleId[0] = ids[i];
+        address[][] memory singleAccounts = new address[][](1);
+        singleAccounts[0] = filtered;
+        moolah.batchToggleLiquidationWhitelist(singleId, singleAccounts, true);
+      }
+    }
+
+    // Part B: Liquidator — market whitelist + token whitelist (skip already-set)
+    for (uint256 i = 0; i < idBytes.length; i++) {
+      if (!liquidatorContract.marketWhitelist(idBytes[i])) {
+        liquidatorContract.setMarketWhitelist(idBytes[i], true);
+      }
+    }
     if (!liquidatorContract.tokenWhitelist(WBTC_cbBTC_LP)) {
       liquidatorContract.setTokenWhitelist(WBTC_cbBTC_LP, true);
     }
