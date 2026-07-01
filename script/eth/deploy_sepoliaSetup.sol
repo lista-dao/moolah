@@ -47,7 +47,7 @@ interface IETHProvider {
 ///   After running, use the output addresses as env vars for the main scripts.
 ///
 ///   Usage:
-///     forge script script/eth/phase2/deploy_sepoliaSetup.sol --rpc-url sepolia --broadcast --via-ir
+///     forge script script/eth/deploy_sepoliaSetup.sol --rpc-url sepolia --broadcast --via-ir
 contract SepoliaSetupDeploy is DeployBase {
   using MarketParamsLib for MarketParams;
 

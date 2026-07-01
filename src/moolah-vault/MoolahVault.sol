@@ -519,7 +519,7 @@ contract MoolahVault is
     uint184[] memory caps = new uint184[](len);
     for (uint256 i; i < len; ++i) {
       queue[i] = supplyQueue[i];
-      caps[i] = config[supplyQueue[i]].cap;
+      caps[i] = config[queue[i]].cap;
     }
     return MoolahVaultLib.maxDeposit(MOOLAH, queue, caps);
   }
@@ -634,20 +634,6 @@ contract MoolahVault is
     return MOOLAH.idToMarketParams(id);
   }
 
-  /// @dev Accrues interest on Moolah and returns the vault's assets & corresponding shares supplied on the
-  /// market defined by `marketParams`, as well as the market's state.
-  /// @dev Assumes that the inputs `marketParams` and `id` match.
-  function _accruedSupplyBalance(
-    MarketParams memory marketParams,
-    Id id
-  ) internal returns (uint256 assets, uint256 shares, Market memory market) {
-    MOOLAH.accrueInterest(marketParams);
-
-    market = MOOLAH.market(id);
-    shares = MOOLAH.position(id, address(this)).supplyShares;
-    assets = shares.toAssetsDown(market.totalSupplyAssets, market.totalSupplyShares);
-  }
-
   /// @dev Sets the cap of the market defined by `id` to `supplyCap`.
   /// @dev Assumes that the inputs `marketParams` and `id` match.
   function _setCap(MarketParams memory marketParams, Id id, uint184 supplyCap) internal {
@@ -684,7 +670,7 @@ contract MoolahVault is
     uint184[] memory caps = new uint184[](len);
     for (uint256 i; i < len; ++i) {
       queue[i] = supplyQueue[i];
-      caps[i] = config[supplyQueue[i]].cap;
+      caps[i] = config[queue[i]].cap;
     }
     MoolahVaultLib.supplyMoolah(MOOLAH, queue, caps, assets);
   }
