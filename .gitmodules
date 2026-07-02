@@ -18,6 +18,9 @@
 [submodule "lib/murky"]
 	path = lib/murky
 	url = https://github.com/dmfxyz/murky
+[submodule "lib/lista-v3"]
+	path = lib/lista-v3
+	url = https://github.com/lista-dao/lista-v3
 [submodule "lib/lista-dao-contracts.git"]
 	path = lib/lista-dao-contracts.git
 	url = https://github.com/lista-dao/lista-dao-contracts.git
