@@ -64,7 +64,7 @@ contract StockOracleTest is Test {
   function _openStock(address token) internal {
     vm.prank(manager);
     stockSwitch.setStock(token, true); // registers AND enables
-    vm.prank(bot);
+    vm.prank(manager);
     stockSwitch.setGlobal(true);
   }
 
@@ -149,7 +149,7 @@ contract StockOracleTest is Test {
   function test_peek_revertsWhenStockDisabled() public {
     vm.prank(manager);
     stockSwitch.setStock(stock, true); // registered + enabled
-    vm.prank(bot);
+    vm.prank(manager);
     stockSwitch.setGlobal(true);
     vm.prank(bot);
     stockSwitch.close(stock); // market open, but the stock itself is disabled

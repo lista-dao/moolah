@@ -6,15 +6,16 @@ import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils
 
 /// @title StockOracleSwitch
 /// @notice Market open/closed control for tokenized stocks (bStocks), consumed by {StockOracle}.
-/// @dev    Two orthogonal layers:
+/// @dev    Layers:
 ///         - `registered` (MANAGER): whether a token is a managed stock. Unregistered tokens are NOT
 ///           gated (e.g. the loan token USDT) — {StockOracle} passes them straight through.
-///         - open/closed (BOT): a per-stock `enabled` flag plus a single `globalEnabled` market-hours
-///           switch. A registered stock is enabled only while both the global switch and its own flag are on.
+///         - per-stock `enabled` (BOT): toggled individually via open / close, or in bulk via batchSetStatus.
+///         - global market switch `globalEnabled` (MANAGER): the market-hours switch (setGlobal). A
+///           registered stock is enabled only while both the global switch and its own flag are on.
 ///         PAUSER can force the whole market closed in an emergency (globalEnabled = false).
 contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeable {
-  bytes32 public constant MANAGER = keccak256("MANAGER"); // register / un-register stocks; admins BOT
-  bytes32 public constant BOT = keccak256("BOT"); // global daily switch + per-stock open / close
+  bytes32 public constant MANAGER = keccak256("MANAGER"); // register / un-register stocks; global daily switch; admins BOT
+  bytes32 public constant BOT = keccak256("BOT"); // per-stock open / close (single + batch)
   bytes32 public constant PAUSER = keccak256("PAUSER"); // emergency force-close
 
   /// @dev token => is a managed stock. Unregistered (false) => passthrough (never gated).
@@ -38,8 +39,8 @@ contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeabl
   }
 
   /// @param admin   DEFAULT_ADMIN_ROLE holder (upgrade + role admin)
-  /// @param manager MANAGER role (register / un-register stocks; admins BOT)
-  /// @param bot     BOT role (global daily switch + per-stock open / close)
+  /// @param manager MANAGER role (register / un-register stocks; global daily switch; admins BOT)
+  /// @param bot     BOT role (per-stock open / close, single + batch)
   /// @param pauser  PAUSER role (emergency force-close)
   function initialize(address admin, address manager, address bot, address pauser) external initializer {
     require(admin != address(0), ZeroAddress());
@@ -54,7 +55,7 @@ contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeabl
     _grantRole(PAUSER, pauser);
     // MANAGER administers the BOT role, so it can grant / revoke BOT via grantRole / revokeRole.
     _setRoleAdmin(BOT, MANAGER);
-    // globalEnabled stays false on purpose: market is closed until BOT opens it.
+    // globalEnabled stays false on purpose: market is closed until MANAGER opens it.
   }
 
   /// @notice Whether `token` is currently enabled (tradable). Unregistered tokens are always enabled (passthrough).
@@ -66,8 +67,10 @@ contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeabl
   }
 
   /// @notice Register or un-register a managed stock. MANAGER role.
-  /// @dev    Registering a stock enables it by default; un-registering disables it. BOT can
-  ///         independently toggle the per-stock flag afterwards via open / close.
+  /// @dev    Registering a stock enables it by default. Un-registering removes the token from managed-stock
+  ///         gating entirely: isEnabled then returns true (passthrough), which is NOT the same as closing it.
+  ///         Use close() to gate a registered stock without un-registering. While registered, BOT can toggle
+  ///         the per-stock flag via open / close.
   function setStock(address token, bool isStock) external onlyRole(MANAGER) {
     require(token != address(0), ZeroAddress());
     require(registered[token] != isStock, AlreadySet());
@@ -78,7 +81,8 @@ contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeabl
   }
 
   /// @notice Open a registered stock for trading. BOT role. Only registered stocks can be toggled.
-  function open(address token) external onlyRole(BOT) {
+  function open(address token) public onlyRole(BOT) {
+    require(token != address(0), ZeroAddress());
     require(registered[token], NotRegistered());
     require(!enabled[token], AlreadySet());
     enabled[token] = true;
@@ -86,15 +90,27 @@ contract StockOracleSwitch is AccessControlEnumerableUpgradeable, UUPSUpgradeabl
   }
 
   /// @notice Close a registered stock. BOT role. Only registered stocks can be toggled.
-  function close(address token) external onlyRole(BOT) {
+  function close(address token) public onlyRole(BOT) {
+    require(token != address(0), ZeroAddress());
     require(registered[token], NotRegistered());
     require(enabled[token], AlreadySet());
     enabled[token] = false;
     emit StockEnable(token, false);
   }
 
-  /// @notice Toggle the global market switch (daily open/close). BOT role.
-  function setGlobal(bool open) external onlyRole(BOT) {
+  /// @notice Bulk per-stock open/close. BOT role. Opens (`status = true`) or closes (`status = false`)
+  ///         every token in `tokens` in one call by delegating to {open} / {close}.
+  /// @dev    Strict: inherits the {open} / {close} guards, so a token already in the target state
+  ///         (AlreadySet) or not registered (NotRegistered) reverts the whole batch.
+  function batchSetStatus(address[] calldata tokens, bool status) external onlyRole(BOT) {
+    for (uint256 i; i < tokens.length; ++i) {
+      if (status) open(tokens[i]);
+      else close(tokens[i]);
+    }
+  }
+
+  /// @notice Toggle the global market switch (daily open/close). MANAGER role.
+  function setGlobal(bool open) external onlyRole(MANAGER) {
     require(open != globalEnabled, AlreadySet());
     globalEnabled = open;
     emit GlobalEnabledSet(open);

@@ -49,7 +49,7 @@ contract StockOracleSwitchTest is Test {
   function _openStock(address token) internal {
     vm.prank(manager);
     sw.setStock(token, true); // registers AND enables
-    vm.prank(bot);
+    vm.prank(manager);
     sw.setGlobal(true);
   }
 
@@ -115,7 +115,7 @@ contract StockOracleSwitchTest is Test {
   function test_isEnabled_unregisteredAlwaysEnabled() public {
     // unregistered token passes through (always enabled) regardless of the global switch
     assertTrue(sw.isEnabled(usdt), "unregistered should be enabled while global off");
-    vm.prank(bot);
+    vm.prank(manager);
     sw.setGlobal(true);
     assertTrue(sw.isEnabled(usdt), "unregistered should be enabled while global on");
   }
@@ -129,7 +129,7 @@ contract StockOracleSwitchTest is Test {
   function test_isEnabled_falseWhileStockDisabled() public {
     vm.prank(manager);
     sw.setStock(stock, true); // registered + enabled
-    vm.prank(bot);
+    vm.prank(manager);
     sw.setGlobal(true);
     vm.prank(bot);
     sw.close(stock); // BOT closes this specific stock
@@ -280,28 +280,121 @@ contract StockOracleSwitchTest is Test {
   }
 
   // ----------------------------------------------------------------------
-  //                          setGlobal (BOT)
+  //               batchSetStatus (BOT) — bulk open / close
   // ----------------------------------------------------------------------
 
-  function test_setGlobal_botTogglesAndEmits() public {
+  function test_batchSetStatus_closesThenOpensAll() public {
+    address s1 = makeAddr("s1");
+    address s2 = makeAddr("s2");
+    vm.startPrank(manager);
+    sw.setStock(s1, true); // registered + enabled
+    sw.setStock(s2, true); // registered + enabled
+    vm.stopPrank();
+
+    address[] memory tokens = new address[](2);
+    tokens[0] = s1;
+    tokens[1] = s2;
+
+    // close both in one call (events emitted in array order)
+    vm.expectEmit(true, false, false, true, address(sw));
+    emit StockEnable(s1, false);
+    vm.expectEmit(true, false, false, true, address(sw));
+    emit StockEnable(s2, false);
+    vm.prank(bot);
+    sw.batchSetStatus(tokens, false);
+    assertFalse(sw.enabled(s1), "s1 closed");
+    assertFalse(sw.enabled(s2), "s2 closed");
+
+    // re-open both in one call
+    vm.expectEmit(true, false, false, true, address(sw));
+    emit StockEnable(s1, true);
+    vm.expectEmit(true, false, false, true, address(sw));
+    emit StockEnable(s2, true);
+    vm.prank(bot);
+    sw.batchSetStatus(tokens, true);
+    assertTrue(sw.enabled(s1), "s1 reopened");
+    assertTrue(sw.enabled(s2), "s2 reopened");
+  }
+
+  function test_batchSetStatus_revertsWhenAlreadyInState() public {
+    vm.prank(manager);
+    sw.setStock(stock, true); // registered + enabled
+
+    address[] memory tokens = new address[](1);
+    tokens[0] = stock;
+
+    // already enabled -> open() hits AlreadySet -> the whole batch reverts
+    vm.prank(bot);
+    vm.expectRevert(StockOracleSwitch.AlreadySet.selector);
+    sw.batchSetStatus(tokens, true);
+  }
+
+  function test_batchSetStatus_revertsForNonBot() public {
+    vm.prank(manager);
+    sw.setStock(stock, true);
+
+    address[] memory tokens = new address[](1);
+    tokens[0] = stock;
+
+    vm.prank(stranger);
+    vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, BOT));
+    sw.batchSetStatus(tokens, false);
+  }
+
+  /// @dev an unregistered token reverts the whole batch — registered entries before it roll back.
+  function test_batchSetStatus_revertsAndRollsBackOnUnregistered() public {
+    vm.prank(manager);
+    sw.setStock(stock, true); // registered + enabled
+
+    address[] memory tokens = new address[](2);
+    tokens[0] = stock; // closed first
+    tokens[1] = usdt; // unregistered -> reverts
+
+    vm.prank(bot);
+    vm.expectRevert(StockOracleSwitch.NotRegistered.selector);
+    sw.batchSetStatus(tokens, false);
+
+    assertTrue(sw.enabled(stock), "batch reverted -> stock stays enabled (rolled back)");
+  }
+
+  function test_batchSetStatus_emptyTokensNoop() public {
+    address[] memory tokens = new address[](0);
+    vm.prank(bot);
+    sw.batchSetStatus(tokens, true); // no revert, nothing happens
+  }
+
+  // ----------------------------------------------------------------------
+  //                          setGlobal (MANAGER)
+  // ----------------------------------------------------------------------
+
+  function test_setGlobal_managerTogglesAndEmits() public {
     vm.expectEmit(false, false, false, true, address(sw));
     emit GlobalEnabledSet(true);
 
-    vm.prank(bot);
+    vm.prank(manager);
     sw.setGlobal(true);
 
     assertTrue(sw.globalEnabled());
   }
 
-  function test_setGlobal_revertsForNonBot() public {
+  function test_setGlobal_revertsForNonManager() public {
     vm.prank(stranger);
-    vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, BOT));
+    vm.expectRevert(
+      abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, MANAGER)
+    );
+    sw.setGlobal(true);
+  }
+
+  /// @dev BOT no longer controls the global switch (it moved to MANAGER); BOT must be rejected.
+  function test_setGlobal_revertsForBot() public {
+    vm.prank(bot);
+    vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, bot, MANAGER));
     sw.setGlobal(true);
   }
 
   function test_setGlobal_revertsWhenSameValue() public {
     // defaults to false; setting false again must revert
-    vm.prank(bot);
+    vm.prank(manager);
     vm.expectRevert(StockOracleSwitch.AlreadySet.selector);
     sw.setGlobal(false);
   }
@@ -311,7 +404,7 @@ contract StockOracleSwitchTest is Test {
   // ----------------------------------------------------------------------
 
   function test_emergencyClose_pauserForcesClosed() public {
-    vm.prank(bot);
+    vm.prank(manager);
     sw.setGlobal(true);
     assertTrue(sw.globalEnabled(), "market open");
 
@@ -356,20 +449,24 @@ contract StockOracleSwitchTest is Test {
   function test_manager_grantedBotCanOperate() public {
     address newBot = makeAddr("newBot");
     vm.prank(manager);
+    sw.setStock(stock, true); // register (auto-enabled)
+    vm.prank(manager);
     sw.grantRole(BOT, newBot);
 
     vm.prank(newBot);
-    sw.setGlobal(true);
-    assertTrue(sw.globalEnabled(), "freshly granted BOT can flip the global switch");
+    sw.close(stock); // freshly granted BOT can toggle a per-stock flag
+    assertFalse(sw.enabled(stock), "freshly granted BOT can close a stock");
   }
 
   function test_manager_revokedBotCannotOperate() public {
+    vm.prank(manager);
+    sw.setStock(stock, true); // register so there is a stock to toggle
     vm.prank(manager);
     sw.revokeRole(BOT, bot);
 
     vm.prank(bot);
     vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, bot, BOT));
-    sw.setGlobal(true);
+    sw.close(stock);
   }
 
   /// @dev DEFAULT_ADMIN can no longer grant BOT directly: BOT's admin is now MANAGER.

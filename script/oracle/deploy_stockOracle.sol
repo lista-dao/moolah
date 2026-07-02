@@ -11,7 +11,7 @@ import { StockOracleSwitch } from "../../src/oracle/StockOracleSwitch.sol";
 /// @notice Deploys StockOracleSwitch + StockOracle (UUPS proxies) and registers the managed bStocks.
 ///         admin = manager = deployer (hand off later via deploy_stockOracleTransferRole.sol);
 ///         BOT is a dedicated wallet. Network config (resilient oracle, bot, stock list) is resolved
-///         by chain id. The market stays CLOSED after deploy (globalEnabled = false) until the BOT opens it.
+///         by chain id. The market stays CLOSED after deploy (globalEnabled = false) until MANAGER opens it.
 contract StockOracleDeploy is DeployBase {
   function run() public {
     uint256 deployerPrivateKey = _deployerKey();
@@ -57,7 +57,7 @@ contract StockOracleDeploy is DeployBase {
     console.log("StockOracle proxy: ", address(oracle));
 
     // --- Register managed bStocks. setStock also enables each per-stock; the market stays closed
-    //     globally until the BOT calls setGlobal(true) during trading hours. ---
+    //     globally until MANAGER calls setGlobal(true) during trading hours. ---
     for (uint256 i = 0; i < stocks.length; i++) {
       stockSwitch.setStock(stocks[i], true);
       console.log("registered stock: ", stocks[i]);
