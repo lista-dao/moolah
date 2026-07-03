@@ -10,8 +10,7 @@ import { Id, MarketParams } from "moolah/interfaces/IMoolah.sol";
 contract MoolahVaultConfigDeploy is DeployBase {
   using MarketParamsLib for MarketParams;
 
-  // todo update vault address after deployment
-  MoolahVault wethVault = MoolahVault(address(0));
+  MoolahVault wethVault = MoolahVault(0x2E3BbD03DbC6D890c8c7e06BE4e065c5c0EeE7e8);
 
   uint256 fee = 0.1 ether;
   address feeRecipient = 0xd10a024602E042dcb9C19e21682c3b896c8B0d30;
@@ -25,10 +24,11 @@ contract MoolahVaultConfigDeploy is DeployBase {
   address irm = 0x8b7d334d243b74D63C4b963893267A0F5240F990;
   uint256 lltv965 = 0.965 ether;
 
-  // todo update cap: target $100M for wstETH, $20M for wbETH, in WETH (18 decimals)
-  // cap = targetUSD / ethPrice * 1e18
-  uint256 wstETHCap = 0;
-  uint256 wBETHCap = 0;
+  // cap = targetUSD / ethPrice * 1e18 (ETH price: $1,716.56 on 2026-07-03)
+  // wstETH: $100M / $1,716.56 ≈ 58,255 ETH
+  // wBETH:  $20M  / $1,716.56 ≈ 11,651 ETH
+  uint256 wstETHCap = 58_255 ether;
+  uint256 wBETHCap = 11_651 ether;
 
   address bot = 0x91fC4BA20685339781888eCA3E9E1c12d40F0e13;
 
