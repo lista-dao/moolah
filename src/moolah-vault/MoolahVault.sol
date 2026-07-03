@@ -9,17 +9,15 @@ import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgr
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
-import { MarketConfig, PendingUint192, PendingAddress, MarketAllocation, IMoolahVaultBase, IMoolahVaultStaticTyping } from "./interfaces/IMoolahVault.sol";
-import { Id, MarketParams, Market, IMoolah } from "moolah/interfaces/IMoolah.sol";
+import { MarketConfig, MarketAllocation, IMoolahVaultBase, IMoolahVaultStaticTyping } from "./interfaces/IMoolahVault.sol";
+import { Id, MarketParams, IMoolah } from "moolah/interfaces/IMoolah.sol";
 
-import { PendingUint192, PendingAddress, PendingLib } from "./libraries/PendingLib.sol";
 import { ConstantsLib } from "./libraries/ConstantsLib.sol";
 import { ErrorsLib } from "./libraries/ErrorsLib.sol";
 import { EventsLib } from "./libraries/EventsLib.sol";
 import { MoolahVaultLib } from "./libraries/MoolahVaultLib.sol";
 import { WAD } from "moolah/libraries/MathLib.sol";
 import { UtilsLib } from "moolah/libraries/UtilsLib.sol";
-import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { MoolahBalancesLib } from "moolah/libraries/periphery/MoolahBalancesLib.sol";
 import { IProvider } from "../provider/interfaces/IProvider.sol";
@@ -39,7 +37,6 @@ contract MoolahVault is
   using UtilsLib for uint256;
   using SafeCast for uint256;
   using SafeERC20 for IERC20;
-  using SharesMathLib for uint256;
   using MarketParamsLib for MarketParams;
   using MoolahBalancesLib for IMoolah;
   using EnumerableSet for EnumerableSet.AddressSet;
