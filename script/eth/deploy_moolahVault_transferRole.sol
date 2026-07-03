@@ -6,8 +6,7 @@ import { DeployBase } from "../DeployBase.sol";
 import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 
 contract MoolahVaultTransferRoleDeploy is DeployBase {
-  // todo update vault address after deployment
-  MoolahVault wethVault = MoolahVault(address(0));
+  MoolahVault wethVault = MoolahVault(0x2E3BbD03DbC6D890c8c7e06BE4e065c5c0EeE7e8);
 
   address admin = 0xa18ae79AEDA3e711E0CD64cfe1Cd06402d400D61; // timelock
   address manager = 0x375fdA2Bf66f4CE85EAB29AB6407dCd4a4C428BA; // timelock
