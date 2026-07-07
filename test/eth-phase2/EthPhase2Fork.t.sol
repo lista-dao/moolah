@@ -112,8 +112,8 @@ contract TestableTransferRole is MoolahVaultTransferRoleDeploy {
 contract EthPhase2ForkTest is Test {
   using MarketParamsLib for MarketParams;
 
-  // ─── Test deployer key (Foundry default #0) ───
-  uint256 constant TEST_KEY = 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
+  // ─── Test deployer key (deterministic, not a real account) ───
+  uint256 constant TEST_KEY = uint256(keccak256("test deployer"));
   address testDeployer; // = vm.addr(TEST_KEY)
 
   // ─── Existing contracts on ETH mainnet ───
