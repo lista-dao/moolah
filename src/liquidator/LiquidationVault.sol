@@ -343,7 +343,4 @@ contract LiquidationVault is
       NotAuthorized()
     );
   }
-
-  /// @dev Storage gap for future upgrades.
-  uint256[50] private __gap;
 }
