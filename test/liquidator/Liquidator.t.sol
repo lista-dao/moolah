@@ -6,6 +6,8 @@ import "../moolah/BaseTest.sol";
 import { Liquidator, ILiquidator } from "liquidator/Liquidator.sol";
 import { MarketParamsLib, MarketParams, Id } from "moolah/libraries/MarketParamsLib.sol";
 import { MockOneInch } from "./mocks/MockOneInch.sol";
+import { MockSmartProvider } from "./mocks/MockSmartProvider.sol";
+import { MockStableSwapLPCollateral } from "./mocks/MockStableSwapLPCollateral.sol";
 
 contract LiquidatorTest is BaseTest {
   using MathLib for uint256;
@@ -62,6 +64,37 @@ contract LiquidatorTest is BaseTest {
     vm.stopPrank();
 
     assertEq(collateralToken.balanceOf(address(liquidator)), collateralAmount, "collateralToken balance");
+  }
+
+  function testLiquidateRevertsForSmartCollateral() public {
+    // Configure a smart-collateral market whose collateral's minter() -> smartProvider,
+    // and smartProvider.TOKEN() -> the collateral (so _isSmartCollateral returns true).
+    MockSmartProvider smartProvider = new MockSmartProvider(address(loanToken), address(collateralToken));
+    MockStableSwapLPCollateral mockLPCollateral = new MockStableSwapLPCollateral(
+      "MockLP",
+      "MLP",
+      address(smartProvider)
+    );
+    smartProvider.setCollateralToken(address(mockLPCollateral));
+
+    MarketParams memory smartMarketParams = MarketParams({
+      loanToken: address(loanToken),
+      collateralToken: address(mockLPCollateral),
+      oracle: address(oracle),
+      irm: address(irm),
+      lltv: 0.8e18
+    });
+    moolah.createMarket(smartMarketParams);
+    bytes32 smartMarketId = Id.unwrap(smartMarketParams.id());
+
+    vm.prank(OWNER);
+    liquidator.setMarketWhitelist(smartMarketId, true);
+
+    // Normal liquidate must reject smart collateral (use liquidateSmartCollateral instead),
+    // otherwise the seized LP would be reflowed into the vault, which cannot redeem it.
+    vm.prank(BOT);
+    vm.expectRevert(Liquidator.SmartCollateralMustUseDedicatedFunction.selector);
+    liquidator.liquidate(smartMarketId, address(1), 1e18, 0);
   }
 
   function testFlashLiquidate() public {

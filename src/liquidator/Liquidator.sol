@@ -13,6 +13,10 @@ import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
 import { ILiquidationVault } from "./ILiquidationVault.sol";
 
+interface IHasMinter {
+  function minter() external view returns (address);
+}
+
 contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   using MarketParamsLib for IMoolah.MarketParams;
   using SafeTransferLib for address;
@@ -27,6 +31,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
   error SwapFailed();
   error NotAuthorized();
   error InvalidFundSource();
+  error SmartCollateralMustUseDedicatedFunction();
 
   address public immutable MOOLAH;
   mapping(address => bool) public tokenWhitelist;
@@ -380,6 +385,10 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
   ) external nonReentrant onlyRole(BOT) {
     require(marketWhitelist[id], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
+    // Smart LP collateral must use liquidateSmartCollateral: otherwise the reflow below would push the
+    // seized LP into the vault, which has no redeem path for it (needs a MANAGER rescue). Mirrors
+    // BrokerLiquidator.liquidate.
+    require(!_isSmartCollateral(params.collateralToken), SmartCollateralMustUseDedicatedFunction());
     IMoolah(MOOLAH).liquidate(
       params,
       borrower,
@@ -623,6 +632,20 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     }
 
     arb.loanToken.safeApprove(MOOLAH, repaidAssets);
+  }
+
+  /// @dev Returns true when `collateralToken` is a smart-collateral LP token: its `minter()` is a
+  ///      SmartProvider whose `TOKEN()` points back to the collateral. Mirrors BrokerLiquidator.
+  function _isSmartCollateral(address collateralToken) internal view returns (bool) {
+    try IHasMinter(collateralToken).minter() returns (address minterAddr) {
+      try ISmartProvider(minterAddr).TOKEN() returns (address token) {
+        return token == collateralToken;
+      } catch {
+        return false;
+      }
+    } catch {
+      return false;
+    }
   }
 
   /// @dev Reflow (push) the full balance of `token` to the vault. No-op when fundSource is unset or
