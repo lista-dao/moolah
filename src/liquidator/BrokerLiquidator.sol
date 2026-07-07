@@ -10,6 +10,7 @@ import { IBroker, IBrokerBase } from "../broker/interfaces/IBroker.sol";
 import { Id, MarketParams, IMoolah } from "moolah/interfaces/IMoolah.sol";
 import { IBrokerLiquidator } from "./IBrokerLiquidator.sol";
 import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
+import { ILiquidationVault } from "./ILiquidationVault.sol";
 
 interface IHasMinter {
   function minter() external view returns (address);
@@ -28,6 +29,9 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   error SwapFailed();
   error BrokerMarketIdMismatch();
   error SmartCollateralMustUseDedicatedFunction();
+  error NotAuthorized();
+  error InvalidFundSource();
+  error Reentrancy();
 
   address public immutable MOOLAH;
   mapping(address => bool) public tokenWhitelist;
@@ -43,6 +47,12 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   mapping(address => bool) public smartProviders;
   /// @dev transient storage for repaidAssets from onMoolahLiquidate callback
   uint256 internal _lastRepaidAssets;
+  /// @dev Shared liquidation fund pool (LiquidationVault). 0 => legacy behavior. Appended for the
+  ///      UUPS upgrade; no existing slot is moved.
+  address public fundSource;
+  /// @dev Local reentrancy lock. This contract does not inherit ReentrancyGuard; the lock is
+  ///      a single appended slot (0/1 = not entered, 2 = entered). Guards BOT entry points only.
+  uint256 private _reentrancyLock;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // bot role
@@ -54,6 +64,8 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   event PairWhitelistChanged(address pair, bool added);
   event SellToken(address pair, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin);
   event SmartProvidersChanged(address provider, bool added);
+  event FundSourceChanged(address indexed oldFundSource, address indexed newFundSource);
+  event FundReflowed(address indexed token, uint256 amount);
   event SmartLiquidation(
     bytes32 indexed id,
     address indexed lpToken,
@@ -85,18 +97,54 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
     _grantRole(MANAGER, manager);
     _grantRole(BOT, bot);
+    _setRoleAdmin(BOT, MANAGER);
   }
 
-  /// @dev withdraws ERC20 tokens.
+  /// @dev Post-upgrade step for the live proxy: make MANAGER the admin of the BOT role so BOT hot-key
+  ///      rotation is a MANAGER (multisig) action rather than a DEFAULT_ADMIN one. New deployments
+  ///      already set this in initialize; call this via upgradeToAndCall for existing ones.
+  function setBotRoleAdmin() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    _setRoleAdmin(BOT, MANAGER);
+  }
+
+  /// @dev Local reentrancy lock. Guards BOT entry points; deliberately NOT applied to
+  ///      onMoolahLiquidate (legal same-tx re-entry from the broker) or withdraw* (must stay callable
+  ///      by the vault's collect* outside the lock).
+  modifier nonReentrant() {
+    require(_reentrancyLock != 2, Reentrancy());
+    _reentrancyLock = 2;
+    _;
+    _reentrancyLock = 1;
+  }
+
+  /// @dev withdraws ERC20 tokens. Gate relaxed for the shared fund pool: MANAGER or fundSource
+  ///      (the vault's collectERC20 call). Transfer target stays msg.sender, so the vault collects.
   /// @param token The address of the token.
   /// @param amount The amount to withdraw.
-  function withdrawERC20(address token, uint256 amount) external onlyRole(MANAGER) {
+  function withdrawERC20(address token, uint256 amount) external {
+    require(hasRole(MANAGER, msg.sender) || msg.sender == fundSource, NotAuthorized());
     SafeTransferLib.safeTransfer(token, msg.sender, amount);
   }
-  /// @dev withdraws ETH.
+  /// @dev withdraws ETH. Gate relaxed as withdrawERC20.
   /// @param amount The amount to withdraw.
-  function withdrawETH(uint256 amount) external onlyRole(MANAGER) {
+  function withdrawETH(uint256 amount) external {
+    require(hasRole(MANAGER, msg.sender) || msg.sender == fundSource, NotAuthorized());
     SafeTransferLib.safeTransferETH(msg.sender, amount);
+  }
+
+  /// @dev Sets the shared liquidation fund pool. Allows 0 (grey-scale rollback). A non-zero
+  ///      fundSource gains withdraw* pull rights, so it must be a contract that has already registered
+  ///      this liquidator.
+  /// @param _fundSource The address of the LiquidationVault, or 0 to disable.
+  function setFundSource(address _fundSource) external onlyRole(MANAGER) {
+    if (_fundSource != address(0)) {
+      require(
+        _fundSource.code.length > 0 && ILiquidationVault(_fundSource).liquidators(address(this)),
+        InvalidFundSource()
+      );
+    }
+    emit FundSourceChanged(fundSource, _fundSource);
+    fundSource = _fundSource;
   }
 
   /// @dev sets the token whitelist.
@@ -178,7 +226,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     uint256 amountIn,
     uint256 amountOutMin,
     bytes calldata swapData
-  ) external onlyRole(BOT) {
+  ) external onlyRole(BOT) nonReentrant {
     require(tokenWhitelist[tokenIn], NotWhitelisted());
     require(tokenWhitelist[tokenOut], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());
@@ -217,7 +265,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     uint256 amountIn,
     uint256 amountOutMin,
     bytes calldata swapData
-  ) external onlyRole(BOT) {
+  ) external onlyRole(BOT) nonReentrant {
     require(tokenWhitelist[BNB_ADDRESS], NotWhitelisted());
     require(tokenWhitelist[tokenOut], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());
@@ -252,7 +300,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     uint256 seizedAssets,
     address pair,
     bytes calldata swapCollateralData
-  ) external onlyRole(BOT) {
+  ) external onlyRole(BOT) nonReentrant {
     address broker = marketIdToBroker[id];
     require(broker != address(0), NotWhitelisted());
     require(_checkBrokerMarketId(broker, id), BrokerMarketIdMismatch());
@@ -283,6 +331,9 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
         )
       )
     );
+    // reflow the arbitrage profit residue to the vault (no-op when fundSource == 0).
+    _reflow(params.loanToken);
+    _reflow(params.collateralToken);
   }
 
   /// @dev liquidates a position.
@@ -290,7 +341,12 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   /// @param borrower The address of the borrower.
   /// @param seizedAssets The amount of assets to seize.
   /// @param repaidShares The amount of shares to repay.
-  function liquidate(bytes32 id, address borrower, uint256 seizedAssets, uint256 repaidShares) external onlyRole(BOT) {
+  function liquidate(
+    bytes32 id,
+    address borrower,
+    uint256 seizedAssets,
+    uint256 repaidShares
+  ) external onlyRole(BOT) nonReentrant {
     address broker = marketIdToBroker[id];
     require(broker != address(0), NotWhitelisted());
     require(_checkBrokerMarketId(broker, id), BrokerMarketIdMismatch());
@@ -321,6 +377,9 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
         )
       )
     );
+    // reflow leftover balances to the vault (no-op when fundSource == 0).
+    _reflow(params.loanToken);
+    _reflow(params.collateralToken);
   }
 
   /// @dev liquidates a position with smart collateral.
@@ -338,7 +397,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     uint256 seizedAssets,
     uint256 repaidShares,
     bytes memory payload
-  ) external onlyRole(BOT) returns (uint256, uint256) {
+  ) external onlyRole(BOT) nonReentrant returns (uint256, uint256) {
     address broker = marketIdToBroker[id];
     require(broker != address(0), NotWhitelisted());
     require(_checkBrokerMarketId(broker, id), BrokerMarketIdMismatch());
@@ -348,7 +407,6 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     address lpToken = ISmartProvider(smartProvider).dexLP();
 
     uint256 collBalanceBefore = IERC20(params.collateralToken).balanceOf(address(this));
-    uint256 loanBalanceBefore = IERC20(params.loanToken).balanceOf(address(this));
     (uint256 minAmount0, uint256 minAmount1) = abi.decode(payload, (uint256, uint256));
     IBrokerBase(broker).liquidate(
       params,
@@ -376,7 +434,11 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
       )
     );
     uint256 collAmount = IERC20(params.collateralToken).balanceOf(address(this)) - collBalanceBefore;
-    uint256 repaidAssets = loanBalanceBefore - IERC20(params.loanToken).balanceOf(address(this));
+    // with the vault pull, the pulled funds are transferred out to the broker in the same tx,
+    // so the local loan-balance delta no longer equals the repaid amount. Read the value written by
+    // the callback (works in both fund-source and legacy modes), then clear it.
+    uint256 repaidAssets = _lastRepaidAssets;
+    _lastRepaidAssets = 0;
     require(collAmount > 0, "No collateral seized");
 
     (uint256 amount0, uint256 amount1) = ISmartProvider(smartProvider).redeemLpCollateral(
@@ -386,7 +448,10 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     );
 
     emit SmartLiquidation(id, lpToken, params.collateralToken, collAmount, minAmount0, minAmount1, amount0, amount1);
-    _lastRepaidAssets = 0;
+    // this entry redeemed token0/token1 in the same tx — reflow them plus any loanToken.
+    _reflow(params.loanToken);
+    _reflow(ISmartProvider(smartProvider).token(0));
+    _reflow(ISmartProvider(smartProvider).token(1));
     return (collAmount, repaidAssets);
   }
 
@@ -411,7 +476,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     bytes calldata swapToken0Data,
     bytes calldata swapToken1Data,
     bytes memory payload
-  ) external onlyRole(BOT) returns (uint256, uint256) {
+  ) external onlyRole(BOT) nonReentrant returns (uint256, uint256) {
     address broker = marketIdToBroker[id];
     require(broker != address(0), NotWhitelisted());
     require(_checkBrokerMarketId(broker, id), BrokerMarketIdMismatch());
@@ -442,6 +507,10 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     IBrokerBase(broker).liquidate(params, borrower, seizedAssets, 0, abi.encode(callback));
     uint256 repaidAssets = _lastRepaidAssets;
     _lastRepaidAssets = 0;
+    // reflow token0/token1/loanToken to the vault (native leg handled by _reflow).
+    _reflow(params.loanToken);
+    _reflow(ISmartProvider(smartProvider).token(0));
+    _reflow(ISmartProvider(smartProvider).token(1));
     return (seizedAssets, repaidAssets);
   }
 
@@ -496,6 +565,14 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
       if (out < repaidAssets) revert NoProfit();
       if (token0 != BNB_ADDRESS) SafeTransferLib.safeApprove(token0, arb.token0Pair, 0);
       if (token1 != BNB_ADDRESS) SafeTransferLib.safeApprove(token1, arb.token1Pair, 0);
+    } else if (fundSource != address(0)) {
+      // normal pre-funded path. Pull the exact shortfall from the vault. `repaidAssets` already
+      // includes interestToBroker (the broker sums it before invoking this callback), so it is the
+      // full amount the broker will transferFrom afterward. Local balance is consumed first.
+      uint256 bal = SafeTransferLib.balanceOf(arb.loanToken, address(this));
+      if (bal < repaidAssets) {
+        ILiquidationVault(fundSource).provideFund(arb.loanToken, repaidAssets - bal);
+      }
     }
 
     _lastRepaidAssets = repaidAssets;
@@ -515,9 +592,17 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     uint256 lpAmount,
     uint256 minToken0Amt,
     uint256 minToken1Amt
-  ) external onlyRole(BOT) returns (uint256, uint256) {
+  ) external onlyRole(BOT) nonReentrant returns (uint256, uint256) {
     require(smartProviders[smartProvider], NotWhitelisted());
-    return ISmartProvider(smartProvider).redeemLpCollateral(lpAmount, minToken0Amt, minToken1Amt);
+    (uint256 amount0, uint256 amount1) = ISmartProvider(smartProvider).redeemLpCollateral(
+      lpAmount,
+      minToken0Amt,
+      minToken1Amt
+    );
+    // reflow redeemed token0/token1 to the vault (native leg handled by _reflow).
+    _reflow(ISmartProvider(smartProvider).token(0));
+    _reflow(ISmartProvider(smartProvider).token(1));
+    return (amount0, amount1);
   }
 
   /// @dev sets the smart collateral providers.
@@ -543,6 +628,26 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
       }
     } catch {
       return false;
+    }
+  }
+
+  /// @dev Reflow (push) the full balance of `token` to the vault. No-op when fundSource is unset or
+  ///      the balance is zero. `token == BNB_ADDRESS` reflows native BNB via safeTransferETH.
+  function _reflow(address token) private {
+    address _fundSource = fundSource;
+    if (_fundSource == address(0)) return;
+    if (token == BNB_ADDRESS) {
+      uint256 bal = address(this).balance;
+      if (bal > 0) {
+        SafeTransferLib.safeTransferETH(_fundSource, bal);
+        emit FundReflowed(token, bal);
+      }
+    } else {
+      uint256 bal = SafeTransferLib.balanceOf(token, address(this));
+      if (bal > 0) {
+        SafeTransferLib.safeTransfer(token, _fundSource, bal);
+        emit FundReflowed(token, bal);
+      }
     }
   }
 
