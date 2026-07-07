@@ -109,15 +109,19 @@ contract MarketFactoryTest is Test {
       address(WBNB),
       address(slisBNB),
       address(bnbProvider),
-      address(slisBNBProvider),
-      address(rateCalculator),
-      address(brokerLiquidator)
+      address(slisBNBProvider)
     );
     ERC1967Proxy marketFactoryProxy = new ERC1967Proxy(
       address(marketFactoryImpl),
       abi.encodeWithSelector(marketFactoryImpl.initialize.selector, admin, operator, pauser)
     );
     marketFactory = MarketFactory(address(marketFactoryProxy));
+
+    // Set storage-based variables via setter
+    vm.startPrank(admin);
+    marketFactory.setRateCalculator(address(rateCalculator));
+    marketFactory.setBrokerLiquidator(address(brokerLiquidator));
+    vm.stopPrank();
 
     vm.startPrank(manager);
     moolah.enableIrm(address(irm));

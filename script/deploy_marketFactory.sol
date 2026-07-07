@@ -31,6 +31,8 @@ contract MarketFactoryDeploy is DeployBase {
     vm.startBroadcast(deployerPrivateKey);
 
     // Deploy implementation
+    // NOTE: rateCalculator and brokerLiquidator are storage variables,
+    // set via setRateCalculator() and setBrokerLiquidator() after deploy/upgrade
     MarketFactory impl = new MarketFactory(
       moolah,
       liquidator,
@@ -41,9 +43,7 @@ contract MarketFactoryDeploy is DeployBase {
       WBNB,
       slisBNB,
       BNBProvider,
-      slisBNBProvider,
-      rateCalculator,
-      brokerLiquidator
+      slisBNBProvider
     );
     console.log("Implementation: ", address(impl));
 
