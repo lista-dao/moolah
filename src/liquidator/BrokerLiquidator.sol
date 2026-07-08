@@ -53,6 +53,10 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   /// @dev Local reentrancy lock. This contract does not inherit ReentrancyGuard; the lock is
   ///      a single appended slot (0/1 = not entered, 2 = entered). Guards BOT entry points only.
   uint256 private _reentrancyLock;
+  /// @dev Tokens excluded from reflow to the vault (smart-collateral LP the vault cannot sell). A
+  ///      wrong-entry plain liquidate on a smart-LP fixed-term market must not push LP into the vault;
+  ///      the LP stays here as a process holding, redeemable via redeemSmartCollateral. Storage appended.
+  mapping(address => bool) public reflowBlacklist;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // bot role
@@ -66,6 +70,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   event SmartProvidersChanged(address provider, bool added);
   event FundSourceChanged(address indexed oldFundSource, address indexed newFundSource);
   event FundReflowed(address indexed token, uint256 amount);
+  event ReflowBlacklistChanged(address indexed token, bool blacklisted);
   event SmartLiquidation(
     bytes32 indexed id,
     address indexed lpToken,
@@ -145,6 +150,14 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     }
     emit FundSourceChanged(fundSource, _fundSource);
     fundSource = _fundSource;
+  }
+
+  /// @dev Adds/removes a token from the reflow blacklist. Blacklisted tokens (smart-collateral LP) are
+  ///      never pushed to the vault; they remain here to be redeemed via redeemSmartCollateral.
+  function setReflowBlacklist(address token, bool status) external onlyRole(MANAGER) {
+    require(token != address(0), ZERO_ADDRESS);
+    reflowBlacklist[token] = status;
+    emit ReflowBlacklistChanged(token, status);
   }
 
   /// @dev sets the token whitelist.
@@ -636,6 +649,9 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   function _reflow(address token) private {
     address _fundSource = fundSource;
     if (_fundSource == address(0)) return;
+    // Never push blacklisted tokens (smart-collateral LP) to the vault — it cannot sell them. They
+    // stay here as a process holding, recoverable via redeemSmartCollateral.
+    if (reflowBlacklist[token]) return;
     if (token == BNB_ADDRESS) {
       uint256 bal = address(this).balance;
       if (bal > 0) {
