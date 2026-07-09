@@ -69,6 +69,9 @@ abstract contract V3Provider is
   bytes32 public constant MANAGER = keccak256("MANAGER");
   bytes32 public constant BOT = keccak256("BOT");
 
+  /// @dev Denominator for `maxRebalanceLossBp` — parts-per-million (ppm).
+  uint256 internal constant LOSS_DENOM = 1e6;
+
   /* ──────────────────────────── storage ───────────────────────────── */
 
   /// @dev Resilient oracle pricing TOKEN0/TOKEN1 (8-decimal USD), used for totalAssets().
@@ -77,8 +80,18 @@ abstract contract V3Provider is
   /// @dev Decimal precision of the ERC-4626 accounting asset.
   uint8 public accountingAssetDecimals;
 
+  /// @dev Per-rebalance fair-NAV loss cap, in ppm (LOSS_DENOM = 1e6). A single rebalance may not
+  ///      drop the position's fair USD value by more than this. Default 20_000 = 2%.
+  uint256 public maxRebalanceLossBp;
+  /// @dev Per-UTC-day cumulative rebalance loss cap, 8-decimal USD. Default 1000e8.
+  uint256 public maxDailyLossUsd;
+  /// @dev UTC day (block.timestamp / 1 days) the rebalance-loss accumulator currently tracks.
+  uint256 public dailyLossDay;
+  /// @dev Cumulative rebalance loss (8-decimal USD) recorded so far for `dailyLossDay`.
+  uint256 public dailyLossAccum;
+
   /// @dev Reserved storage for future base variables (keep subclass storage stable on upgrade).
-  uint256[50] private __gap;
+  uint256[46] private __gap;
 
   /* ───────────────────────────── events ───────────────────────────── */
 
@@ -100,6 +113,9 @@ abstract contract V3Provider is
   event SharesWithdrawn(address indexed onBehalf, uint256 shares, address receiver, Id indexed marketId);
   event SharesSupplied(address indexed supplier, address indexed onBehalf, uint256 shares, Id indexed marketId);
   event SharesRedeemed(address indexed redeemer, uint256 shares, uint256 amount0, uint256 amount1, address receiver);
+  event MaxRebalanceLossBpChanged(uint256 maxRebalanceLossBp);
+  event MaxDailyLossUsdChanged(uint256 maxDailyLossUsd);
+  event RebalanceDailyLossAccrued(uint256 indexed day, uint256 loss, uint256 accum);
 
   /* ───────────────────────────── errors ───────────────────────────── */
 
@@ -115,6 +131,10 @@ abstract contract V3Provider is
   error StandardEntryDisabled();
   error BnbTransferFailed();
   error NotAdapter();
+  error RebalanceLossTooHigh();
+  error DailyLossExceeded();
+  error OracleZero();
+  error InvalidParam();
 
   /* ─────────────────────────── constructor ────────────────────────── */
 
@@ -164,6 +184,11 @@ abstract contract V3Provider is
 
     resilientOracle = _resilientOracle;
     accountingAssetDecimals = IERC20Metadata(_accountingAsset).decimals();
+
+    maxRebalanceLossBp = 20_000; // 2% (ppm) — per-rebalance fair-NAV loss cap
+    maxDailyLossUsd = 1000e8; // 1000 USD/day — cumulative rebalance loss cap
+    emit MaxRebalanceLossBpChanged(maxRebalanceLossBp);
+    emit MaxDailyLossUsdChanged(maxDailyLossUsd);
   }
 
   /* ──────────────────── ERC20 transfer restrictions ───────────────── */
@@ -468,6 +493,67 @@ abstract contract V3Provider is
   /// @dev Accept native BNB only from the adapter (WBNB refund unwrapped during deposit).
   receive() external payable {
     if (msg.sender != ADAPTER) revert NotAdapter();
+  }
+
+  /* ─────────────────── rebalance loss guard (NAV + daily caps) ──────────────── */
+
+  /// @notice Set the per-rebalance fair-NAV loss cap, in ppm (LOSS_DENOM = 1e6). onlyRole MANAGER.
+  function setMaxRebalanceLossBp(uint256 _maxRebalanceLossBp) external onlyRole(MANAGER) {
+    if (_maxRebalanceLossBp > LOSS_DENOM) revert InvalidParam();
+    maxRebalanceLossBp = _maxRebalanceLossBp;
+    emit MaxRebalanceLossBpChanged(_maxRebalanceLossBp);
+  }
+
+  /// @notice Set the per-UTC-day cumulative rebalance loss cap, 8-decimal USD. onlyRole MANAGER.
+  function setMaxDailyLossUsd(uint256 _maxDailyLossUsd) external onlyRole(MANAGER) {
+    maxDailyLossUsd = _maxDailyLossUsd;
+    emit MaxDailyLossUsdChanged(_maxDailyLossUsd);
+  }
+
+  /// @dev Shared rebalance wrapper enforcing the value-neutrality guards, so a compromised BOT cannot
+  ///      bleed the position regardless of the swapData / minLiquidity / minAmount it passes (the adapter
+  ///      itself enforces the per-swap rate floor). Snapshots the position's FAIR USD value (never
+  ///      pool spot) before/after the adapter recenter:
+  ///        NAV cap — the fair NAV may not drop more than `maxRebalanceLossBp` (ppm) in one rebalance;
+  ///        Daily cap — the cumulative daily loss may not exceed `maxDailyLossUsd` (loss only, profit does not
+  ///             offset), per UTC day.
+  ///      Fail-closed: if shares exist but the position values to 0, the resilient feed is broken and the
+  ///      rebalance reverts rather than running unguarded.
+  function _guardedRebalance(
+    uint256 minAmount0,
+    uint256 minAmount1,
+    uint256 minLiquidity,
+    uint256 deadline,
+    bytes calldata swapData
+  ) internal {
+    uint256 navBefore = _positionValueUsd();
+    if (totalSupply() != 0 && navBefore == 0) revert OracleZero();
+
+    IV3DexAdapter(ADAPTER).rebalance(minAmount0, minAmount1, minLiquidity, deadline, swapData);
+
+    uint256 navAfter = _positionValueUsd();
+
+    if (navBefore != 0) {
+      // Per-rebalance fair-NAV loss cap.
+      if (navAfter * LOSS_DENOM < navBefore * (LOSS_DENOM - maxRebalanceLossBp)) revert RebalanceLossTooHigh();
+
+      // Per-UTC-day cumulative loss cap (loss only; profit does not offset). NB: this is a FIXED UTC
+      // window (not sliding): the worst case straddling 00:00 UTC is up to 2x
+      // maxDailyLossUsd across the boundary. Accepted: it is a defense-in-depth backstop on top of the
+      // per-swap and per-rebalance caps, and the pre-existing rate-drift guard throttles rebalance frequency.
+      if (navAfter < navBefore) {
+        uint256 loss = navBefore - navAfter;
+        uint256 today = block.timestamp / 1 days;
+        if (today != dailyLossDay) {
+          dailyLossDay = today;
+          dailyLossAccum = 0;
+        }
+        uint256 accum = dailyLossAccum + loss;
+        if (accum > maxDailyLossUsd) revert DailyLossExceeded();
+        dailyLossAccum = accum;
+        emit RebalanceDailyLossAccrued(today, loss, accum);
+      }
+    }
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}

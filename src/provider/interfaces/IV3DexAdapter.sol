@@ -129,6 +129,12 @@ interface IV3DexAdapter {
   ///         MANAGER). A venue may never be TOKEN0 / TOKEN1 / POOL / POSITION_MANAGER.
   function setSwapPairWhitelist(address swapPair, bool status) external;
 
+  /// @notice Per-swap rate-anchored loss cap for the rebalance conversion swap (ppm, 1e6 = 100%).
+  function maxSwapLossBp() external view returns (uint256);
+
+  /// @notice Set the per-swap rate-anchored loss cap (onlyRole MANAGER; ppm, 1e6 = 100%).
+  function setMaxSwapLossBp(uint256 maxSwapLossBp) external;
+
   /// @notice Recenter the position to its range and convert inventory to the optimal ratio.
   ///         onlyProvider — the provider gates the caller with the BOT role.
   function rebalance(

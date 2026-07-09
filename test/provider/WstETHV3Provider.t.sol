@@ -10,6 +10,7 @@ import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.so
 import { WstETHV3Provider } from "../../src/provider/v3/WstETHV3Provider.sol";
 import { WstETHV3DexAdapter } from "../../src/provider/v3/WstETHV3DexAdapter.sol";
 import { V3DexAdapter } from "../../src/provider/v3/V3DexAdapter.sol";
+import { V3Provider } from "../../src/provider/v3/V3Provider.sol";
 import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
 import { IWstETH } from "../../src/provider/interfaces/IWstETH.sol";
 import { SwapInventoryLib } from "../../src/provider/libraries/SwapInventoryLib.sol";
@@ -404,6 +405,35 @@ contract WstETHV3ProviderTest is Test {
 
     assertGt(adapter.tokenId(), oldTokenId, "position re-minted after swap");
     assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "fair swap ~value-neutral");
+  }
+
+  /// @notice Guard-inheritance: the wstETH vault routes rebalance through the base `_guardedRebalance`,
+  ///         so the per-rebalance NAV-neutrality cap fires here too. Reverting with `RebalanceLossTooHigh` proves the
+  ///         subclass did not bypass the wrapper (a direct adapter.rebalance call would not raise it).
+  ///         Also confirms the shared defaults are set on the ETH family.
+  function test_lossGuard_navNeutrality_inheritedByWstEthVault() public {
+    assertEq(adapter.maxSwapLossBp(), 50_000, "per-swap cap default inherited");
+    assertEq(provider.maxRebalanceLossBp(), 20_000, "per-rebalance cap default inherited");
+    assertEq(provider.maxDailyLossUsd(), 1000e8, "daily cap default inherited");
+
+    _deposit(10 ether, 10 ether);
+    vm.startPrank(manager);
+    adapter.setCenterRateThresholdBps(0);
+    adapter.setMaxSwapLossBp(1e6); // disable the per-swap cap so the lossy swap reaches the base NAV check
+    provider.setMaxRebalanceLossBp(1000); // 0.1% NAV cap
+    vm.stopPrank();
+
+    uint256 rate = IWstETH(WSTETH).stEthPerToken();
+    uint256 amountIn = 1 ether;
+    uint256 fairOut = (amountIn * rate) / 1e18;
+    uint256 badOut = (fairOut * 80) / 100; // 20% loss ⇒ well over the 0.1% NAV cap
+    deal(WETH, address(mockSwap), badOut);
+    bytes memory inner = _mockInner(WSTETH, WETH, amountIn, badOut);
+    bytes memory data = _swapData(address(mockSwap), true, amountIn, 0, inner);
+
+    vm.prank(bot);
+    vm.expectRevert(V3Provider.RebalanceLossTooHigh.selector);
+    provider.rebalance(0, 0, 0, block.timestamp, data);
   }
 
   /// @notice Linchpin: the backend-supplied `amountOutMin` is enforced on the measured output. A venue
