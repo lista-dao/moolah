@@ -67,6 +67,8 @@ abstract contract V3DexAdapter is
   bytes32 public constant MANAGER = keccak256("MANAGER");
 
   uint256 internal constant BPS = 10_000;
+  /// @dev Denominator for `maxSwapLossBp` — parts-per-million (ppm).
+  uint256 internal constant LOSS_DENOM = 1e6;
   /// @dev Half-width of the rate-centered range for rate-implied pairs (±1%).
   uint256 internal constant INITIAL_RANGE_BPS = 100;
   /// @dev Fallback half-range (ticks) around spot for non-rate (TWAP) pairs.
@@ -100,8 +102,14 @@ abstract contract V3DexAdapter is
   ///      Chain/venue-agnostic: a DEX pool, an aggregator, or any router that converts TOKEN0<->TOKEN1.
   mapping(address => bool) public swapPairWhitelist;
 
+  /// @dev Per-swap fair-value loss cap for the rebalance inventory-conversion swap, in ppm
+  ///      (LOSS_DENOM = 1e6). The swap's output is bounded against the LST↔native rate — NOT the pool
+  ///      spot and NOT the BOT-supplied amountOutMin — so a compromised BOT cannot realize more than
+  ///      this slippage on the converted leg. Default 50_000 = 5%.
+  uint256 public maxSwapLossBp;
+
   /// @dev Reserved storage for future base variables (keep subclass storage stable on upgrade).
-  uint256[47] private __gap;
+  uint256[46] private __gap;
 
   /* ───────────────────────────── events ───────────────────────────── */
 
@@ -113,6 +121,7 @@ abstract contract V3DexAdapter is
   event LastCenterRateUpdated(uint256 oldCenterRate, uint256 newCenterRate);
   event Rebalanced(int24 oldTickLower, int24 oldTickUpper, int24 newTickLower, int24 newTickUpper, uint256 newTokenId);
   event SwapPairWhitelistSet(address indexed swapPair, bool status);
+  event MaxSwapLossBpChanged(uint256 maxSwapLossBp);
 
   /* ───────────────────────────── errors ───────────────────────────── */
 
@@ -133,6 +142,8 @@ abstract contract V3DexAdapter is
   error InvalidThreshold();
   error NotWhitelistedPair();
   error InvalidSwapPair();
+  error SwapLossTooHigh();
+  error InvalidParam();
 
   /* ─────────────────────────── constructor ────────────────────────── */
 
@@ -191,6 +202,9 @@ abstract contract V3DexAdapter is
 
     tickLower = _tickLower;
     tickUpper = _tickUpper;
+
+    maxSwapLossBp = 50_000; // 5% (ppm) — per-swap rate-anchored loss cap
+    emit MaxSwapLossBpChanged(maxSwapLossBp);
   }
 
   /// @notice Wire the vault that may drive this adapter. One-time, admin-only.
@@ -316,6 +330,14 @@ abstract contract V3DexAdapter is
     ) revert InvalidSwapPair();
     swapPairWhitelist[swapPair] = status;
     emit SwapPairWhitelistSet(swapPair, status);
+  }
+
+  /// @notice Set the per-swap rate-anchored loss cap for the rebalance conversion swap, in ppm
+  ///         (LOSS_DENOM = 1e6). onlyRole MANAGER.
+  function setMaxSwapLossBp(uint256 _maxSwapLossBp) external onlyRole(MANAGER) {
+    if (_maxSwapLossBp > LOSS_DENOM) revert InvalidParam();
+    maxSwapLossBp = _maxSwapLossBp;
+    emit MaxSwapLossBpChanged(_maxSwapLossBp);
   }
 
   /// @inheritdoc IV3DexAdapter
@@ -657,27 +679,75 @@ abstract contract V3DexAdapter is
     uint256 total1,
     int24 /* targetTickLower */,
     int24 /* targetTickUpper */,
-    uint256 /* rate */,
+    uint256 rate,
     bytes calldata swapData
   ) internal virtual returns (uint256, uint256) {
     if (swapData.length == 0) return (total0, total1);
     (address swapPair, bool sellToken0, uint256 amountIn, uint256 amountOutMin, bool nativeIn, bytes memory inner) = abi
       .decode(swapData, (address, bool, uint256, uint256, bool, bytes));
     if (!swapPairWhitelist[swapPair]) revert NotWhitelistedPair();
-    return
-      SwapInventoryLib.swap(
-        swapPair,
-        TOKEN0,
-        TOKEN1,
-        sellToken0,
-        amountIn,
-        amountOutMin,
-        inner,
-        total0,
-        total1,
-        WRAPPED_NATIVE,
-        nativeIn
-      );
+    (uint256 newTotal0, uint256 newTotal1) = SwapInventoryLib.swap(
+      swapPair,
+      TOKEN0,
+      TOKEN1,
+      sellToken0,
+      amountIn,
+      amountOutMin,
+      inner,
+      total0,
+      total1,
+      WRAPPED_NATIVE,
+      nativeIn
+    );
+    // Bound the swap's execution loss against the LST↔native rate (not pool spot, not the BOT's
+    // amountOutMin), so a compromised BOT cannot realize more than `maxSwapLossBp` on the converted leg.
+    // NB: any subclass overriding this hook MUST preserve an equivalent guard.
+    _requireSwapLossWithinCap(sellToken0, total0, total1, newTotal0, newTotal1, rate);
+    return (newTotal0, newTotal1);
+  }
+
+  /// @dev Rate-anchored per-swap loss guard. `rate` is token1-per-token0 in whole-token terms (1e18);
+  ///      skipped when `rate == 0` (pure-TWAP pair, no rate reference) or nothing was swapped.
+  function _requireSwapLossWithinCap(
+    bool sellToken0,
+    uint256 total0,
+    uint256 total1,
+    uint256 newTotal0,
+    uint256 newTotal1,
+    uint256 rate
+  ) internal view {
+    if (rate == 0) return;
+    uint256 spent;
+    uint256 received;
+    uint256 fairOut;
+    if (sellToken0) {
+      spent = total0 - newTotal0;
+      received = newTotal1 - total1;
+      if (spent == 0) return;
+      fairOut = _fairAmount1ForAmount0(spent, rate);
+    } else {
+      spent = total1 - newTotal1;
+      received = newTotal0 - total0;
+      if (spent == 0) return;
+      fairOut = _fairAmount0ForAmount1(spent, rate);
+    }
+    if (received * LOSS_DENOM < fairOut * (LOSS_DENOM - maxSwapLossBp)) revert SwapLossTooHigh();
+  }
+
+  /// @dev Fair raw TOKEN1 obtainable for `amount0` raw TOKEN0 at `rate`, decimal-adjusted.
+  function _fairAmount1ForAmount0(uint256 amount0, uint256 rate) internal view returns (uint256) {
+    if (DECIMALS1 >= DECIMALS0) {
+      return FullMath.mulDiv(amount0, rate * (uint256(10) ** (DECIMALS1 - DECIMALS0)), 1e18);
+    }
+    return FullMath.mulDiv(amount0, rate, 1e18 * (uint256(10) ** (DECIMALS0 - DECIMALS1)));
+  }
+
+  /// @dev Fair raw TOKEN0 obtainable for `amount1` raw TOKEN1 at `rate`, decimal-adjusted.
+  function _fairAmount0ForAmount1(uint256 amount1, uint256 rate) internal view returns (uint256) {
+    if (DECIMALS0 >= DECIMALS1) {
+      return FullMath.mulDiv(amount1, uint256(1e18) * (uint256(10) ** (DECIMALS0 - DECIMALS1)), rate);
+    }
+    return FullMath.mulDiv(amount1, 1e18, rate * (uint256(10) ** (DECIMALS1 - DECIMALS0)));
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}

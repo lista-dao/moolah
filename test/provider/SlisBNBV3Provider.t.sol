@@ -1999,4 +1999,238 @@ contract SlisBNBV3ProviderTest is Test {
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
   }
+
+  /* ═══════ rebalance loss-cap guards: per-swap rate floor · NAV neutrality · daily cap ═══════ */
+
+  /// @dev Disable the rate-drift guard so rebalance is callable, and return the current StakeManager rate.
+  function _prepGuardRebalance() internal returns (uint256 rate) {
+    vm.prank(manager);
+    adapter.setCenterRateThresholdBps(0);
+    rate = IStakeManager(STAKE_MANAGER).convertSnBnbToBnb(1e18);
+  }
+
+  /// @dev Encode a slisBNB(token0)→WBNB(token1) rebalance swap through mockSwap paying exactly `amountOut`.
+  function _sellToken0Data(
+    uint256 amountIn,
+    uint256 amountOut,
+    uint256 amountOutMin
+  ) internal returns (bytes memory data) {
+    deal(WBNB, address(mockSwap), amountOut);
+    bytes memory inner = abi.encodeCall(MockSwap.swap, (SLISBNB, WBNB, amountIn, amountOut, address(adapter)));
+    data = abi.encode(address(mockSwap), true, amountIn, amountOutMin, false, inner);
+  }
+
+  function test_lossGuard_defaults() public view {
+    assertEq(adapter.maxSwapLossBp(), 50_000, "per-swap cap default 5% (ppm)");
+    assertEq(provider.maxRebalanceLossBp(), 20_000, "per-rebalance cap default 2% (ppm)");
+    assertEq(provider.maxDailyLossUsd(), 1000e8, "daily cap default 1000 USD");
+  }
+
+  // ── per-swap rate-anchored loss cap ──
+
+  /// @notice A compromised BOT setting amountOutMin=0 still cannot realize a swap loss beyond maxSwapLossBp.
+  function test_lossGuard_perSwapCap_revertsWhenSwapLossExceedsCap() public {
+    _deposit(user, 10 ether, 10 ether);
+    uint256 rate = _prepGuardRebalance();
+
+    uint256 amountIn = 0.5 ether;
+    uint256 fairOut = (amountIn * rate) / 1e18;
+    // Venue underpays 10% (> 5% default cap); amountOutMin=0 so the backend guard would let it through.
+    bytes memory data = _sellToken0Data(amountIn, (fairOut * 90) / 100, 0);
+
+    vm.prank(bot);
+    vm.expectRevert(V3DexAdapter.SwapLossTooHigh.selector);
+    provider.rebalance(0, 0, 0, block.timestamp, data);
+  }
+
+  function test_lossGuard_perSwapCap_passesWithinCap() public {
+    _deposit(user, 10 ether, 10 ether);
+    uint256 rate = _prepGuardRebalance();
+    uint256 oldTokenId = adapter.tokenId();
+
+    uint256 amountIn = 0.5 ether;
+    uint256 fairOut = (amountIn * rate) / 1e18;
+    // 3% loss < 5% cap, amountOutMin=0 → per-swap and default NAV caps pass.
+    bytes memory data = _sellToken0Data(amountIn, (fairOut * 97) / 100, 0);
+
+    vm.prank(bot);
+    provider.rebalance(0, 0, 0, block.timestamp, data);
+    assertGt(adapter.tokenId(), oldTokenId, "position re-minted (3% swap loss within 5% per-swap cap)");
+  }
+
+  // ── per-rebalance fair-NAV neutrality ──
+
+  /// @notice Even with the per-swap cap disabled, a rebalance that drops the fair NAV beyond maxRebalanceLossBp reverts.
+  function test_lossGuard_navNeutrality_revertsWhenNavDropExceedsCap() public {
+    _deposit(user, 10 ether, 10 ether);
+    uint256 rate = _prepGuardRebalance();
+
+    // Isolate the NAV cap: disable the per-swap cap so the lossy swap reaches the NAV check; tighten it to 0.1%.
+    vm.startPrank(manager);
+    adapter.setMaxSwapLossBp(1e6); // disable the per-swap cap
+    provider.setMaxRebalanceLossBp(1000); // 0.1%
+    vm.stopPrank();
+
+    uint256 amountIn = 1 ether;
+    uint256 fairOut = (amountIn * rate) / 1e18;
+    // 20% loss on 1 slisBNB ⇒ well over a 0.1% NAV drop.
+    bytes memory data = _sellToken0Data(amountIn, (fairOut * 80) / 100, 0);
+
+    vm.prank(bot);
+    vm.expectRevert(V3Provider.RebalanceLossTooHigh.selector);
+    provider.rebalance(0, 0, 0, block.timestamp, data);
+  }
+
+  // ── per-UTC-day cumulative loss cap ──
+
+  /// @notice With the per-swap and NAV caps disabled, the daily accumulator alone still caps a compromised BOT's total bleed.
+  function test_lossGuard_dailyCap_revertsWhenDailyLossExceeded() public {
+    _deposit(user, 10 ether, 10 ether);
+    uint256 rate = _prepGuardRebalance();
+
+    vm.startPrank(manager);
+    adapter.setMaxSwapLossBp(1e6); // disable the per-swap cap
+    provider.setMaxRebalanceLossBp(1e6); // disable the per-rebalance cap (single rebalance)
+    provider.setMaxDailyLossUsd(1e8); // 1 USD/day
+    vm.stopPrank();
+
+    uint256 amountIn = 1 ether;
+    uint256 fairOut = (amountIn * rate) / 1e18;
+    // A 1-slisBNB swap at 20% loss ⇒ tens of USD of loss, far over the 1 USD daily cap.
+    bytes memory data = _sellToken0Data(amountIn, (fairOut * 80) / 100, 0);
+
+    vm.prank(bot);
+    vm.expectRevert(V3Provider.DailyLossExceeded.selector);
+    provider.rebalance(0, 0, 0, block.timestamp, data);
+  }
+
+  function test_lossGuard_dailyCap_dailyAccumulatorResetsNextDay() public {
+    _deposit(user, 10 ether, 10 ether);
+    uint256 rate = _prepGuardRebalance();
+
+    vm.startPrank(manager);
+    adapter.setMaxSwapLossBp(1e6); // disable the per-swap cap
+    provider.setMaxRebalanceLossBp(1e6); // disable the per-rebalance cap
+    provider.setMaxDailyLossUsd(1000e8); // generous — this test exercises the reset, not the cap
+    vm.stopPrank();
+
+    uint256 amountIn = 1 ether;
+    uint256 fairOut = (amountIn * rate) / 1e18;
+
+    bytes memory data1 = _sellToken0Data(amountIn, (fairOut * 90) / 100, 0);
+    vm.prank(bot);
+    provider.rebalance(0, 0, 0, block.timestamp, data1);
+    uint256 accumDay1 = provider.dailyLossAccum();
+    uint256 day1 = provider.dailyLossDay();
+    assertGt(accumDay1, 0, "loss accrued on day 1");
+
+    // Next UTC day: the accumulator resets, so a fresh loss is not added onto day 1's.
+    vm.warp(block.timestamp + 1 days);
+    bytes memory data2 = _sellToken0Data(amountIn, (fairOut * 90) / 100, 0);
+    vm.prank(bot);
+    provider.rebalance(0, 0, 0, block.timestamp, data2);
+
+    assertGt(provider.dailyLossDay(), day1, "UTC day advanced");
+    assertLt(provider.dailyLossAccum(), (accumDay1 * 3) / 2, "accumulator reset for the new day (not doubled)");
+  }
+
+  // ── setters: access control + caps ──
+
+  function test_lossGuard_setters_accessControlAndCaps() public {
+    // per-swap cap (adapter)
+    vm.prank(bot);
+    vm.expectRevert();
+    adapter.setMaxSwapLossBp(30_000);
+    vm.prank(manager);
+    vm.expectRevert(V3DexAdapter.InvalidParam.selector);
+    adapter.setMaxSwapLossBp(1e6 + 1);
+    vm.prank(manager);
+    adapter.setMaxSwapLossBp(30_000);
+    assertEq(adapter.maxSwapLossBp(), 30_000);
+
+    // per-rebalance cap (provider)
+    vm.prank(bot);
+    vm.expectRevert();
+    provider.setMaxRebalanceLossBp(15_000);
+    vm.prank(manager);
+    vm.expectRevert(V3Provider.InvalidParam.selector);
+    provider.setMaxRebalanceLossBp(1e6 + 1);
+    vm.prank(manager);
+    provider.setMaxRebalanceLossBp(15_000);
+    assertEq(provider.maxRebalanceLossBp(), 15_000);
+
+    // daily cap (provider)
+    vm.prank(bot);
+    vm.expectRevert();
+    provider.setMaxDailyLossUsd(500e8);
+    vm.prank(manager);
+    provider.setMaxDailyLossUsd(500e8);
+    assertEq(provider.maxDailyLossUsd(), 500e8);
+  }
+
+  // ── audit follow-ups: same-day daily-cap accumulation, NAV-cap fail-closed, per-swap-cap sell-token1 direction ──
+
+  /// @notice The daily cap must SUM losses across multiple same-day rebalances (guards the `+=` accumulation; a
+  ///         `= loss` overwrite regression would let a compromised BOT bleed unbounded USD/day).
+  function test_lossGuard_dailyCap_accumulatesSameDayAcrossRebalances() public {
+    _deposit(user, 10 ether, 10 ether);
+    uint256 rate = _prepGuardRebalance();
+    vm.startPrank(manager);
+    adapter.setMaxSwapLossBp(1e6); // disable the per-swap cap
+    provider.setMaxRebalanceLossBp(1e6); // disable the per-rebalance cap (single rebalance) so only the daily sum gates
+    vm.stopPrank();
+
+    uint256 amountIn = 1 ether;
+    uint256 fairOut = (amountIn * rate) / 1e18;
+
+    bytes memory d1 = _sellToken0Data(amountIn, (fairOut * 90) / 100, 0);
+    vm.prank(bot);
+    provider.rebalance(0, 0, 0, block.timestamp, d1);
+    uint256 loss1 = provider.dailyLossAccum();
+    assertGt(loss1, 0, "rebalance 1 accrued loss");
+
+    // Cap the day at ~2.5x a single loss: rebalance 2 fits (~2x), rebalance 3 breaches (~3x).
+    vm.prank(manager);
+    provider.setMaxDailyLossUsd((loss1 * 5) / 2);
+
+    bytes memory d2 = _sellToken0Data(amountIn, (fairOut * 90) / 100, 0);
+    vm.prank(bot);
+    provider.rebalance(0, 0, 0, block.timestamp, d2);
+    // Proves cumulative `+=` (a `= loss` overwrite would leave accum ≈ loss1, failing this).
+    assertGt(provider.dailyLossAccum(), (loss1 * 3) / 2, "same-day loss accumulates across rebalances");
+
+    bytes memory d3 = _sellToken0Data(amountIn, (fairOut * 90) / 100, 0);
+    vm.prank(bot);
+    vm.expectRevert(V3Provider.DailyLossExceeded.selector);
+    provider.rebalance(0, 0, 0, block.timestamp, d3);
+  }
+
+  /// @notice Fail-closed: if the feed returns 0 for a non-empty vault, rebalance must revert (not run
+  ///         with the NAV/daily caps disabled). navBefore==0 is checked before adapter.rebalance, so no swap is needed.
+  function test_lossGuard_navNeutrality_failsClosedOnZeroOraclePrice() public {
+    _deposit(user, 10 ether, 10 ether);
+    oracle.setPrice(SLISBNB, 0);
+    oracle.setPrice(WBNB, 0);
+
+    vm.prank(bot);
+    vm.expectRevert(V3Provider.OracleZero.selector);
+    provider.rebalance(0, 0, 0, block.timestamp, "");
+  }
+
+  /// @notice The per-swap cap also covers the sell-token1 direction (WBNB→slisBNB), exercising `_fairAmount0ForAmount1`.
+  function test_lossGuard_perSwapCap_revertsOnSellToken1Loss() public {
+    _deposit(user, 10 ether, 10 ether);
+    uint256 rate = _prepGuardRebalance();
+
+    uint256 amountIn = 0.5 ether; // WBNB (token1) in
+    uint256 fairOut = (amountIn * 1e18) / rate; // fair slisBNB (token0) out at rate
+    uint256 badOut = (fairOut * 90) / 100; // 10% loss > 5% cap
+    deal(SLISBNB, address(mockSwap), badOut);
+    bytes memory inner = abi.encodeCall(MockSwap.swap, (WBNB, SLISBNB, amountIn, badOut, address(adapter)));
+    bytes memory data = abi.encode(address(mockSwap), false, amountIn, uint256(0), false, inner); // sellToken0=false
+
+    vm.prank(bot);
+    vm.expectRevert(V3DexAdapter.SwapLossTooHigh.selector);
+    provider.rebalance(0, 0, 0, block.timestamp, data);
+  }
 }

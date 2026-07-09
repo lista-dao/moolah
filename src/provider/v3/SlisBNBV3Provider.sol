@@ -62,7 +62,7 @@ contract SlisBNBV3Provider is V3Provider {
     uint256 deadline,
     bytes calldata swapData
   ) external onlyRole(BOT) nonReentrant {
-    ISlisBNBV3DexAdapter(ADAPTER).rebalance(minAmount0, minAmount1, minLiquidity, deadline, swapData);
+    _guardedRebalance(minAmount0, minAmount1, minLiquidity, deadline, swapData);
   }
 
   /* ─────────────────── slisBNBx: sync / view ──────────────────────── */
