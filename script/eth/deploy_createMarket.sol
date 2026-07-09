@@ -40,6 +40,7 @@ contract CreateMarketDeploy is DeployBase {
   address irm = 0x8b7d334d243b74D63C4b963893267A0F5240F990;
   address fixedRateIRM = 0x9A7cA2CfB886132B6024789163e770979E4222e1;
 
+  uint256 lltv80 = 0.80 ether;
   uint256 lltv86 = 0.86 ether;
   uint256 lltv915 = 0.915 ether;
   uint256 lltv945 = 0.945 ether;
@@ -50,20 +51,32 @@ contract CreateMarketDeploy is DeployBase {
     address deployer = vm.addr(deployerPrivateKey);
     console.log("Deployer: ", deployer);
 
-    MarketParams[] memory params = new MarketParams[](2);
+    MarketParams[] memory params = new MarketParams[](4);
+    // Market #1: wstETH → WETH, 96.5%
     params[0] = MarketParams({
-      loanToken: USDT,
-      collateralToken: USDT_USDC,
-      oracle: USDT_USDCSmartProvider,
+      loanToken: WETH,
+      collateralToken: wstETH,
+      oracle: multiOracle,
       irm: irm,
       lltv: lltv965
     });
-    params[1] = MarketParams({
-      loanToken: USDC,
-      collateralToken: USDT_USDC,
-      oracle: USDT_USDCSmartProvider,
+    // Market #2: wbETH → WETH, 96.5%
+    params[1] = MarketParams({ loanToken: WETH, collateralToken: wBETH, oracle: multiOracle, irm: irm, lltv: lltv965 });
+    // Market #5: WBTC/cbBTC LP → USDT, 80%
+    params[2] = MarketParams({
+      loanToken: USDT,
+      collateralToken: WBTC_cbBTC,
+      oracle: WBTC_cbBTCSmartProvider,
       irm: irm,
-      lltv: lltv965
+      lltv: lltv80
+    });
+    // Market #6: WBTC/cbBTC LP → USDC, 80%
+    params[3] = MarketParams({
+      loanToken: USDC,
+      collateralToken: WBTC_cbBTC,
+      oracle: WBTC_cbBTCSmartProvider,
+      irm: irm,
+      lltv: lltv80
     });
 
     vm.startBroadcast(deployerPrivateKey);
