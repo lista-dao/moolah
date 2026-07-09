@@ -6,7 +6,7 @@ import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgrade
 import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
-import { IBroker, IBrokerBase } from "../broker/interfaces/IBroker.sol";
+import { IBrokerBase } from "../broker/interfaces/IBroker.sol";
 import { Id, MarketParams, IMoolah } from "moolah/interfaces/IMoolah.sol";
 import { IBrokerLiquidator } from "./IBrokerLiquidator.sol";
 import { ISmartProvider } from "../provider/interfaces/IProvider.sol";

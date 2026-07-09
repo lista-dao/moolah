@@ -5,7 +5,6 @@ import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/ac
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
-import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
@@ -46,6 +45,8 @@ contract LiquidationVault is
   address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
   /// @dev Denominator for `maxSwapLossBp` — parts-per-million (ppm).
   uint256 public constant BPS_DENOM = 1e6;
+  uint256 public constant MIN_DAILY_LOSS_USD = 1e8; // $1
+  uint256 public constant MAX_DAILY_LOSS_USD = 100_000e8; // $100k
 
   /// @dev Registered liquidators: provideFund allow-list AND collect* target allow-list.
   mapping(address => bool) public liquidators;
@@ -82,6 +83,7 @@ contract LiquidationVault is
   event MaxDailyLossUsdChanged(uint256 usd8);
   event RevenueCollectorChanged(address indexed revenueCollector);
   event DailyLossAccrued(uint256 indexed day, uint256 loss, uint256 accum);
+  event DailyLossReset(uint256 indexed day);
   event Withdraw(address indexed to, address indexed token, uint256 amount);
 
   /// @custom:oz-upgrades-unsafe-allow constructor
@@ -112,6 +114,8 @@ contract LiquidationVault is
 
     maxSwapLossBp = 50_000; // 5%
     maxDailyLossUsd = 1000e8; // 1000 USD (8-decimal)
+    emit MaxSwapLossBpChanged(maxSwapLossBp);
+    emit MaxDailyLossUsdChanged(maxDailyLossUsd);
   }
 
   /// @dev Receives native BNB: liquidator reflow, collectETH proceeds, sellBNB change.
@@ -247,12 +251,16 @@ contract LiquidationVault is
     }
   }
 
-  /// @dev 8-decimal USD value of `amount` of `token`. `dec = 18` for native BNB. peek==0 => revert.
+  /// @dev 8-decimal USD value of `amount` of `token`. `dec = 18` for native BNB. Fail-closed: reverts
+  ///      on a zero oracle price AND on a value that truncates to 0 (else a leg rounding to 0 would
+  ///      silently disable _guardSwapLoss).
   function _oracleValue(address token, uint256 amount) private view returns (uint256) {
     uint256 price = IOracle(oracle).peek(token); // 8-decimal USD
     require(price > 0, OracleZero());
     uint256 dec = token == BNB_ADDRESS ? 18 : IERC20Metadata(token).decimals();
-    return (amount * price) / (10 ** dec);
+    uint256 value = (amount * price) / (10 ** dec);
+    require(value > 0, OracleZero());
+    return value;
   }
 
   // ----------------------------- Withdraw / revenue ----------------------------- //
@@ -282,6 +290,7 @@ contract LiquidationVault is
   }
 
   function setTokenWhitelist(address token, bool status) external onlyRole(MANAGER) {
+    require(token != address(0), ZERO_ADDRESS);
     require(tokenWhitelist[token] != status, WhitelistSameStatus());
     tokenWhitelist[token] = status;
     emit TokenWhitelistChanged(token, status);
@@ -306,9 +315,20 @@ contract LiquidationVault is
     emit MaxSwapLossBpChanged(bp);
   }
 
+  /// @dev Per-UTC-day cumulative loss cap (8-decimal USD). Bounded so 0 can't freeze all loss-incurring
+  ///      sells and a fat-finger can't silently disable the cap.
   function setMaxDailyLossUsd(uint256 usd8) external onlyRole(MANAGER) {
+    require(usd8 >= MIN_DAILY_LOSS_USD && usd8 <= MAX_DAILY_LOSS_USD, InvalidParam());
     maxDailyLossUsd = usd8;
     emit MaxDailyLossUsdChanged(usd8);
+  }
+
+  /// @dev MANAGER operational valve: clear the daily loss accumulator so a single large legitimate sale
+  ///      (or a false trip) doesn't freeze the sell path until the next UTC-day reset.
+  function resetDailyLoss() external onlyRole(MANAGER) {
+    dailyLossDay = block.timestamp / 1 days;
+    dailyLossAccum = 0;
+    emit DailyLossReset(dailyLossDay);
   }
 
   /// @dev Set the revenue collector. Allows 0 (disable). Non-zero must be a contract.

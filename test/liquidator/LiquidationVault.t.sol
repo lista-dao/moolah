@@ -327,4 +327,72 @@ contract LiquidationVaultTest is Test {
     vault.setLiquidator(address(0xBEEF), true);
     assertTrue(vault.liquidators(address(0xBEEF)));
   }
+
+  // ----------------------------- audit fixes ----------------------------- //
+
+  // setTokenWhitelist rejects the zero address.
+  function test_setTokenWhitelist_rejectsZero() public {
+    vm.prank(manager);
+    vm.expectRevert(bytes("zero address"));
+    vault.setTokenWhitelist(address(0), true);
+  }
+
+  // setMaxDailyLossUsd rejects 0 and out-of-bounds, accepts valid.
+  function test_setMaxDailyLossUsd_bounds() public {
+    uint256 tooHigh = vault.MAX_DAILY_LOSS_USD() + 1; // evaluate the getter before arming expectRevert
+    vm.startPrank(manager);
+    vm.expectRevert(LiquidationVault.InvalidParam.selector);
+    vault.setMaxDailyLossUsd(0);
+    vm.expectRevert(LiquidationVault.InvalidParam.selector);
+    vault.setMaxDailyLossUsd(tooHigh);
+    vault.setMaxDailyLossUsd(50_000e8); // valid
+    assertEq(vault.maxDailyLossUsd(), 50_000e8);
+    vm.stopPrank();
+  }
+
+  // MANAGER can reset the daily loss accumulator; non-manager cannot.
+  function test_resetDailyLoss() public {
+    vm.prank(manager);
+    vault.setMaxDailyLossUsd(1e8);
+    tokenA.setBalance(address(vault), 1000e18);
+    tokenB.setBalance(address(router), 1000e18);
+    // accrue a small loss
+    vm.prank(bot);
+    vault.sellToken(
+      address(router),
+      address(router),
+      address(tokenA),
+      address(tokenB),
+      100e18,
+      0,
+      _fairSwapData(100e18, 99e18)
+    );
+    assertEq(vault.dailyLossAccum(), 1e8);
+
+    vm.prank(stranger);
+    vm.expectRevert();
+    vault.resetDailyLoss();
+
+    vm.prank(manager);
+    vault.resetDailyLoss();
+    assertEq(vault.dailyLossAccum(), 0);
+  }
+
+  // a swap whose oracle value truncates to 0 fails closed (does not silently bypass the guard).
+  function test_sellToken_valueRoundsToZeroFailsClosed() public {
+    tokenA.setBalance(address(vault), 100e18);
+    tokenB.setBalance(address(router), 100e18);
+    // amountOut = 1e9: with price 1e8 and 18 decimals, value = 1e9*1e8/1e18 = 0 -> must revert OracleZero.
+    vm.prank(bot);
+    vm.expectRevert(LiquidationVault.OracleZero.selector);
+    vault.sellToken(
+      address(router),
+      address(router),
+      address(tokenA),
+      address(tokenB),
+      100e18,
+      0,
+      _fairSwapData(100e18, 1e9)
+    );
+  }
 }

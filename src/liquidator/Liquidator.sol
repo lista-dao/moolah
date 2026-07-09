@@ -301,7 +301,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     require(actualAmountIn <= amountIn, ExceedAmount());
     require(actualAmountOut >= amountOutMin, NoProfit());
 
-    emit SellToken(pair, pair, BNB_ADDRESS, tokenOut, amountIn, actualAmountOut);
+    emit SellToken(pair, pair, BNB_ADDRESS, tokenOut, actualAmountIn, actualAmountOut);
   }
 
   /// @dev flash liquidates a position.
