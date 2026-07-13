@@ -16,11 +16,14 @@ interface IRevenueCollector {
 }
 
 /// @dev Step 4 of rollout — the MULTISIG batch that cuts the live liquidators over to the vault and
-///      migrates their reserves. On mainnet MANAGER is the 3/6 Safe, so these calls must be one atomic
-///      Safe transaction (not a single deployer broadcast). Ordering is enforced:
-///        1. vault.setLiquidator(liq, true)      [vault MANAGER]  — must precede setFundSource
-///        2. liq.setFundSource(vault)            [liquidator MANAGER]
-///        3. vault.collectERC20/ETH(liq, ...)    [vault MANAGER/BOT] — migrate the live reserve
+///      migrates their reserves. Every call here touches an ALREADY-LIVE contract (Liquidator,
+///      BrokerLiquidator, RevenueCollector) whose MANAGER is the 3/6 Safe, so these must be one atomic
+///      Safe transaction (not a deployer broadcast). vault.setLiquidator is NOT here — it is a vault-side
+///      op done earlier by the deployer in the config script. Ordering:
+///        1. liq.setFundSource(vault)               [liquidator MANAGER]
+///        2. liq.setReflowBlacklist(LP, true)       [liquidator MANAGER]
+///        3. RevenueCollector.updateLiquidator(vault) [collector MANAGER]
+///        4. vault.collectERC20/ETH(liq, ...)       [vault MANAGER/BOT] — migrate the live reserve
 ///      Reserve amounts are read from LIVE balances at execution time — never hardcoded,
 ///      because reflow may already have moved part of a balance into the vault.
 contract LiquidationVaultWire is DeployBase {
@@ -48,9 +51,13 @@ contract LiquidationVaultWire is DeployBase {
 
     vm.startBroadcast(pk);
 
-    // 1 + 2: register then point each liquidator at the vault.
-    if (!vault.liquidators(address(liquidator))) vault.setLiquidator(address(liquidator), true);
-    if (!vault.liquidators(address(brokerLiquidator))) vault.setLiquidator(address(brokerLiquidator), true);
+    // 1: point each liquidator at the vault. Vault-side setLiquidator was already done by the deployer
+    //    in the config script (deployer held vault MANAGER); require it so setFundSource can't revert on
+    //    the liquidators' `vault.liquidators(address(this))` guard.
+    require(
+      vault.liquidators(address(liquidator)) && vault.liquidators(address(brokerLiquidator)),
+      "run config script first (setLiquidator)"
+    );
     if (liquidator.fundSource() != address(vault)) liquidator.setFundSource(address(vault));
     if (brokerLiquidator.fundSource() != address(vault)) brokerLiquidator.setFundSource(address(vault));
 

@@ -21,6 +21,12 @@ contract LiquidationVaultConfigDeploy is DeployBase {
   // ---- fill the freshly-deployed vault; guarded so a half-config run reverts ----
   LiquidationVault vault = LiquidationVault(payable(address(0)));
 
+  // Live liquidators to REGISTER on the vault. setLiquidator is a vault-side MANAGER op, so it runs
+  // here (deployer still holds the fresh vault's MANAGER) — and it MUST precede each liquidator's
+  // setFundSource in the multisig wire step, which reverts unless vault.liquidators(liquidator) == true.
+  address liquidator = 0x6a87C15598929B2db22cF68a9a0dDE5Bf297a59a;
+  address brokerLiquidator = 0x3AA647a1e902833b61E503DbBFbc58992daa4868;
+
   // ResilientOracle used by the sell loss guard (peek() -> 8-decimal USD).
   address resilientOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750; // ResilientOracle (mainnet)
   // Revenue collector (DEX fee + liquidation profit). Enabling it ALSO requires the reciprocal
@@ -135,6 +141,13 @@ contract LiquidationVaultConfigDeploy is DeployBase {
       if (!vault.tokenWhitelist(tokens[i])) vault.setTokenWhitelist(tokens[i], true);
     }
     vault.setPairWhitelist(pair, true);
+
+    // register the live liquidators on the vault (allow-list for provideFund + collect*). Vault-side
+    // MANAGER op; precedes the liquidators' setFundSource (multisig wire step).
+    if (liquidator != address(0) && !vault.liquidators(liquidator)) vault.setLiquidator(liquidator, true);
+    if (brokerLiquidator != address(0) && !vault.liquidators(brokerLiquidator)) {
+      vault.setLiquidator(brokerLiquidator, true);
+    }
 
     // maxSwapLossBp (5%) / maxDailyLossUsd ($1000) come from initialize(); set an appropriate
     // per-pool value here for mainnet via vault.setMaxDailyLossUsd(...) if desired.
