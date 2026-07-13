@@ -56,6 +56,10 @@ interface ILiquidator {
 
   function setPairWhitelist(address pair, bool status) external;
 
+  function setReflowBlacklist(address token, bool status) external;
+
+  function reflowBlacklist(address token) external view returns (bool);
+
   function marketWhitelist(bytes32 id) external view returns (bool);
 
   function tokenWhitelist(address token) external view returns (bool);

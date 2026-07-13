@@ -11,6 +11,7 @@ import "./ILiquidator.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
+import { ILiquidationVault } from "./ILiquidationVault.sol";
 
 contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
   using MarketParamsLib for IMoolah.MarketParams;
@@ -24,12 +25,21 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
   error WhitelistSameStatus();
   error NotWhitelisted();
   error SwapFailed();
+  error NotAuthorized();
+  error InvalidFundSource();
 
   address public immutable MOOLAH;
   mapping(address => bool) public tokenWhitelist;
   mapping(bytes32 => bool) public marketWhitelist;
   mapping(address => bool) public pairWhitelist;
   mapping(address => bool) public smartProviders;
+  /// @dev Shared liquidation fund pool (LiquidationVault). 0 => legacy behavior (no pull/reflow).
+  ///      Storage appended for the UUPS upgrade; no existing slot is moved.
+  address public fundSource;
+  /// @dev Tokens excluded from reflow to the vault (smart-collateral LP tokens the vault cannot sell).
+  ///      Guards against a wrong-entry plain liquidate seizing LP and pushing it into the vault; the LP
+  ///      stays here as a process holding to be redeemed via redeemSmartCollateral. Storage appended.
+  mapping(address => bool) public reflowBlacklist;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // manager role
@@ -39,6 +49,9 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
   event MarketWhitelistChanged(bytes32 id, bool added);
   event PairWhitelistChanged(address pair, bool added);
   event SmartProvidersChanged(address provider, bool added);
+  event FundSourceChanged(address indexed oldFundSource, address indexed newFundSource);
+  event FundReflowed(address indexed token, uint256 amount);
+  event ReflowBlacklistChanged(address indexed token, bool blacklisted);
   event SellToken(
     address pair,
     address spender,
@@ -78,20 +91,54 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
     _grantRole(MANAGER, manager);
     _grantRole(BOT, bot);
+    _setRoleAdmin(BOT, MANAGER);
+  }
+
+  /// @dev Post-upgrade step for the live proxy: make MANAGER the admin of the BOT role so BOT hot-key
+  ///      rotation is a MANAGER (multisig) action rather than a DEFAULT_ADMIN one. New deployments
+  ///      already set this in initialize; call this via upgradeToAndCall for existing ones.
+  function setBotRoleAdmin() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    _setRoleAdmin(BOT, MANAGER);
   }
 
   receive() external payable {}
 
-  /// @dev withdraws ERC20 tokens.
+  /// @dev withdraws ERC20 tokens. Gate relaxed for the shared fund pool: MANAGER or fundSource
+  ///      (the vault's collectERC20 call). Transfer target stays msg.sender, so the vault collects.
   /// @param token The address of the token.
   /// @param amount The amount to withdraw.
-  function withdrawERC20(address token, uint256 amount) external onlyRole(MANAGER) {
+  function withdrawERC20(address token, uint256 amount) external {
+    require(hasRole(MANAGER, msg.sender) || msg.sender == fundSource, NotAuthorized());
     token.safeTransfer(msg.sender, amount);
   }
-  /// @dev withdraws ETH.
+  /// @dev withdraws ETH. Gate relaxed as withdrawERC20.
   /// @param amount The amount to withdraw.
-  function withdrawETH(uint256 amount) external onlyRole(MANAGER) {
+  function withdrawETH(uint256 amount) external {
+    require(hasRole(MANAGER, msg.sender) || msg.sender == fundSource, NotAuthorized());
     msg.sender.safeTransferETH(amount);
+  }
+
+  /// @dev Sets the shared liquidation fund pool. Allows 0 (grey-scale rollback to legacy
+  ///      behavior). A non-zero fundSource gains withdraw* pull rights, so it must be a contract that
+  ///      has already registered this liquidator (guards against a mis-set address draining assets).
+  /// @param _fundSource The address of the LiquidationVault, or 0 to disable.
+  function setFundSource(address _fundSource) external onlyRole(MANAGER) {
+    if (_fundSource != address(0)) {
+      require(
+        _fundSource.code.length > 0 && ILiquidationVault(_fundSource).liquidators(address(this)),
+        InvalidFundSource()
+      );
+    }
+    emit FundSourceChanged(fundSource, _fundSource);
+    fundSource = _fundSource;
+  }
+
+  /// @dev Adds/removes a token from the reflow blacklist. Blacklisted tokens (smart-collateral LP) are
+  ///      never pushed to the vault; they remain here to be redeemed via redeemSmartCollateral.
+  function setReflowBlacklist(address token, bool status) external onlyRole(MANAGER) {
+    require(token != address(0), ZERO_ADDRESS);
+    reflowBlacklist[token] = status;
+    emit ReflowBlacklistChanged(token, status);
   }
 
   /// @dev sets the token whitelist.
@@ -254,7 +301,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     require(actualAmountIn <= amountIn, ExceedAmount());
     require(actualAmountOut >= amountOutMin, NoProfit());
 
-    emit SellToken(pair, pair, BNB_ADDRESS, tokenOut, amountIn, actualAmountOut);
+    emit SellToken(pair, pair, BNB_ADDRESS, tokenOut, actualAmountIn, actualAmountOut);
   }
 
   /// @dev flash liquidates a position.
@@ -328,6 +375,9 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
         )
       )
     );
+    // reflow the arbitrage profit residue to the vault (no-op when fundSource == 0).
+    _reflow(params.loanToken);
+    _reflow(params.collateralToken);
   }
 
   /// @dev liquidates a position.
@@ -368,6 +418,9 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
         )
       )
     );
+    // reflow leftover balances to the vault (no-op when fundSource == 0).
+    _reflow(params.loanToken);
+    _reflow(params.collateralToken);
   }
 
   /// @dev liquidates a position with smart collateral.
@@ -429,6 +482,10 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     );
 
     emit SmartLiquidation(id, lpToken, params.collateralToken, collAmount, minAmount0, minAmount1, amount0, amount1);
+    // this entry redeemed token0/token1 in the same tx — reflow them plus any loanToken.
+    _reflow(params.loanToken);
+    _reflow(ISmartProvider(smartProvider).token(0));
+    _reflow(ISmartProvider(smartProvider).token(1));
     return (_seizedAssets, _repaidAssets);
   }
 
@@ -480,7 +537,18 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
       swapToken1Data
     );
 
-    return IMoolah(MOOLAH).liquidate(params, borrower, seizedAssets, 0, abi.encode(callback));
+    (uint256 _seizedAssets, uint256 _repaidAssets) = IMoolah(MOOLAH).liquidate(
+      params,
+      borrower,
+      seizedAssets,
+      0,
+      abi.encode(callback)
+    );
+    // reflow token0/token1/loanToken to the vault (native leg handled by _reflow).
+    _reflow(params.loanToken);
+    _reflow(ISmartProvider(smartProvider).token(0));
+    _reflow(ISmartProvider(smartProvider).token(1));
+    return (_seizedAssets, _repaidAssets);
   }
 
   /// @dev redeems smart collateral LP tokens.
@@ -496,7 +564,15 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     uint256 minToken1Amt
   ) external nonReentrant onlyRole(BOT) returns (uint256, uint256) {
     require(smartProviders[smartProvider], NotWhitelisted());
-    return ISmartProvider(smartProvider).redeemLpCollateral(lpAmount, minToken0Amt, minToken1Amt);
+    (uint256 amount0, uint256 amount1) = ISmartProvider(smartProvider).redeemLpCollateral(
+      lpAmount,
+      minToken0Amt,
+      minToken1Amt
+    );
+    // reflow redeemed token0/token1 to the vault (native leg handled by _reflow).
+    _reflow(ISmartProvider(smartProvider).token(0));
+    _reflow(ISmartProvider(smartProvider).token(1));
+    return (amount0, amount1);
   }
 
   /// @dev the function will be called by the Moolah contract when liquidate.
@@ -549,9 +625,40 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
       if (out < repaidAssets) revert NoProfit();
       if (token0 != BNB_ADDRESS) token0.safeApprove(arb.token0Pair, 0);
       if (token1 != BNB_ADDRESS) token1.safeApprove(arb.token1Pair, 0);
+    } else if (fundSource != address(0)) {
+      // normal pre-funded path (no self-funded swap). Pull the exact shortfall from the vault.
+      // repaidAssets is already exact here (Moolah computed it before this callback, before its
+      // transferFrom). Local balance is consumed first, so the vault only tops up the difference.
+      uint256 bal = arb.loanToken.balanceOf(address(this));
+      if (bal < repaidAssets) {
+        ILiquidationVault(fundSource).provideFund(arb.loanToken, repaidAssets - bal);
+      }
     }
 
     arb.loanToken.safeApprove(MOOLAH, repaidAssets);
+  }
+
+  /// @dev Reflow (push) the full balance of `token` to the vault. No-op when fundSource is unset or
+  ///      the balance is zero. `token == BNB_ADDRESS` reflows native BNB via safeTransferETH.
+  function _reflow(address token) private {
+    address _fundSource = fundSource;
+    if (_fundSource == address(0)) return;
+    // Never push blacklisted tokens (smart-collateral LP) to the vault — it cannot sell them. They
+    // stay here as a process holding, recoverable via redeemSmartCollateral.
+    if (reflowBlacklist[token]) return;
+    if (token == BNB_ADDRESS) {
+      uint256 bal = address(this).balance;
+      if (bal > 0) {
+        _fundSource.safeTransferETH(bal);
+        emit FundReflowed(token, bal);
+      }
+    } else {
+      uint256 bal = token.balanceOf(address(this));
+      if (bal > 0) {
+        token.safeTransfer(_fundSource, bal);
+        emit FundReflowed(token, bal);
+      }
+    }
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}

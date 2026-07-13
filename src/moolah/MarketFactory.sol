@@ -344,6 +344,11 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     if (!liquidator.tokenWhitelist(token1)) {
       liquidator.setTokenWhitelist(token1, true);
     }
+    // blacklist the LP collateral from reflow: a wrong-entry plain liquidate must not push un-sellable
+    // LP into the vault. It stays in the liquidator, recoverable via redeemSmartCollateral.
+    if (!liquidator.reflowBlacklist(collateral)) {
+      liquidator.setReflowBlacklist(collateral, true);
+    }
   }
 
   /**

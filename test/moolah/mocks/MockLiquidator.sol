@@ -5,9 +5,14 @@ contract MockLiquidator {
   mapping(address => bool) public tokenWhitelist;
   mapping(bytes32 => bool) public marketWhitelist;
   mapping(address => bool) public smartProviders;
+  mapping(address => bool) public reflowBlacklist;
 
   function setTokenWhitelist(address token, bool status) external {
     tokenWhitelist[token] = status;
+  }
+
+  function setReflowBlacklist(address token, bool status) external {
+    reflowBlacklist[token] = status;
   }
 
   function setMarketWhitelist(bytes32 id, bool status) external {
