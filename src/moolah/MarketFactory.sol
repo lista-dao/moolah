@@ -34,32 +34,33 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
   IBuyBack public immutable buyBack;
   IListaAutoBuyBack public immutable autoBuyBack;
   IPublicLiquidator public immutable publicLiquidator;
-  address public immutable WBNB;
-  address public immutable sliBNB;
-  address public immutable BNBProvider;
-  address public immutable slisBNBProvider;
-  IRateCalculator public immutable rateCalculator;
-  IBrokerLiquidator public immutable brokerLiquidator;
+  address public immutable WBNB; // on ETH: WETH
+  address public immutable sliBNB; // on ETH: not used (address(0))
+  address public immutable BNBProvider; // on ETH: ETHProvider
+  address public immutable slisBNBProvider; // on ETH: not used (address(0))
+  IRateCalculator public rateCalculator;
+  IBrokerLiquidator public brokerLiquidator;
 
   bytes32 public constant OPERATOR = keccak256("OPERATOR");
   bytes32 public constant PAUSER = keccak256("PAUSER");
 
   event BrokerMarketDeployed(FixedTermMarketParams fixedTermMarketParams, Id marketId, address broker);
   event CommonMarketDeployed(MarketParams marketParams, Id marketId);
+  event RateCalculatorUpdated(address indexed oldAddress, address indexed newAddress);
+  event BrokerLiquidatorUpdated(address indexed oldAddress, address indexed newAddress);
+
   /**
    * @dev constructor to set immutable variables
    * @param _moolah The address of the Moolah contract
    * @param _liquidator The address of the Liquidator contract
    * @param _publicLiquidator The address of the PublicLiquidator contract
-   * @param _revenueDistributor The address of the RevenueDistributor contract
-   * @param _buyBack The address of the BuyBack contract
-   * @param _autoBuyBack The address of the AutoBuyBack contract
-   * @param _WBNB The address of the WBNB token
-   * @param _sliBNB The address of the sliBNB token
-   * @param _BNBProvider The address of the BNB provider
-   * @param _slisBNBProvider The address of the slisBNB provider
-   * @param _rateCalculator The address of the rate calculator contract
-   * @param _brokerLiquidator The address of the broker liquidator contract
+   * @param _revenueDistributor The address of the RevenueDistributor contract (on ETH: address(0) if not needed)
+   * @param _buyBack The address of the BuyBack contract (on ETH: address(0) if not needed)
+   * @param _autoBuyBack The address of the AutoBuyBack contract (on ETH: address(0) if not needed)
+   * @param _WBNB The address of the WBNB token (on ETH: WETH address)
+   * @param _sliBNB The address of the sliBNB token (on ETH: address(0))
+   * @param _BNBProvider The address of the BNB provider (on ETH: ETHProvider)
+   * @param _slisBNBProvider The address of the slisBNB provider (on ETH: address(0))
    */
   constructor(
     address _moolah,
@@ -71,23 +72,14 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     address _WBNB,
     address _sliBNB,
     address _BNBProvider,
-    address _slisBNBProvider,
-    address _rateCalculator,
-    address _brokerLiquidator
+    address _slisBNBProvider
   ) {
     // sanity check for constructor arguments
     require(_moolah != address(0), "ZeroAddress");
     require(_liquidator != address(0), "ZeroAddress");
     require(_publicLiquidator != address(0), "ZeroAddress");
-    require(_revenueDistributor != address(0), "ZeroAddress");
-    require(_buyBack != address(0), "ZeroAddress");
-    require(_autoBuyBack != address(0), "ZeroAddress");
     require(_WBNB != address(0), "ZeroAddress");
-    require(_sliBNB != address(0), "ZeroAddress");
     require(_BNBProvider != address(0), "ZeroAddress");
-    require(_slisBNBProvider != address(0), "ZeroAddress");
-    require(_rateCalculator != address(0), "ZeroAddress");
-    require(_brokerLiquidator != address(0), "ZeroAddress");
     // set immutable variables
     moolah = IMoolah(_moolah);
     liquidator = ILiquidator(_liquidator);
@@ -99,8 +91,6 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     sliBNB = _sliBNB;
     BNBProvider = _BNBProvider;
     slisBNBProvider = _slisBNBProvider;
-    rateCalculator = IRateCalculator(_rateCalculator);
-    brokerLiquidator = IBrokerLiquidator(_brokerLiquidator);
 
     _disableInitializers();
   }
@@ -228,17 +218,17 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
       liquidator.setTokenWhitelist(param.collateralToken, true);
     }
     // revenue distributor set token whitelist
-    if (!revenueDistributor.tokenWhitelist(param.loanToken)) {
+    if (address(revenueDistributor) != address(0) && !revenueDistributor.tokenWhitelist(param.loanToken)) {
       address[] memory tokens = new address[](1);
       tokens[0] = param.loanToken;
       revenueDistributor.addTokensToWhitelist(tokens);
     }
     // buyback set token whitelist
-    if (!buyBack.tokenInWhitelist(param.loanToken)) {
+    if (address(buyBack) != address(0) && !buyBack.tokenInWhitelist(param.loanToken)) {
       buyBack.addTokenInWhitelist(param.loanToken);
     }
     // auto buyback set token whitelist
-    if (!autoBuyBack.tokenWhitelist(param.loanToken)) {
+    if (address(autoBuyBack) != address(0) && !autoBuyBack.tokenWhitelist(param.loanToken)) {
       autoBuyBack.setTokenWhitelist(param.loanToken, true);
     }
     // set BNBProvider for BNB markets
@@ -246,7 +236,7 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
       moolah.setProvider(id, BNBProvider, true);
     }
     // set slisBNBProvider for sliBNB markets
-    if (param.collateralToken == sliBNB) {
+    if (slisBNBProvider != address(0) && param.collateralToken == sliBNB) {
       moolah.setProvider(id, slisBNBProvider, true);
     }
     // set supply whitelist
@@ -267,6 +257,8 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
   function _createFixedTermMarket(FixedTermMarketParams memory param) private whenNotPaused returns (Id) {
     IBroker broker = IBroker(param.broker);
     require(param.broker != address(0), "Zero broker address");
+    require(address(rateCalculator) != address(0), "RateCalculator not set");
+    require(address(brokerLiquidator) != address(0), "BrokerLiquidator not set");
 
     // moolah create market
     MarketParams memory marketParam = MarketParams({
@@ -294,7 +286,7 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     broker.toggleLiquidationWhitelist(address(brokerLiquidator), true);
 
     // set slisBNBProvider for sliBNB markets
-    if (param.collateralToken == sliBNB) {
+    if (slisBNBProvider != address(0) && param.collateralToken == sliBNB) {
       moolah.setProvider(id, slisBNBProvider, true);
     }
 
@@ -349,6 +341,26 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     if (!liquidator.reflowBlacklist(collateral)) {
       liquidator.setReflowBlacklist(collateral, true);
     }
+  }
+
+  /**
+   * @dev Set the rate calculator address
+   * @param _rateCalculator The address of the rate calculator contract
+   */
+  function setRateCalculator(address _rateCalculator) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    require(_rateCalculator != address(0), "ZeroAddress");
+    emit RateCalculatorUpdated(address(rateCalculator), _rateCalculator);
+    rateCalculator = IRateCalculator(_rateCalculator);
+  }
+
+  /**
+   * @dev Set the broker liquidator address
+   * @param _brokerLiquidator The address of the broker liquidator contract
+   */
+  function setBrokerLiquidator(address _brokerLiquidator) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    require(_brokerLiquidator != address(0), "ZeroAddress");
+    emit BrokerLiquidatorUpdated(address(brokerLiquidator), _brokerLiquidator);
+    brokerLiquidator = IBrokerLiquidator(_brokerLiquidator);
   }
 
   /**
