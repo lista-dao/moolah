@@ -18,8 +18,16 @@ methods {
     function Util.libId(MoolahHarness.MarketParams) external returns MoolahHarness.Id envfree;
     function isHealthy(MoolahHarness.MarketParams, address user) external returns bool envfree;
 
-    function _.price() external => CONSTANT;
+    function _.peek(address token) external => ghostPrice[calledContract][token] expect uint256;
+    function _.decimals() external => ghostDecimals[calledContract] expect uint8;
     function UtilsLib.min(uint256 a, uint256 b) internal returns uint256 => summaryMin(a, b);
+}
+
+// Oracle price per (oracle, token), stable within a rule.
+ghost mapping(address => mapping(address => uint256)) ghostPrice;
+
+ghost mapping(address => uint8) ghostDecimals {
+    axiom forall address token. ghostDecimals[token] <= 18;
 }
 
 function summaryMin(uint256 a, uint256 b) returns uint256 {
