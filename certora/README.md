@@ -391,8 +391,9 @@ they do not prove anything about broker- or provider-managed markets.
 
 # Running the prover from a PR (CI)
 
-Verification runs on a self-hosted runner using the open-source Certora Prover
-image (`ghcr.io/lista-dao/certora-local`) — fully local, no CERTORAKEY, no cloud.
+Verification runs on GitHub-hosted runners (free for public repos, 4 vCPU /
+16 GB each) using the open-source Certora Prover image
+(`ghcr.io/lista-dao/certora-local`) — no CERTORAKEY, no Certora cloud.
 The workflow is `.github/workflows/certora.yml`.
 
 ## Usage
@@ -408,31 +409,36 @@ Comment on any PR (requires write access to the repo):
 The bot reacts with 👀, replies with a link to the run, and when done posts a
 result table (per conf: ✅/❌, verified/violated rule counts, violated rule
 names). Full HTML reports (`FinalResults.html`, one row per rule/invariant
-with counterexample call traces) are attached to the run as the
-`certora-reports-*` artifact. Any violation turns the check red.
+with counterexample call traces) are attached to the run as one
+`certora-<conf>-*` artifact per conf. Any violation turns the check red.
 
 Manual runs: Actions → certora → *Run workflow* (works on any branch that
 contains the workflow file; the comment command only works once the workflow
 is on `master`).
 
-Expect roughly an hour per heavy conf (`ConsistentState` ≈ 73 min on a 6 GB
-container); confs run sequentially on the runner.
+Confs fan out as a matrix — each conf gets its own runner and they all run in
+parallel, so wall-clock time is the slowest conf, not the sum. Expect roughly
+1–3 h for heavy confs (`ConsistentState` ≈ 73 min on a comparable 4-core box);
+the hosted-runner hard limit is 6 h per conf — if a conf hits it (e.g.
+`StayHealthy`-class specs), split it with a `"rule": [...]` filter.
 
 Note: the CI localizes the cloud confs on the fly (drops `server`, renames
 `solc-X.Y.Z` to the image's `solcX.Y.Z`, adds a JVM heap) — the files in
 `certora/confs/` stay in cloud format and still work with `certoraRun` +
 CERTORAKEY if needed.
 
-## Runner / image operations
+## Operations
 
-- The runner is registered under Settings → Actions → Runners with the
-  `certora` label, and needs `git` and `docker` installed. Verification runs
-  as the runner's uid inside the container; the workspace stays owned by the
-  runner user.
+- Hosted runners are free only while this repo is public; if it ever goes
+  private, minutes are billed (and drop to 2-core machines) — revisit the
+  runner strategy then.
+- The workflow pulls `ghcr.io/lista-dao/certora-local:latest` with the
+  workflow's `GITHUB_TOKEN`; the GHCR package must stay public or keep this
+  repo granted read access in its package settings.
 - Update the prover image by rebuilding it (see the certora-docker project)
   and pushing to `ghcr.io/lista-dao/certora-local:latest`; jobs pull on every
   run.
 - Memory/heap knobs live in the workflow's `env` block (`CONTAINER_MEM`,
-  `JAVA_HEAP`) — raise them together if the runner host has RAM to spare.
+  `JAVA_HEAP`), sized for the 16 GB hosted runners.
 - If a PR has merge conflicts, the `refs/pull/N/merge` checkout fails —
   resolve conflicts first, then re-comment.
