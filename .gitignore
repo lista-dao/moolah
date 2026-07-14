@@ -9,6 +9,7 @@ out-certora/
 # Certora prover artifacts
 .certora_internal/
 emv-*-certora-*/
+certora-ci/
 
 # Ignores development broadcast logs
 !/broadcast

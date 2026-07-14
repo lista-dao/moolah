@@ -388,3 +388,51 @@ they do not prove anything about broker- or provider-managed markets.
   Morpho Blue and are not covered by the migrated specs.
 - **Per-rule review.** Each spec should be re-checked against Moolah's actual function set and
   semantics; method blocks may reference functions whose signatures or behavior diverged.
+
+# Running the prover from a PR (CI)
+
+Verification runs on a self-hosted runner using the open-source Certora Prover
+image (`ghcr.io/lista-dao/certora-local`) — fully local, no CERTORAKEY, no cloud.
+The workflow is `.github/workflows/certora.yml`.
+
+## Usage
+
+Comment on any PR (requires write access to the repo):
+
+```
+/certora ConsistentState            # one conf
+/certora ConsistentState Health     # several confs
+/certora all                        # every conf in certora/confs/
+```
+
+The bot reacts with 👀, replies with a link to the run, and when done posts a
+result table (per conf: ✅/❌, verified/violated rule counts, violated rule
+names). Full HTML reports (`FinalResults.html`, one row per rule/invariant
+with counterexample call traces) are attached to the run as the
+`certora-reports-*` artifact. Any violation turns the check red.
+
+Manual runs: Actions → certora → *Run workflow* (works on any branch that
+contains the workflow file; the comment command only works once the workflow
+is on `master`).
+
+Expect roughly an hour per heavy conf (`ConsistentState` ≈ 73 min on a 6 GB
+container); confs run sequentially on the runner.
+
+Note: the CI localizes the cloud confs on the fly (drops `server`, renames
+`solc-X.Y.Z` to the image's `solcX.Y.Z`, adds a JVM heap) — the files in
+`certora/confs/` stay in cloud format and still work with `certoraRun` +
+CERTORAKEY if needed.
+
+## Runner / image operations
+
+- The runner is registered under Settings → Actions → Runners with the
+  `certora` label, and needs `git` and `docker` installed. Verification runs
+  as the runner's uid inside the container; the workspace stays owned by the
+  runner user.
+- Update the prover image by rebuilding it (see the certora-docker project)
+  and pushing to `ghcr.io/lista-dao/certora-local:latest`; jobs pull on every
+  run.
+- Memory/heap knobs live in the workflow's `env` block (`CONTAINER_MEM`,
+  `JAVA_HEAP`) — raise them together if the runner host has RAM to spare.
+- If a PR has merge conflicts, the `refs/pull/N/merge` checkout fails —
+  resolve conflicts first, then re-comment.
