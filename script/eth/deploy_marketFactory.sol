@@ -13,7 +13,7 @@ contract MarketFactoryDeploy is DeployBase {
   address moolah = 0xf820fB4680712CD7263a0D3D024D5b5aEA82Fd70; // ETH Moolah Core
   address liquidator = 0x5Bf5c3B5f5c29dBC647d2557Cc22B00ED29f301C; // ETH Liquidator
   address publicLiquidator = 0x796302e041d1715a8b1f16Fd7d7CBA38bb031DE5; // ETH PublicLiquidator
-  address listaRevenueDistributor = address(0); // TODO: deploy ListaRevenueDistributor first, then fill address here
+  address listaRevenueDistributor = 0x0fe5741e8dFe53618c4056F745fad531118640D9; // ETH ListaRevenueDistributor proxy (deployed)
   address buyback = address(0); // not used on ETH, no buyback mechanism
   address autoBuyback = address(0); // not used on ETH, no auto buyback mechanism
   address WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2; // WETH on ETH (corresponds to WBNB on BSC)
