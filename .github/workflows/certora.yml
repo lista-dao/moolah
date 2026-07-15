@@ -174,7 +174,7 @@ jobs:
           # Localize the cloud conf for the local prover: drop the cloud
           # `server` key, map solc binary names (solc-X.Y.Z -> solcX.Y.Z, the
           # naming used inside the image), and give the JVM a real heap.
-          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e JAVA_HEAP -e NAME \
+          docker run --rm -i --user "$(id -u):$(id -g)" -e HOME=/tmp -e JAVA_HEAP -e NAME \
             -v "$PWD":/ws -w /ws "$IMAGE" python3 - <<'EOF'
           import json, os
           name = os.environ["NAME"]
