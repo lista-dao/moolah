@@ -252,8 +252,10 @@ jobs:
           overall=0
           found=0
           details=""
-          for f in certora-ci/result-*.txt; do
-            [ -f "$f" ] || continue
+          # upload-artifact v4 roots the archive at the files' common parent,
+          # so result files land without their certora-ci/ prefix — find them
+          # wherever they extracted to.
+          for f in $(find . -name "result-*.txt" -type f | sort); do
             found=1
             read -r name status verified violated < "$f"
             icon=$([ "$status" = "PASS" ] && echo "✅" || echo "❌")
