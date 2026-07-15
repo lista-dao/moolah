@@ -4,6 +4,12 @@ node_modules
 # Compiler files
 cache/
 out/
+out-certora/
+
+# Certora prover artifacts
+.certora_internal/
+emv-*-certora-*/
+certora-ci/
 
 # Ignores development broadcast logs
 !/broadcast

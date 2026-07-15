@@ -1,0 +1,270 @@
+# Certora formal verification, triggered by PR comment:
+#
+#   /certora ConsistentState            run one conf
+#   /certora ConsistentState Health     run several
+#   /certora all                        run every conf in certora/confs/
+#
+# Runs on GitHub-hosted runners (free for public repos, 4 vCPU / 16 GB) using
+# the locally-built open-source Certora Prover image
+# (ghcr.io/lista-dao/certora-local) — no CERTORAKEY, no Certora cloud.
+# Confs fan out as a matrix, one runner each, so wall-clock time is the
+# slowest conf rather than the sum. Results are posted back to the PR as a
+# comment; full HTML reports are uploaded as artifacts.
+#
+# Security notes:
+# - issue_comment workflows always execute the definition from the default
+#   branch, so a PR cannot tamper with this pipeline.
+# - Only OWNER/MEMBER/COLLABORATOR comments trigger a run; the PR code only
+#   runs inside the prover container.
+name: certora
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      confs:
+        description: "Space-separated conf names (see certora/confs/) or 'all'"
+        required: false
+        default: "ConsistentState"
+
+permissions:
+  contents: read
+  pull-requests: write
+  packages: read
+
+concurrency:
+  group: certora-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/lista-dao/certora-local:latest
+  # Hosted runners have 16 GB; leave headroom for the runner agent itself.
+  CONTAINER_MEM: 12g
+  JAVA_HEAP: -Xmx6g
+
+jobs:
+  prepare:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request &&
+       startsWith(github.event.comment.body, '/certora') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    outputs:
+      confs: ${{ steps.expand.outputs.json }}
+    steps:
+      - name: Parse command
+        id: cmd
+        env:
+          # Passed via env (not inline interpolation) to avoid shell injection
+          # from comment bodies.
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          INPUT_CONFS: ${{ inputs.confs }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            args="$INPUT_CONFS"
+          else
+            args="$(printf '%s\n' "$COMMENT_BODY" | head -1 | sed 's|^/certora||')"
+          fi
+          args=$(echo $args)  # trim/collapse whitespace
+          [ -n "$args" ] || args="all"
+          if ! printf '%s' "$args" | grep -Eq '^[A-Za-z0-9_. -]+$'; then
+            echo "invalid characters in conf list: $args" >&2; exit 1
+          fi
+          echo "confs=$args" | tee -a "$GITHUB_OUTPUT"
+
+      # Cheap checkout (no submodules) just to list/validate conf names.
+      - name: Checkout (confs only)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/merge', github.event.issue.number) || github.ref }}
+          fetch-depth: 1
+
+      - name: Expand and validate conf list
+        id: expand
+        env:
+          CONFS: ${{ steps.cmd.outputs.confs }}
+        run: |
+          cd certora/confs
+          available=$(ls *.conf | sed 's/\.conf$//')
+          if [ "$CONFS" = "all" ]; then
+            list="$available"
+          else
+            list=""
+            for n in $CONFS; do
+              if [ -f "$n.conf" ]; then
+                list="$list $n"
+              else
+                echo "unknown=$n" >> "$GITHUB_OUTPUT"
+                {
+                  echo "available<<EOF"
+                  echo "$available"
+                  echo "EOF"
+                } >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            done
+          fi
+          echo "json=$(echo $list | tr ' ' '\n' | jq -R . | jq -cs .)" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Reply usage on unknown conf
+        if: steps.expand.outputs.unknown != ''
+        uses: actions/github-script@v7
+        env:
+          UNKNOWN: ${{ steps.expand.outputs.unknown }}
+          AVAILABLE: ${{ steps.expand.outputs.available }}
+        with:
+          script: |
+            if (context.eventName === 'issue_comment') {
+              const { owner, repo } = context.repo;
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: context.issue.number,
+                body: `❓ Unknown conf \`${process.env.UNKNOWN}\`. Usage: \`/certora <ConfName ...>\` or \`/certora all\`.\n` +
+                      `Available confs:\n\`\`\`\n${process.env.AVAILABLE}\n\`\`\``,
+              });
+            }
+            core.setFailed(`unknown conf: ${process.env.UNKNOWN}`);
+
+      - name: Acknowledge comment
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        env:
+          CONFS: ${{ steps.cmd.outputs.confs }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            await github.rest.reactions.createForIssueComment({
+              owner, repo, comment_id: context.payload.comment.id, content: 'eyes',
+            });
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: context.issue.number,
+              body: `🔬 Certora verification started for \`${process.env.CONFS}\` — [watch the run](${runUrl}). ` +
+                    `Confs run in parallel; heavy specs can take 1-3h.`,
+            });
+
+  verify:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        conf: ${{ fromJSON(needs.prepare.outputs.confs) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Checkout PR merge result
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/merge', github.event.issue.number) || github.ref }}
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Pull prover image
+        run: |
+          docker login ghcr.io -u "${{ github.actor }}" -p "${{ github.token }}"
+          docker pull "$IMAGE"
+
+      - name: Run certoraRun (${{ matrix.conf }})
+        env:
+          NAME: ${{ matrix.conf }}
+        run: |
+          set -o pipefail
+          mkdir -p certora-ci/logs
+          # Localize the cloud conf for the local prover: drop the cloud
+          # `server` key, map solc binary names (solc-X.Y.Z -> solcX.Y.Z, the
+          # naming used inside the image), and give the JVM a real heap.
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e JAVA_HEAP -e NAME \
+            -v "$PWD":/ws -w /ws "$IMAGE" python3 - <<'EOF'
+          import json, os
+          name = os.environ["NAME"]
+          c = json.load(open(f"certora/confs/{name}.conf"))
+          c.pop("server", None)
+          if "solc" in c:
+              c["solc"] = c["solc"].replace("solc-", "solc")
+          c["java_args"] = os.environ.get("JAVA_HEAP", "-Xmx6g")
+          json.dump(c, open(f"certora-ci/{name}.conf", "w"), indent=2)
+          EOF
+          status=PASS
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -m "$CONTAINER_MEM" -v "$PWD":/ws -w /ws "$IMAGE" \
+            certoraRun.py "certora-ci/$NAME.conf" 2>&1 | tee "certora-ci/logs/$NAME.log" || status=FAIL
+          log="certora-ci/logs/$NAME.log"
+          verified=$(grep -E "^Verified:" "$log" | grep -vE "not_vacuous|not_trivial" | sort -u | wc -l | tr -d ' ')
+          violated=$(grep -E "^Violated:" "$log" | grep -vE "not_vacuous|not_trivial" | sort -u | wc -l | tr -d ' ')
+          {
+            echo "$NAME $status $verified $violated"
+            grep -E "^Violated:" "$log" | grep -vE "not_vacuous|not_trivial" | sort -u || true
+          } > "certora-ci/result-$NAME.txt"
+          [ "$status" = "PASS" ] || { echo "conf $NAME reported violations or errors" >&2; exit 1; }
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: certora-${{ matrix.conf }}-${{ github.run_id }}
+          path: |
+            emv-*/Reports/
+            certora-ci/logs/
+            certora-ci/result-*.txt
+          retention-days: 14
+          if-no-files-found: warn
+
+  report:
+    needs: [prepare, verify]
+    if: always() && needs.prepare.result == 'success' && needs.verify.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: certora-*-${{ github.run_id }}
+          merge-multiple: true
+
+      - name: Aggregate summary
+        id: agg
+        run: |
+          {
+            echo "## Certora verification"
+            echo ""
+            echo "| conf | status | verified | violated |"
+            echo "|------|--------|----------|----------|"
+          } > summary.md
+          overall=0
+          details=""
+          for f in certora-ci/result-*.txt; do
+            [ -f "$f" ] || continue
+            read -r name status verified violated < "$f"
+            icon=$([ "$status" = "PASS" ] && echo "✅" || echo "❌")
+            echo "| $name | $icon $status | $verified | $violated |" >> summary.md
+            if [ "$status" != "PASS" ]; then
+              overall=1
+              body=$(tail -n +2 "$f")
+              [ -n "$body" ] && details="$details\n### ❌ $name — violated rules\n\`\`\`\n$body\n\`\`\`"
+            fi
+          done
+          [ -n "$details" ] && printf "%b\n" "$details" >> summary.md
+          echo "" >> summary.md
+          echo "_Full HTML reports (FinalResults.html with per-rule counterexamples) are attached as run artifacts, one per conf._" >> summary.md
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          echo "overall=$overall" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Post results to PR
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const body = fs.readFileSync('summary.md', 'utf8') +
+              `\n[Run & artifacts](${runUrl})`;
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: context.issue.number, body,
+            });
+
+      - name: Fail on violations
+        if: steps.agg.outputs.overall == '1'
+        run: |
+          echo "one or more confs reported violations (see summary)" >&2
+          exit 1

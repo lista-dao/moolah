@@ -23,6 +23,19 @@ force = false
 build_info = false
 extra_output = []
 
+# Compiles the Certora harnesses (certora/helpers, certora/dispatch) against src/.
+# Usage: FOUNDRY_PROFILE=certora forge build
+[profile.certora]
+src = "certora"
+out = "out-certora"
+force = false
+build_info = false
+extra_output = []
+ffi = false
+optimizer_runs = 200
+bytecode_hash = "none"
+evm_version = "cancun"
+
 [rpc_endpoints]
 bsc_testnet = "${BSC_TESTNET_RPC_URL}"
 bsc = "${BSC_RPC_URL}"
