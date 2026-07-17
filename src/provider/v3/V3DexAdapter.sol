@@ -108,8 +108,16 @@ abstract contract V3DexAdapter is
   ///      this slippage on the converted leg. Default 50_000 = 5%.
   uint256 public maxSwapLossBp;
 
+  /// @dev Max allowed |pool spot − fair| price deviation (bps of price) for adding liquidity at the pool
+  ///      spot: the compound (permissionless) and the rebalance re-mint both call increaseLiquidity/mint
+  ///      with amountMin = 0 at the pool spot, so a flash-loan that skews spot could make the vault add
+  ///      liquidity at a manipulated price and get sandwiched on the attacker's back-swap. fairSqrtPriceX96
+  ///      is rate-anchored (flash-loan-immune for the LST pairs), so gating spot against it neutralises
+  ///      that vector. 0 disables the gate. Default INITIAL_RANGE_BPS (1%).
+  uint256 public maxSpotDeviationBps;
+
   /// @dev Reserved storage for future base variables (keep subclass storage stable on upgrade).
-  uint256[46] private __gap;
+  uint256[45] private __gap;
 
   /* ───────────────────────────── events ───────────────────────────── */
 
@@ -122,6 +130,8 @@ abstract contract V3DexAdapter is
   event Rebalanced(int24 oldTickLower, int24 oldTickUpper, int24 newTickLower, int24 newTickUpper, uint256 newTokenId);
   event SwapPairWhitelistSet(address indexed swapPair, bool status);
   event MaxSwapLossBpChanged(uint256 maxSwapLossBp);
+  event MaxSpotDeviationBpsChanged(uint256 maxSpotDeviationBps);
+  event CompoundSkippedSpotDeviated(uint160 spotSqrtPriceX96, uint160 fairSqrtPriceX96);
 
   /* ───────────────────────────── errors ───────────────────────────── */
 
@@ -205,6 +215,9 @@ abstract contract V3DexAdapter is
 
     maxSwapLossBp = 50_000; // 5% (ppm) — per-swap rate-anchored loss cap
     emit MaxSwapLossBpChanged(maxSwapLossBp);
+
+    maxSpotDeviationBps = INITIAL_RANGE_BPS; // 1% — spot-vs-fair gate for adding liquidity at pool spot
+    emit MaxSpotDeviationBpsChanged(maxSpotDeviationBps);
   }
 
   /// @notice Wire the vault that may drive this adapter. One-time, admin-only.
@@ -317,6 +330,14 @@ abstract contract V3DexAdapter is
     if (_centerRateThresholdBps > BPS) revert InvalidThreshold();
     centerRateThresholdBps = _centerRateThresholdBps;
     emit CenterRateThresholdChanged(_centerRateThresholdBps);
+  }
+
+  /// @notice Set the max |pool spot − fair| price deviation (bps) tolerated when adding liquidity at the
+  ///         pool spot (compound + rebalance re-mint). 0 disables the gate. onlyRole MANAGER.
+  function setMaxSpotDeviationBps(uint256 _maxSpotDeviationBps) external onlyRole(MANAGER) {
+    if (_maxSpotDeviationBps > BPS) revert InvalidThreshold();
+    maxSpotDeviationBps = _maxSpotDeviationBps;
+    emit MaxSpotDeviationBpsChanged(_maxSpotDeviationBps);
   }
 
   /// @notice Whitelist (or remove) a swap venue the rebalance inventory conversion may call. Backend-built
@@ -476,6 +497,22 @@ abstract contract V3DexAdapter is
     (sqrtPriceX96, ) = IV3PoolMinimal(POOL).slot0();
   }
 
+  /// @dev True when the pool spot price is within `maxSpotDeviationBps` (bps of price) of the fair price.
+  ///      Prices are compared in Q96 space (price = sqrtPriceX96^2 / 2^96) via FullMath, overflow-safe.
+  ///      `maxSpotDeviationBps == 0` disables the gate. `fair` is rate-anchored (flash-loan-immune for the
+  ///      LST pairs), so this refuses adding liquidity at a spot a flash-loan skewed away from fair.
+  function _spotWithinFair() internal view returns (bool) {
+    uint256 dev = maxSpotDeviationBps;
+    if (dev == 0) return true;
+    uint256 fair = uint256(fairSqrtPriceX96());
+    uint256 spot = uint256(spotSqrtPriceX96());
+    uint256 priceFair = FullMath.mulDiv(fair, fair, 1 << 96);
+    uint256 priceSpot = FullMath.mulDiv(spot, spot, 1 << 96);
+    uint256 lo = FullMath.mulDiv(priceFair, BPS - dev, BPS);
+    uint256 hi = FullMath.mulDiv(priceFair, BPS + dev, BPS);
+    return priceSpot >= lo && priceSpot <= hi;
+  }
+
   /// @inheritdoc IV3DexAdapter
   function previewAddLiquidity(
     uint256 amount0Desired,
@@ -526,6 +563,19 @@ abstract contract V3DexAdapter is
     uint256 toCompound0 = fees0 + idleToken0;
     uint256 toCompound1 = fees1 + idleToken1;
     if (toCompound0 == 0 && toCompound1 == 0) return;
+
+    // Never add liquidity at a manipulated pool spot. This compound runs (permissionlessly) as a
+    // side effect of deposit/withdraw/redeemShares with amountMin = 0, so a flash-loan that skews spot
+    // could make the vault add liquidity at a bad price and get sandwiched on the back-swap. fair is
+    // rate-anchored, so if spot deviates from it we SKIP the re-add (not revert — must not brick the
+    // user's hot-path op) and hold the collected fees as idle (valued at fair, unexposed) until a later
+    // compound when spot ~= fair.
+    if (!_spotWithinFair()) {
+      idleToken0 = toCompound0;
+      idleToken1 = toCompound1;
+      emit CompoundSkippedSpotDeviated(spotSqrtPriceX96(), fairSqrtPriceX96());
+      return;
+    }
 
     (uint128 liquidityAdded, uint256 used0, uint256 used1) = V3PositionLib.increaseLiquidity(
       POSITION_MANAGER,

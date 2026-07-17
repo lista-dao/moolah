@@ -495,6 +495,16 @@ abstract contract V3Provider is
     if (msg.sender != ADAPTER) revert NotAdapter();
   }
 
+  /// @notice Permissionlessly collect and compound accrued swap fees back into the position.
+  /// @dev Lets keepers sweep fees on a regular cadence instead of only as a side effect of user actions,
+  ///      so fees never accumulate into a large amount that could be sandwiched, and so buy-and-hold
+  ///      vaults keep compounding. Safe to leave permissionless: the adapter's
+  ///      _collectAndCompound self-gates on the spot-vs-fair deviation and simply skips the re-add (holding
+  ///      fees as idle) when the pool spot is manipulated, so a caller cannot force a bad-price compound.
+  function compound() external nonReentrant {
+    IV3DexAdapter(ADAPTER).collectAndCompound();
+  }
+
   /* ─────────────────── rebalance loss guard (NAV + daily caps) ──────────────── */
 
   /// @notice Set the per-rebalance fair-NAV loss cap, in ppm (LOSS_DENOM = 1e6). onlyRole MANAGER.

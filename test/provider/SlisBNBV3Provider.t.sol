@@ -2233,4 +2233,63 @@ contract SlisBNBV3ProviderTest is Test {
     vm.expectRevert(V3DexAdapter.SwapLossTooHigh.selector);
     provider.rebalance(0, 0, 0, block.timestamp, data);
   }
+
+  /* ───────────── Spot-vs-fair gate when adding liquidity at pool spot ───────────── */
+
+  function test_spotDeviationGate_defaults() public view {
+    assertEq(adapter.maxSpotDeviationBps(), 100, "default spot-deviation gate = 1%");
+  }
+
+  function test_setMaxSpotDeviationBps_accessAndCaps() public {
+    vm.prank(manager);
+    adapter.setMaxSpotDeviationBps(250);
+    assertEq(adapter.maxSpotDeviationBps(), 250);
+
+    vm.prank(manager);
+    vm.expectRevert(V3DexAdapter.InvalidThreshold.selector);
+    adapter.setMaxSpotDeviationBps(10_001); // > BPS
+
+    vm.expectRevert(); // non-manager
+    adapter.setMaxSpotDeviationBps(50);
+  }
+
+  /// @dev Give the adapter idle inventory to compound (mirrors test_deposit_afterIdle…).
+  function _injectIdle(uint256 idle0, uint256 idle1) internal {
+    deal(SLISBNB, address(adapter), IERC20(SLISBNB).balanceOf(address(adapter)) + idle0);
+    deal(WBNB, address(adapter), IERC20(WBNB).balanceOf(address(adapter)) + idle1);
+    stdstore.target(address(adapter)).sig("idleToken0()").checked_write(adapter.idleToken0() + idle0);
+    stdstore.target(address(adapter)).sig("idleToken1()").checked_write(adapter.idleToken1() + idle1);
+  }
+
+  /// @dev Push the pool spot far above the rate-anchored fair price (sell WBNB/token1 → slisBNB/token0).
+  function _skewSpotUp() internal {
+    PoolSwapper swapper = new PoolSwapper();
+    deal(WBNB, address(swapper), 120_000 ether);
+    swapper.swapExactIn(POOL, false, 100_000 ether);
+  }
+
+  function test_compoundSkipsWhenSpotManipulated() public {
+    _deposit(user, 10 ether, 10 ether);
+    _injectIdle(1 ether, 50 ether);
+
+    uint128 liqBefore = adapter.totalLiquidity();
+    _skewSpotUp();
+
+    // Permissionless compound must SKIP the re-add at the manipulated spot (no new liquidity minted).
+    provider.compound();
+
+    assertEq(adapter.totalLiquidity(), liqBefore, "compound must not add liquidity at a manipulated spot");
+    assertGe(adapter.idleToken1(), 50 ether, "collected fees + old idle held as idle, never minted");
+  }
+
+  function test_compoundProceedsWhenSpotNearFair() public {
+    _deposit(user, 10 ether, 10 ether);
+    _injectIdle(1 ether, 50 ether);
+
+    uint128 liqBefore = adapter.totalLiquidity();
+    // No skew: the live pool spot ~ rate (fair) at the fork block, so the gate lets the compound through.
+    provider.compound();
+
+    assertGt(adapter.totalLiquidity(), liqBefore, "compound should add liquidity when spot ~ fair");
+  }
 }

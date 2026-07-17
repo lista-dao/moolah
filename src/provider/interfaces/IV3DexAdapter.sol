@@ -135,6 +135,12 @@ interface IV3DexAdapter {
   /// @notice Set the per-swap rate-anchored loss cap (onlyRole MANAGER; ppm, 1e6 = 100%).
   function setMaxSwapLossBp(uint256 maxSwapLossBp) external;
 
+  /// @notice Max |pool spot − fair| price deviation (bps) tolerated when adding liquidity at pool spot.
+  function maxSpotDeviationBps() external view returns (uint256);
+
+  /// @notice Set the spot-vs-fair deviation gate (onlyRole MANAGER; bps of price, 0 disables).
+  function setMaxSpotDeviationBps(uint256 maxSpotDeviationBps) external;
+
   /// @notice Recenter the position to its range and convert inventory to the optimal ratio.
   ///         onlyProvider — the provider gates the caller with the BOT role.
   function rebalance(
