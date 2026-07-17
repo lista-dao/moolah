@@ -230,6 +230,19 @@ contract V3LiquidatorTest is Test {
     );
   }
 
+  /// @dev Mock collateral oracle to `bps`/10000 of its real price — unhealthy (borrowed at 60% LTV vs a
+  ///      70% LLTV survives only down to ~86% of original price) but, unlike `_makeUnhealthy` (price=0),
+  ///      leaves `seizedAssetsQuoted` (and thus `repaidAssets`) genuinely positive so tests can exercise
+  ///      the NoProfit profitability check on a real repayment amount instead of a trivial ~0 one.
+  function _makeUnhealthyPartial(uint256 bps) internal {
+    uint256 originalPrice = providerOracle.peek(address(provider));
+    vm.mockCall(
+      address(providerOracle),
+      abi.encodeWithSelector(IOracle.peek.selector, address(provider)),
+      abi.encode((originalPrice * bps) / 10_000)
+    );
+  }
+
   /* ─────────────────── whitelist management ───────────────────────── */
 
   function test_setTokenWhitelist_togglesAndReverts() public {
@@ -438,6 +451,57 @@ contract V3LiquidatorTest is Test {
     assertEq(_collateral(user), 0, "borrower collateral seized");
     // Excess lisUSD (borrowed*2 - repaidAssets ≈ borrowed) remains in liquidator.
     assertGt(IERC20(LISUSD).balanceOf(address(liquidator)), 0, "excess lisUSD in liquidator");
+  }
+
+  /// @dev Regression: a stale absolute-balance check (`balanceOf(this) < repaidAssets`) lets an
+  ///      unprofitable flash liquidation settle against loanToken the liquidator already holds from
+  ///      unrelated prior activity, silently draining those reserves. Uses `_makeUnhealthyPartial` (not
+  ///      `_makeUnhealthy`'s price=0) so `repaidAssets` is a real, positive number — with price=0,
+  ///      `seizedAssetsQuoted` and hence `repaidAssets` round to ~0 and the check is trivially satisfied
+  ///      regardless of the fix, masking the bug. Pre-fund the liquidator with a reserve cushion large
+  ///      enough to cover repayment on its own, then run a flash liquidation whose swaps yield zero
+  ///      lisUSD. The fix (before/after delta check) must revert NoProfit regardless of the pre-existing
+  ///      balance, because THIS liquidation's redeem+swap produced no proceeds.
+  function test_flashLiquidate_revertsIfSwapUnprofitable_evenWithPreFundedReserves() public {
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    uint256 borrowed = _borrowAgainstCollateral(user);
+    _makeUnhealthyPartial(5_000); // 50% of real price — unhealthy (60% LTV vs 70% LLTV), repaidAssets > 0
+
+    // Reserve cushion from unrelated prior activity — comfortably covers repaidAssets by itself.
+    deal(LISUSD, address(liquidator), borrowed * 10);
+
+    // Both legs swap for zero lisUSD out — this liquidation's redeem+swap is a total loss.
+    bytes memory swap0Data = abi.encodeWithSelector(
+      mockSwap.swap.selector,
+      SLISBNB, // tokenIn
+      LISUSD, // tokenOut
+      uint256(0), // amountIn
+      uint256(0) // amountOutMin — zero proceeds from this leg
+    );
+    bytes memory swap1Data = abi.encodeWithSelector(
+      mockSwap.swap.selector,
+      BNB_ADDRESS, // tokenIn (native BNB path)
+      LISUSD,
+      uint256(0), // amountIn
+      uint256(0) // amountOutMin — zero proceeds from this leg
+    );
+
+    V3Liquidator.FlashLiquidateParams memory params = V3Liquidator.FlashLiquidateParams({
+      v3Provider: address(provider),
+      minToken0Amt: 0,
+      minToken1Amt: 0,
+      redeemShares: true,
+      token0Pair: address(mockSwap),
+      token0Spender: address(0),
+      token1Pair: address(mockSwap),
+      token1Spender: address(0),
+      swapToken0Data: swap0Data,
+      swapToken1Data: swap1Data
+    });
+
+    vm.prank(bot);
+    vm.expectRevert(V3Liquidator.NoProfit.selector);
+    liquidator.flashLiquidate(Id.unwrap(marketId), user, shares, params);
   }
 
   function test_flashLiquidate_revertsIfMarketNotWhitelisted() public {
