@@ -401,6 +401,10 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
       // leg is an ERC-20 sold via approve + call. Read it from the provider — never hardcode a chain.
       address wrappedNative = IV3Provider(d.v3Provider).WRAPPED_NATIVE();
 
+      // Snapshot before redeeming/swapping so profitability is judged on THIS liquidation's
+      // delta, not masked by loanToken balance already sitting idle from prior liquidations.
+      uint256 before = d.loanToken.balanceOf(address(this));
+
       // Redeem V3 shares → TOKEN0 + TOKEN1; the wrapped-native leg arrives as the native coin.
       (uint256 amount0, uint256 amount1) = IV3Provider(d.v3Provider).redeemShares(
         d.seized,
@@ -427,7 +431,8 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
         if (nativeBalance > 0) IWBNB(wrappedNative).deposit{ value: nativeBalance }();
       }
 
-      if (d.loanToken.balanceOf(address(this)) < repaidAssets) revert NoProfit();
+      uint256 out = d.loanToken.balanceOf(address(this)) - before;
+      if (out < repaidAssets) revert NoProfit();
     }
 
     // Approve Moolah to pull the repayment (always done, flash or pre-funded).
