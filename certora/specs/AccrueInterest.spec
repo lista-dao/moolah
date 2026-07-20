@@ -11,7 +11,8 @@ methods {
     // We assume here that all external functions will not access storage, since we cannot show commutativity otherwise.
     // We also need to assume that the price and borrow rate return always the same value (and do not depend on msg.origin), so we use ghost functions for them.
     function _.borrowRate(MoolahHarness.MarketParams marketParams, MoolahHarness.Market market) external with (env e) => ghostBorrowRate(marketParams.irm, e.block.timestamp) expect uint256;
-    function _.price() external with (env e) => ghostOraclePrice(e.block.timestamp) expect uint256;
+    function _.peek(address token) external => ghostPrice[calledContract][token] expect uint256;
+    function _.decimals() external => ghostDecimals[calledContract] expect uint8;
     function _.transfer(address to, uint256 amount) external => ghostTransfer(to, amount) expect bool;
     function _.transferFrom(address from, address to, uint256 amount) external => ghostTransferFrom(from, to, amount) expect bool;
     function _.onMoolahLiquidate(uint256, bytes) external => NONDET;
@@ -25,7 +26,13 @@ ghost ghostMulDivUp(uint256, uint256, uint256) returns uint256;
 ghost ghostMulDivDown(uint256, uint256, uint256) returns uint256;
 ghost ghostTaylorCompounded(uint256, uint256) returns uint256;
 ghost ghostBorrowRate(address, uint256) returns uint256;
-ghost ghostOraclePrice(uint256) returns uint256;
+
+// Oracle price per (oracle, token), stable within a rule.
+ghost mapping(address => mapping(address => uint256)) ghostPrice;
+
+ghost mapping(address => uint8) ghostDecimals {
+    axiom forall address token. ghostDecimals[token] <= 18;
+}
 ghost ghostTransfer(address, uint256) returns bool;
 ghost ghostTransferFrom(address, address, uint256) returns bool;
 
@@ -100,6 +107,21 @@ rule repayAccruesInterest(env e, MoolahHarness.MarketParams marketParams, uint25
     storage afterOne = lastStorage;
 
     assert afterBoth == afterOne;
+}
+
+// Check that accrueInterest is idempotent within a block:
+// accruing twice at the same timestamp equals accruing once.
+rule accrueInterestIdempotent(env e, MoolahHarness.MarketParams marketParams) {
+    // Safe require because timestamps cannot realistically be that large.
+    require e.block.timestamp < 2^128;
+
+    accrueInterest(e, marketParams);
+    storage afterOnce = lastStorage;
+
+    accrueInterest(e, marketParams);
+    storage afterTwice = lastStorage;
+
+    assert afterTwice == afterOnce;
 }
 
 // Show that accrueInterest commutes with other state changing rules.

@@ -410,7 +410,8 @@ The bot reacts with 👀, replies with a link to the run, and when done posts a
 result table (per conf: ✅/❌, verified/violated rule counts, violated rule
 names). Full HTML reports (`FinalResults.html`, one row per rule/invariant
 with counterexample call traces) are attached to the run as one
-`certora-<conf>-*` artifact per conf. Any violation turns the check red.
+`certora-report-<conf>-*` artifact (tar.gz) per conf. Any violation turns
+the check red.
 
 Manual runs: Actions → certora → *Run workflow* (works on any branch that
 contains the workflow file; the comment command only works once the workflow

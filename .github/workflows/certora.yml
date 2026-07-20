@@ -174,7 +174,7 @@ jobs:
           # Localize the cloud conf for the local prover: drop the cloud
           # `server` key, map solc binary names (solc-X.Y.Z -> solcX.Y.Z, the
           # naming used inside the image), and give the JVM a real heap.
-          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e JAVA_HEAP -e NAME \
+          docker run --rm -i --user "$(id -u):$(id -g)" -e HOME=/tmp -e JAVA_HEAP -e NAME \
             -v "$PWD":/ws -w /ws "$IMAGE" python3 - <<'EOF'
           import json, os
           name = os.environ["NAME"]
@@ -190,23 +190,42 @@ jobs:
             -m "$CONTAINER_MEM" -v "$PWD":/ws -w /ws "$IMAGE" \
             certoraRun.py "certora-ci/$NAME.conf" 2>&1 | tee "certora-ci/logs/$NAME.log" || status=FAIL
           log="certora-ci/logs/$NAME.log"
-          verified=$(grep -E "^Verified:" "$log" | grep -vE "not_vacuous|not_trivial" | sort -u | wc -l | tr -d ' ')
-          violated=$(grep -E "^Violated:" "$log" | grep -vE "not_vacuous|not_trivial" | sort -u | wc -l | tr -d ' ')
+          # `|| true` guards: with pipefail + bash -e, an empty grep result
+          # (e.g. zero violations) would otherwise kill the whole step.
+          verified=$(grep -E "^Verified:" "$log" | grep -vE "not_vacuous|not_trivial" | sort -u | wc -l | tr -d ' ') || true
+          violated=$(grep -E "^Violated:" "$log" | grep -vE "not_vacuous|not_trivial" | sort -u | wc -l | tr -d ' ') || true
           {
             echo "$NAME $status $verified $violated"
             grep -E "^Violated:" "$log" | grep -vE "not_vacuous|not_trivial" | sort -u || true
           } > "certora-ci/result-$NAME.txt"
           [ "$status" = "PASS" ] || { echo "conf $NAME reported violations or errors" >&2; exit 1; }
 
-      - name: Upload report
+      # Certora report filenames contain colons, which upload-artifact
+      # rejects — pack them into a tarball instead (also much faster than
+      # uploading ~7500 small files).
+      - name: Pack HTML report
+        if: always()
+        env:
+          NAME: ${{ matrix.conf }}
+        run: tar czf "certora-report-$NAME.tar.gz" emv-*/Reports 2>/dev/null || true
+
+      - name: Upload result (for report job)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: certora-${{ matrix.conf }}-${{ github.run_id }}
+          name: certora-result-${{ matrix.conf }}-${{ github.run_id }}
           path: |
-            emv-*/Reports/
-            certora-ci/logs/
             certora-ci/result-*.txt
+            certora-ci/logs/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: certora-report-${{ matrix.conf }}-${{ github.run_id }}
+          path: certora-report-${{ matrix.conf }}.tar.gz
           retention-days: 14
           if-no-files-found: warn
 
@@ -218,7 +237,7 @@ jobs:
       - name: Download all results
         uses: actions/download-artifact@v4
         with:
-          pattern: certora-*-${{ github.run_id }}
+          pattern: certora-result-*-${{ github.run_id }}
           merge-multiple: true
 
       - name: Aggregate summary
@@ -231,9 +250,13 @@ jobs:
             echo "|------|--------|----------|----------|"
           } > summary.md
           overall=0
+          found=0
           details=""
-          for f in certora-ci/result-*.txt; do
-            [ -f "$f" ] || continue
+          # upload-artifact v4 roots the archive at the files' common parent,
+          # so result files land without their certora-ci/ prefix — find them
+          # wherever they extracted to.
+          for f in $(find . -name "result-*.txt" -type f | sort); do
+            found=1
             read -r name status verified violated < "$f"
             icon=$([ "$status" = "PASS" ] && echo "✅" || echo "❌")
             echo "| $name | $icon $status | $verified | $violated |" >> summary.md
@@ -243,9 +266,13 @@ jobs:
               [ -n "$body" ] && details="$details\n### ❌ $name — violated rules\n\`\`\`\n$body\n\`\`\`"
             fi
           done
+          if [ "$found" = "0" ]; then
+            echo "no result files found — verify jobs died before reporting" >> summary.md
+            overall=1
+          fi
           [ -n "$details" ] && printf "%b\n" "$details" >> summary.md
           echo "" >> summary.md
-          echo "_Full HTML reports (FinalResults.html with per-rule counterexamples) are attached as run artifacts, one per conf._" >> summary.md
+          echo "_Full HTML reports (FinalResults.html with per-rule counterexamples) are attached as \`certora-report-*\` artifacts (tar.gz), one per conf._" >> summary.md
           cat summary.md >> "$GITHUB_STEP_SUMMARY"
           echo "overall=$overall" | tee -a "$GITHUB_OUTPUT"
 
