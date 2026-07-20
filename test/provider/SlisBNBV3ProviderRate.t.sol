@@ -251,7 +251,7 @@ contract SlisBNBV3ProviderRateTest is Test {
     vm.startPrank(user);
     IERC20(SLISBNB).approve(address(provider), amtSlis);
     IERC20(WBNB).approve(address(provider), amtWbnb);
-    (shares, , ) = provider.deposit(marketParams, amtSlis, amtWbnb, (e0 * 99) / 100, (e1 * 99) / 100, user);
+    (shares, , ) = provider.deposit(marketParams, amtSlis, amtWbnb, (e0 * 99) / 100, (e1 * 99) / 100, 0, user);
     vm.stopPrank();
   }
 

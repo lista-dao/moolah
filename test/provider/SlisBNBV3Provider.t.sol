@@ -302,7 +302,7 @@ contract SlisBNBV3ProviderTest is Test {
     vm.startPrank(_user);
     IERC20(SLISBNB).approve(address(provider), amount0);
     IERC20(WBNB).approve(address(provider), amount1);
-    (shares, used0, used1) = provider.deposit(marketParams, amount0, amount1, min0, min1, _user);
+    (shares, used0, used1) = provider.deposit(marketParams, amount0, amount1, min0, min1, 0, _user);
     vm.stopPrank();
   }
 
@@ -391,6 +391,38 @@ contract SlisBNBV3ProviderTest is Test {
 
     assertGe(priceAfter, priceBefore, "second deposit must not dilute existing share price");
     assertGt(shares2, shares1, "larger-value deposit yields more shares");
+  }
+
+  /// @dev H02 / Issue_04 (+ M01) counter-test. The minShares floor makes a deposit revert instead of
+  ///      silently under-crediting the depositor when it would receive fewer shares than demanded — the
+  ///      protection against a first-depositor inflation attack (a direct NPM.increaseLiquidity donation
+  ///      inflates the composition so a normal deposit rounds down) and against the fair composition
+  ///      drifting between the off-chain preview and execution. A minShares at fair passes; a higher one
+  ///      reverts.
+  function test_deposit_minShares_guardsShareSlippage() public {
+    _deposit(user, 10 ether, 10 ether);
+
+    // Preview the shares a balanced 10/10 deposit would mint at the current fair composition.
+    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(10 ether, 10 ether);
+    uint256 supplyBefore = provider.totalSupply();
+    (uint256 t0, uint256 t1) = provider.getFairComposition();
+    uint256 fracExp = (exp0 * 1e18) / t0 < (exp1 * 1e18) / t1 ? (exp0 * 1e18) / t0 : (exp1 * 1e18) / t1;
+    uint256 expectedShares = (supplyBefore * fracExp) / 1e18;
+
+    deal(SLISBNB, user2, 10 ether);
+    deal(WBNB, user2, 10 ether);
+    vm.startPrank(user2);
+    IERC20(SLISBNB).approve(address(provider), 10 ether);
+    IERC20(WBNB).approve(address(provider), 10 ether);
+
+    // Demanding more than the deposit can mint reverts (does not silently under-credit).
+    vm.expectRevert(V3Provider.InsufficientShares.selector);
+    provider.deposit(marketParams, 10 ether, 10 ether, 0, 0, expectedShares * 2, user2);
+
+    // A floor at/just below the achievable amount passes.
+    (uint256 shares, , ) = provider.deposit(marketParams, 10 ether, 10 ether, 0, 0, (expectedShares * 99) / 100, user2);
+    vm.stopPrank();
+    assertGe(shares, (expectedShares * 99) / 100, "mint met the minShares floor");
   }
 
   function test_withdraw_fullWithdrawal() public {
@@ -681,7 +713,7 @@ contract SlisBNBV3ProviderTest is Test {
     vm.startPrank(_user);
     IERC20(SLISBNB).approve(address(provider), amount0);
     IERC20(WBNB).approve(address(provider), amount1);
-    (shares, used0, used1) = provider.deposit(marketParams, amount0, amount1, min0, min1, _user);
+    (shares, used0, used1) = provider.deposit(marketParams, amount0, amount1, min0, min1, 0, _user);
     vm.stopPrank();
   }
 
@@ -744,6 +776,35 @@ contract SlisBNBV3ProviderTest is Test {
     (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(10 ether, 10 ether);
     assertGt(exp0, 0, "fair composition consumes token0 regardless of spot");
     assertGt(exp1, 0, "fair composition consumes token1 regardless of spot");
+  }
+
+  function test_previewDepositForToken_pairsLegsAtFairComposition() public {
+    _deposit(user, 10 ether, 10 ether);
+
+    (uint256 t0, uint256 t1) = provider.getFairComposition();
+    assertGt(t0, 0, "fair composition token0 > 0");
+    assertGt(t1, 0, "fair composition token1 > 0");
+
+    // token0 -> matching token1 at the fair ratio.
+    uint256 a0 = 5 ether;
+    uint256 a1 = provider.previewDepositForToken0(a0);
+    assertEq(a1, (a0 * t1) / t0, "previewDepositForToken0 = a0 * T1 / T0");
+
+    // Reverse direction round-trips within rounding.
+    assertApproxEqRel(provider.previewDepositForToken1(a1), a0, 0.0001e18, "reverse pairing round-trips");
+
+    // Depositing the paired amounts consumes both legs ~fully (minimal refund).
+    deal(SLISBNB, user2, a0);
+    deal(WBNB, user2, a1);
+    vm.startPrank(user2);
+    IERC20(SLISBNB).approve(address(provider), a0);
+    IERC20(WBNB).approve(address(provider), a1);
+    (uint256 shares, uint256 used0, uint256 used1) = provider.deposit(marketParams, a0, a1, 0, 0, 0, user2);
+    vm.stopPrank();
+
+    assertGt(shares, 0, "shares minted");
+    assertApproxEqRel(used0, a0, 0.001e18, "token0 consumed ~fully");
+    assertApproxEqRel(used1, a1, 0.001e18, "token1 consumed ~fully");
   }
 
   function test_previewDeposit_secondDeposit_matchesActual() public {
@@ -869,7 +930,7 @@ contract SlisBNBV3ProviderTest is Test {
     IERC20(SLISBNB).approve(address(provider), amount0);
     IERC20(WBNB).approve(address(provider), amount1);
     vm.expectRevert();
-    provider.deposit(marketParams, amount0, amount1, amount0 * 2, 0, user);
+    provider.deposit(marketParams, amount0, amount1, amount0 * 2, 0, 0, user);
     vm.stopPrank();
   }
 
@@ -883,7 +944,7 @@ contract SlisBNBV3ProviderTest is Test {
     IERC20(SLISBNB).approve(address(provider), amount0);
     IERC20(WBNB).approve(address(provider), amount1);
     vm.expectRevert();
-    provider.deposit(marketParams, amount0, amount1, 0, amount1 * 2, user);
+    provider.deposit(marketParams, amount0, amount1, 0, amount1 * 2, 0, user);
     vm.stopPrank();
   }
 
@@ -899,7 +960,7 @@ contract SlisBNBV3ProviderTest is Test {
     IERC20(SLISBNB).approve(address(provider), amount0);
     IERC20(WBNB).approve(address(provider), amount1);
     vm.expectRevert();
-    provider.deposit(marketParams, amount0, amount1, amount0 * 2, 0, user2);
+    provider.deposit(marketParams, amount0, amount1, amount0 * 2, 0, 0, user2);
     vm.stopPrank();
   }
 
@@ -915,7 +976,7 @@ contract SlisBNBV3ProviderTest is Test {
     IERC20(SLISBNB).approve(address(provider), amount0);
     IERC20(WBNB).approve(address(provider), amount1);
     vm.expectRevert();
-    provider.deposit(marketParams, amount0, amount1, 0, amount1 * 2, user2);
+    provider.deposit(marketParams, amount0, amount1, 0, amount1 * 2, 0, user2);
     vm.stopPrank();
   }
 
@@ -937,7 +998,7 @@ contract SlisBNBV3ProviderTest is Test {
     vm.startPrank(user);
     IERC20(SLISBNB).approve(address(provider), 10 ether);
     vm.expectRevert();
-    provider.deposit(marketParams, 10 ether, 0, 0, 0, user);
+    provider.deposit(marketParams, 10 ether, 0, 0, 0, 0, user);
     vm.stopPrank();
   }
 
@@ -947,7 +1008,7 @@ contract SlisBNBV3ProviderTest is Test {
     vm.startPrank(user);
     IERC20(WBNB).approve(address(provider), 10 ether);
     vm.expectRevert();
-    provider.deposit(marketParams, 0, 10 ether, 0, 0, user);
+    provider.deposit(marketParams, 0, 10 ether, 0, 0, 0, user);
     vm.stopPrank();
   }
 
@@ -967,7 +1028,7 @@ contract SlisBNBV3ProviderTest is Test {
     vm.startPrank(user2);
     IERC20(SLISBNB).approve(address(provider), amount0);
     vm.expectRevert(); // ZeroShares
-    provider.deposit(marketParams, amount0, 0, 0, 0, user2);
+    provider.deposit(marketParams, amount0, 0, 0, 0, 0, user2);
     vm.stopPrank();
   }
 
@@ -981,7 +1042,7 @@ contract SlisBNBV3ProviderTest is Test {
     vm.startPrank(user2);
     IERC20(WBNB).approve(address(provider), 10 ether);
     vm.expectRevert();
-    provider.deposit(marketParams, 0, 10 ether, 0, 0, user2);
+    provider.deposit(marketParams, 0, 10 ether, 0, 0, 0, user2);
     vm.stopPrank();
   }
 
@@ -995,7 +1056,7 @@ contract SlisBNBV3ProviderTest is Test {
     vm.startPrank(user2);
     IERC20(WBNB).approve(address(provider), amount1);
     vm.expectRevert(); // ZeroShares
-    provider.deposit(marketParams, 0, amount1, 0, 0, user2);
+    provider.deposit(marketParams, 0, amount1, 0, 0, 0, user2);
     vm.stopPrank();
   }
 
@@ -1009,7 +1070,7 @@ contract SlisBNBV3ProviderTest is Test {
     vm.startPrank(user2);
     IERC20(SLISBNB).approve(address(provider), 10 ether);
     vm.expectRevert();
-    provider.deposit(marketParams, 10 ether, 0, 0, 0, user2);
+    provider.deposit(marketParams, 10 ether, 0, 0, 0, 0, user2);
     vm.stopPrank();
   }
 
@@ -1024,7 +1085,7 @@ contract SlisBNBV3ProviderTest is Test {
     IERC20(WBNB).approve(address(provider), 10 ether);
     vm.expectRevert(V3Provider.InvalidCollateralToken.selector);
     // The revert fires before min amounts are evaluated; use 1,1 for consistency.
-    provider.deposit(badParams, 10 ether, 10 ether, 1, 1, user);
+    provider.deposit(badParams, 10 ether, 10 ether, 1, 1, 0, user);
     vm.stopPrank();
   }
 
