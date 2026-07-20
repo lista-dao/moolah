@@ -135,6 +135,10 @@ abstract contract V3Provider is
   error DailyLossExceeded();
   error OracleZero();
   error InvalidParam();
+  error InsufficientAmount();
+
+  /// @dev Fixed-point scale for the deposit composition-ratio math.
+  uint256 private constant WAD = 1e18;
 
   /* ─────────────────────────── constructor ────────────────────────── */
 
@@ -248,44 +252,74 @@ abstract contract V3Provider is
       IERC20(TOKEN1).safeTransferFrom(msg.sender, address(this), _amount1Desired);
     }
 
-    // Compound accrued fees first so existing holders capture them before new shares dilute.
+    // Compound accrued fees first so existing holders capture them before new shares dilute. This also
+    // folds all outstanding fees into the position / idle, so the composition snapshot below is complete.
     IV3DexAdapter(ADAPTER).collectAndCompound();
 
-    uint256 totalValueBefore;
     uint256 supplyBefore = totalSupply();
     uint160 fairSqrtPriceX96 = IV3DexAdapter(ADAPTER).fairSqrtPriceX96();
-    if (supplyBefore > 0) {
-      (uint256 total0Before, uint256 total1Before) = IV3DexAdapter(ADAPTER).positionAmountsAt(fairSqrtPriceX96);
-      totalValueBefore = _amountsValueUsd(total0Before, total1Before);
-      if (totalValueBefore == 0) revert ZeroShares();
-    }
 
-    // Forward the input to the adapter, which adds liquidity and refunds unused back to THIS vault.
-    // The refund is deliberately NOT sent to the depositor here: doing so (a native-BNB call) before
-    // shares are minted would expose a window where adapter NAV already includes the new liquidity
-    // but totalSupply() is still the old value, letting a malicious depositor reenter and read an
-    // inflated share price from the oracle (C-1). We forward the refund to the depositor only after
-    // _mint + supplyCollateral below, when NAV and totalSupply are consistent.
-    if (_amount0Desired > 0) IERC20(TOKEN0).safeTransfer(ADAPTER, _amount0Desired);
-    if (_amount1Desired > 0) IERC20(TOKEN1).safeTransfer(ADAPTER, _amount1Desired);
-
-    uint128 liquidityAdded;
-    (liquidityAdded, amount0Used, amount1Used) = IV3DexAdapter(ADAPTER).addLiquidity(
-      _amount0Desired,
-      _amount1Desired,
-      amount0Min,
-      amount1Min,
-      address(this)
-    );
-
-    (uint256 added0, uint256 added1) = IV3DexAdapter(ADAPTER).amountsForLiquidity(liquidityAdded, fairSqrtPriceX96);
-    uint256 addedValue = _amountsValueUsd(added0, added1);
     if (supplyBefore == 0) {
+      // First deposit: no existing composition to match and no holders to dilute. Mint the initial NFT
+      // position at spot and value it at fair via the oracle to set the opening share price. The
+      // spot-vs-fair over-crediting this path guards against needs pre-existing idle/holders, so it
+      // cannot occur on the first deposit; the first-depositor inflation surface is a separate concern.
+      //
+      // The addLiquidity refund is deliberately NOT sent to the depositor here (refundTo = this vault):
+      // a native-BNB refund before shares are minted would expose a window where adapter NAV already
+      // includes the new liquidity but totalSupply() is stale, letting a malicious depositor reenter and
+      // read an inflated share price (C-1). The vault refunds the depositor only after _mint below.
+      if (_amount0Desired > 0) IERC20(TOKEN0).safeTransfer(ADAPTER, _amount0Desired);
+      if (_amount1Desired > 0) IERC20(TOKEN1).safeTransfer(ADAPTER, _amount1Desired);
+      uint128 liquidityAdded;
+      (liquidityAdded, amount0Used, amount1Used) = IV3DexAdapter(ADAPTER).addLiquidity(
+        _amount0Desired,
+        _amount1Desired,
+        amount0Min,
+        amount1Min,
+        address(this)
+      );
+      (uint256 added0, uint256 added1) = IV3DexAdapter(ADAPTER).amountsForLiquidity(liquidityAdded, fairSqrtPriceX96);
       uint256 assetPrice = IOracle(resilientOracle).peek(asset()); // 8 decimals
-      if (assetPrice > 0) shares = (addedValue * (10 ** uint256(accountingAssetDecimals))) / assetPrice;
+      if (assetPrice > 0) {
+        shares = (_amountsValueUsd(added0, added1) * (10 ** uint256(accountingAssetDecimals))) / assetPrice;
+      }
     } else {
-      shares = (addedValue * supplyBefore) / totalValueBefore;
+      // Subsequent deposit: issue shares purely proportional to the existing position
+      // composition — never from a pool-spot mint re-valued at fair. Snapshot the composition at the
+      // fair price (positionAmountsAt already includes idle inventory + collected fees), bind the deposit
+      // to that ratio, and park the consumed tokens as IDLE rather than minting into the pool. The pool
+      // spot price never enters share issuance, so the mint-at-spot / value-at-fair gap that let a
+      // depositor be over-credited (with idle present) is eliminated. Value-conserving: the depositor
+      // adds exactly `frac` of each composition leg and receives `frac` of the supply.
+      (uint256 t0, uint256 t1) = IV3DexAdapter(ADAPTER).positionAmountsAt(fairSqrtPriceX96);
+      if (_amountsValueUsd(t0, t1) == 0) revert ZeroShares();
+
+      uint256 frac; // WAD-scaled fraction of the existing composition being added
+      if (t0 == 0) {
+        frac = (_amount1Desired * WAD) / t1;
+      } else if (t1 == 0) {
+        frac = (_amount0Desired * WAD) / t0;
+      } else {
+        uint256 f0 = (_amount0Desired * WAD) / t0;
+        uint256 f1 = (_amount1Desired * WAD) / t1;
+        frac = f0 < f1 ? f0 : f1;
+      }
+
+      amount0Used = (t0 * frac) / WAD;
+      amount1Used = (t1 * frac) / WAD;
+      // Repurposed slippage guard: amount0Min/amount1Min are now the minimum of each leg that must be
+      // consumed (the rest is refunded), protecting the depositor from an unexpected composition ratio.
+      if (amount0Used < amount0Min || amount1Used < amount1Min) revert InsufficientAmount();
+
+      shares = (supplyBefore * frac) / WAD;
+
+      // Park the consumed tokens into the adapter's idle inventory (deployed later by compound()).
+      if (amount0Used > 0) IERC20(TOKEN0).safeTransfer(ADAPTER, amount0Used);
+      if (amount1Used > 0) IERC20(TOKEN1).safeTransfer(ADAPTER, amount1Used);
+      IV3DexAdapter(ADAPTER).creditIdle(amount0Used, amount1Used);
     }
+
     if (shares == 0) revert ZeroShares();
 
     _mint(address(this), shares);
@@ -300,8 +334,22 @@ abstract contract V3Provider is
     // totalSupply are consistent, so the (native-BNB) refund callback cannot inflate the share price.
     uint256 refund0 = _amount0Desired - amount0Used;
     uint256 refund1 = _amount1Desired - amount1Used;
+    // The subsequent-deposit path leaves the WRAPPED_NATIVE leftover in the vault as WBNB, whereas the
+    // first-deposit path already received it as native from the adapter's addLiquidity refund. _refund
+    // sends the wrapped-native leg as native BNB, so normalize the subsequent case by unwrapping here.
+    if (supplyBefore > 0) {
+      if (TOKEN0 == WRAPPED_NATIVE && refund0 > 0) IWBNB(WRAPPED_NATIVE).withdraw(refund0);
+      if (TOKEN1 == WRAPPED_NATIVE && refund1 > 0) IWBNB(WRAPPED_NATIVE).withdraw(refund1);
+    }
     if (refund0 > 0) _refund(TOKEN0, refund0, msg.sender);
     if (refund1 > 0) _refund(TOKEN1, refund1, msg.sender);
+
+    // NOTE: the subsequent-deposit path deliberately does NOT deploy the freshly-parked
+    // idle into the pool here. Deposits enter as idle valued at the fair composition and are matched by
+    // proportionally-minted shares, so the deposit is exactly value-conserving and never touches the pool
+    // spot price. The idle is deployed later by the permissionless compound() (keeper cadence) or the
+    // next deposit/withdraw's collectAndCompound, always spot-gated. Deploying it inline here would mint
+    // at spot and realize a small IL shared by all holders — a (tiny) dilution triggered by a new deposit.
   }
 
   /// @inheritdoc IV3Provider
@@ -412,11 +460,31 @@ abstract contract V3Provider is
   }
 
   /// @notice Simulate a deposit at the current pool price (for tight amount0Min/amount1Min).
+  /// @notice Preview the token amounts a deposit would consume.
+  /// @dev For the first deposit (totalSupply == 0) this previews the pool mint (liquidity + amounts at
+  ///      spot). For subsequent deposits it previews the composition-ratio binding used by deposit():
+  ///      the amounts are `frac` of the current fair composition, where `frac = min(d0/T0, d1/T1)`, and
+  ///      `liquidity` is returned as 0 since the deposit is parked as idle rather than minted.
   function previewDepositAmounts(
     uint256 amount0Desired,
     uint256 amount1Desired
   ) external view returns (uint128 liquidity, uint256 amount0, uint256 amount1) {
-    return IV3DexAdapter(ADAPTER).previewAddLiquidity(amount0Desired, amount1Desired);
+    if (totalSupply() == 0) {
+      return IV3DexAdapter(ADAPTER).previewAddLiquidity(amount0Desired, amount1Desired);
+    }
+    (uint256 t0, uint256 t1) = IV3DexAdapter(ADAPTER).positionAmountsAt(IV3DexAdapter(ADAPTER).fairSqrtPriceX96());
+    uint256 frac;
+    if (t0 == 0) {
+      frac = t1 == 0 ? 0 : (amount1Desired * WAD) / t1;
+    } else if (t1 == 0) {
+      frac = (amount0Desired * WAD) / t0;
+    } else {
+      uint256 f0 = (amount0Desired * WAD) / t0;
+      uint256 f1 = (amount1Desired * WAD) / t1;
+      frac = f0 < f1 ? f0 : f1;
+    }
+    amount0 = (t0 * frac) / WAD;
+    amount1 = (t1 * frac) / WAD;
   }
 
   /// @notice IProvider hook — the "token" is this shares contract itself.
@@ -490,9 +558,12 @@ abstract contract V3Provider is
     }
   }
 
-  /// @dev Accept native BNB only from the adapter (WBNB refund unwrapped during deposit).
+  /// @dev Accept native BNB only from the adapter (its WBNB-unwrap refund) or from the wrapped-native
+  ///      token itself (when this vault unwraps a subsequent-deposit WBNB leftover before refunding it
+  ///      as native). No other sender may push native in; the vault's NAV is read from the adapter
+  ///      composition, not its native balance, so an accepted transfer cannot distort share pricing.
   receive() external payable {
-    if (msg.sender != ADAPTER) revert NotAdapter();
+    if (msg.sender != ADAPTER && msg.sender != WRAPPED_NATIVE) revert NotAdapter();
   }
 
   /// @notice Permissionlessly collect and compound accrued swap fees back into the position.

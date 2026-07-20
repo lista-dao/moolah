@@ -132,6 +132,8 @@ abstract contract V3DexAdapter is
   event MaxSwapLossBpChanged(uint256 maxSwapLossBp);
   event MaxSpotDeviationBpsChanged(uint256 maxSpotDeviationBps);
   event CompoundSkippedSpotDeviated(uint160 spotSqrtPriceX96, uint160 fairSqrtPriceX96);
+  event CompoundSkippedNoLiquidity(uint256 idleToken0, uint256 idleToken1);
+  event IdleCredited(uint256 amount0, uint256 amount1);
 
   /* ───────────────────────────── errors ───────────────────────────── */
 
@@ -154,6 +156,7 @@ abstract contract V3DexAdapter is
   error InvalidSwapPair();
   error SwapLossTooHigh();
   error InvalidParam();
+  error InsufficientBalance();
 
   /* ─────────────────────────── constructor ────────────────────────── */
 
@@ -321,6 +324,20 @@ abstract contract V3DexAdapter is
   /// @inheritdoc IV3DexAdapter
   function collectAndCompound() external onlyProvider nonReentrant {
     _collectAndCompound();
+  }
+
+  /// @inheritdoc IV3DexAdapter
+  function creditIdle(uint256 amount0, uint256 amount1) external onlyProvider nonReentrant {
+    // The provider transfers `amount0`/`amount1` here before calling; record them as idle inventory
+    // rather than minting into the pool. Deposits enter as idle at the current fair composition ratio
+    // (priced off-pool), then a later spot-gated compound() deploys them — this is what keeps share
+    // issuance free of the pool spot price. Assert the tokens really arrived so idle never exceeds the
+    // adapter's spendable balance (INV: idleTokenX <= balanceOf(this)).
+    if (amount0 > 0) idleToken0 += amount0;
+    if (amount1 > 0) idleToken1 += amount1;
+    if (idleToken0 > IERC20(TOKEN0).balanceOf(address(this))) revert InsufficientBalance();
+    if (idleToken1 > IERC20(TOKEN1).balanceOf(address(this))) revert InsufficientBalance();
+    emit IdleCredited(amount0, amount1);
   }
 
   /* ─────────────────────── manager / rebalance ────────────────────── */
@@ -574,6 +591,25 @@ abstract contract V3DexAdapter is
       idleToken0 = toCompound0;
       idleToken1 = toCompound1;
       emit CompoundSkippedSpotDeviated(spotSqrtPriceX96(), fairSqrtPriceX96());
+      return;
+    }
+
+    // One-sided inventory relative to the active range yields zero addable liquidity, which would
+    // revert inside pool.mint (require(amount > 0)). Hold everything as idle and skip this round
+    // instead of reverting, so deposit / withdraw / redeemShares (which reach here permissionlessly)
+    // are never bricked by a single-sided balance. The idle is deployed on a later compound once the
+    // opposite leg arrives or a rebalance recenters the range.
+    uint128 addable = LiquidityAmounts.getLiquidityForAmounts(
+      spotSqrtPriceX96(),
+      TickMath.getSqrtRatioAtTick(tickLower),
+      TickMath.getSqrtRatioAtTick(tickUpper),
+      toCompound0,
+      toCompound1
+    );
+    if (addable == 0) {
+      idleToken0 = toCompound0;
+      idleToken1 = toCompound1;
+      emit CompoundSkippedNoLiquidity(toCompound0, toCompound1);
       return;
     }
 

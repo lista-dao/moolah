@@ -378,14 +378,19 @@ contract SlisBNBV3ProviderTest is Test {
     assertEq(user.balance, amount1 - used1);
   }
 
-  function test_deposit_secondDeposit_sharesProportional() public {
-    _deposit(user, 10 ether, 10 ether);
-    uint256 sharesAfterFirst = _collateral(user);
+  function test_deposit_secondDeposit_doesNotDilute() public {
+    // Shares are issued proportional to the fair composition (value-conserving), not to raw
+    // token inputs — the first deposit refunds part of its WBNB at the spot mint ratio, so equal token
+    // amounts are not equal value. The invariant that matters is that the mint never lowers the existing
+    // per-share price, and a larger-value deposit yields more shares.
+    (uint256 shares1, , ) = _deposit(user, 10 ether, 10 ether);
+    uint256 priceBefore = providerOracle.peek(address(provider));
 
     (uint256 shares2, , ) = _deposit(user2, 20 ether, 20 ether);
+    uint256 priceAfter = providerOracle.peek(address(provider));
 
-    // Second depositor contributes roughly twice as much — shares should be ~2x.
-    assertApproxEqRel(shares2, sharesAfterFirst * 2, 0.01e18, "second deposit shares should be ~2x");
+    assertGe(priceAfter, priceBefore, "second deposit must not dilute existing share price");
+    assertGt(shares2, shares1, "larger-value deposit yields more shares");
   }
 
   function test_withdraw_fullWithdrawal() public {
@@ -635,40 +640,32 @@ contract SlisBNBV3ProviderTest is Test {
     assertEq(_collateral(user), shares);
   }
 
-  function test_deposit_afterIdle_mintsByNav_doesNotDiluteExistingShares() public {
+  /// @dev Counter-test (deposit cannot be gamed via spot vs idle). With tracked idle inventory present AND the pool spot pushed far from
+  ///      the fair (rate) price, the OLD deposit path minted liquidity at spot but valued it at fair,
+  ///      over-crediting the new depositor and dropping existing holders' share price (dilution/theft).
+  ///      The deposit is proportional to the fair composition and parks to idle — the pool spot
+  ///      never enters share issuance — so a deposit under these exact conditions cannot dilute.
+  function test_deposit_withIdleAndSkewedSpot_doesNotDilute() public {
     _deposit(user, 10 ether, 10 ether);
 
+    // Heavy one-sided idle skews the composition (the ingredient the old bug needed)...
     uint256 idle0 = 1 ether;
     uint256 idle1 = 50 ether;
     deal(SLISBNB, address(adapter), IERC20(SLISBNB).balanceOf(address(adapter)) + idle0);
     deal(WBNB, address(adapter), IERC20(WBNB).balanceOf(address(adapter)) + idle1);
     stdstore.target(address(adapter)).sig("idleToken0()").checked_write(adapter.idleToken0() + idle0);
     stdstore.target(address(adapter)).sig("idleToken1()").checked_write(adapter.idleToken1() + idle1);
+    assertGt(_valueUSD(adapter.idleToken0(), adapter.idleToken1()), 0, "test setup should include idle");
 
-    uint256 idleValue = _valueUSD(adapter.idleToken0(), adapter.idleToken1());
-    assertGt(idleValue, 0, "test setup should include tracked idle value");
-
-    uint256 snapshot = vm.snapshotState();
-    vm.prank(address(provider));
-    adapter.collectAndCompound();
+    // ...and the pool spot is pushed far above fair (the other ingredient).
+    _skewSpotUp();
 
     uint256 priceBefore = providerOracle.peek(address(provider));
-    uint256 supplyBefore = provider.totalSupply();
-    uint160 fairSqrtPriceX96 = adapter.fairSqrtPriceX96();
-    (uint256 total0Before, uint256 total1Before) = adapter.positionAmountsAt(fairSqrtPriceX96);
-    uint256 totalValueBefore = _valueUSD(total0Before, total1Before);
-    (uint128 liquidityPreview, , ) = adapter.previewAddLiquidity(10 ether, 10 ether);
-    (uint256 added0, uint256 added1) = adapter.amountsForLiquidity(liquidityPreview, fairSqrtPriceX96);
-    uint256 expectedNavShares = (_valueUSD(added0, added1) * supplyBefore) / totalValueBefore;
-    uint256 liquidityOnlyShares = (uint256(liquidityPreview) * supplyBefore) / uint256(adapter.totalLiquidity());
-    assertLt(expectedNavShares, liquidityOnlyShares, "tracked idle should reduce new depositor shares");
-    assertTrue(vm.revertToState(snapshot), "snapshot revert failed");
-
     (uint256 shares2, , ) = _deposit(user2, 10 ether, 10 ether);
-    assertApproxEqAbs(shares2, expectedNavShares, 1, "second depositor should receive NAV-priced shares");
-
     uint256 priceAfter = providerOracle.peek(address(provider));
-    assertGe(priceAfter, priceBefore, "NAV-based mint must not dilute existing share value");
+
+    assertGt(shares2, 0, "deposit should still mint shares");
+    assertGe(priceAfter, priceBefore, "deposit with idle + skewed spot must not dilute existing holders");
   }
 
   /// @dev Helper: deposit with explicit min amounts (bypasses _deposit which passes zeros).
@@ -729,32 +726,24 @@ contract SlisBNBV3ProviderTest is Test {
     assertGe(used1, min1, "used1 >= min1");
   }
 
-  function test_previewDeposit_priceBelowRange_onlyToken0() public {
+  function test_previewDeposit_belowRangeSpot_usesFairCompositionBothLegs() public {
     _deposit(user, 10 ether, 10 ether);
-    _pushPriceBelowRange();
+    _pushPriceBelowRange(); // manipulate SPOT below range
 
-    uint256 amount0 = 10 ether;
-    uint256 amount1 = 10 ether;
-
-    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
-
-    // Position is fully slisBNB — only token0 consumed, token1 = 0.
-    assertGt(exp0, 0, "expected token0 consumed when price below range");
-    assertEq(exp1, 0, "expected no token1 consumed when price below range");
+    // preview (and deposit) bind to the FAIR composition — rate-implied for slisBNB, which stays
+    // ~in-range — so both legs are consumed regardless of where the manipulable pool spot sits.
+    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(10 ether, 10 ether);
+    assertGt(exp0, 0, "fair composition consumes token0 regardless of spot");
+    assertGt(exp1, 0, "fair composition consumes token1 regardless of spot");
   }
 
-  function test_previewDeposit_priceAboveRange_onlyToken1() public {
+  function test_previewDeposit_aboveRangeSpot_usesFairCompositionBothLegs() public {
     _deposit(user, 10 ether, 10 ether);
-    _pushPriceAboveRange();
+    _pushPriceAboveRange(); // manipulate SPOT above range
 
-    uint256 amount0 = 10 ether;
-    uint256 amount1 = 10 ether;
-
-    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
-
-    // Position is fully WBNB — only token1 consumed, token0 = 0.
-    assertEq(exp0, 0, "expected no token0 consumed when price above range");
-    assertGt(exp1, 0, "expected token1 consumed when price above range");
+    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(10 ether, 10 ether);
+    assertGt(exp0, 0, "fair composition consumes token0 regardless of spot");
+    assertGt(exp1, 0, "fair composition consumes token1 regardless of spot");
   }
 
   function test_previewDeposit_secondDeposit_matchesActual() public {
@@ -965,24 +954,21 @@ contract SlisBNBV3ProviderTest is Test {
   // When the price is outside the range only one token is valid.
   // Supplying the correct token succeeds; supplying the wrong token reverts.
 
-  function test_deposit_oneSided_token0Only_belowRange_succeeds() public {
-    // Seed a position first so rebalance can move ticks.
+  function test_deposit_oneSided_token0Only_revertsUnderProportional() public {
+    // Deposits must match the FAIR composition (rate-implied for slisBNB, always ~in-range and
+    // therefore two-sided). A one-sided token0-only deposit binds the composition fraction to the empty
+    // token1 leg -> frac 0 -> 0 shares -> revert. (Manipulating spot out of range does not change this,
+    // because the composition is measured at fair, not spot.)
     _deposit(user, 10 ether, 10 ether);
     _pushPriceBelowRange();
 
-    // Price below tickLower: only token0 (slisBNB) is accepted.
     uint256 amount0 = 10 ether;
     deal(SLISBNB, user2, amount0);
     vm.startPrank(user2);
     IERC20(SLISBNB).approve(address(provider), amount0);
-    (, uint256 exp0, ) = provider.previewDepositAmounts(amount0, 0);
-    uint256 min0 = (exp0 * 999) / 1000;
-    (uint256 shares, uint256 used0, uint256 used1) = provider.deposit(marketParams, amount0, 0, min0, 0, user2);
+    vm.expectRevert(); // ZeroShares
+    provider.deposit(marketParams, amount0, 0, 0, 0, user2);
     vm.stopPrank();
-
-    assertGt(shares, 0, "should mint shares with token0 only below range");
-    assertGt(used0, 0, "should consume token0");
-    assertEq(used1, 0, "should not consume token1");
   }
 
   function test_deposit_oneSided_token1Only_belowRange_reverts() public {
@@ -999,23 +985,18 @@ contract SlisBNBV3ProviderTest is Test {
     vm.stopPrank();
   }
 
-  function test_deposit_oneSided_token1Only_aboveRange_succeeds() public {
+  function test_deposit_oneSided_token1Only_revertsUnderProportional() public {
+    // Symmetric to the token0-only case: a token1-only deposit binds frac to the empty token0 leg -> 0.
     _deposit(user, 10 ether, 10 ether);
     _pushPriceAboveRange();
 
-    // Price above tickUpper: only token1 (WBNB) is accepted.
     uint256 amount1 = 10 ether;
     deal(WBNB, user2, amount1);
     vm.startPrank(user2);
     IERC20(WBNB).approve(address(provider), amount1);
-    (, , uint256 exp1) = provider.previewDepositAmounts(0, amount1);
-    uint256 min1 = (exp1 * 999) / 1000;
-    (uint256 shares, uint256 used0, uint256 used1) = provider.deposit(marketParams, 0, amount1, 0, min1, user2);
+    vm.expectRevert(); // ZeroShares
+    provider.deposit(marketParams, 0, amount1, 0, 0, user2);
     vm.stopPrank();
-
-    assertGt(shares, 0, "should mint shares with token1 only above range");
-    assertEq(used0, 0, "should not consume token0");
-    assertGt(used1, 0, "should consume token1");
   }
 
   function test_deposit_oneSided_token0Only_aboveRange_reverts() public {
@@ -1653,14 +1634,15 @@ contract SlisBNBV3ProviderTest is Test {
   }
 
   function test_getUserBalanceInBnb_proportionalToShares() public {
-    _deposit(user, 10 ether, 10 ether);
-    _deposit(user2, 20 ether, 20 ether);
+    (uint256 shares1, , ) = _deposit(user, 10 ether, 10 ether);
+    (uint256 shares2, , ) = _deposit(user2, 20 ether, 20 ether);
 
     uint256 value1 = provider.getUserBalanceInBnb(user);
     uint256 value2 = provider.getUserBalanceInBnb(user2);
 
-    // user2 deposited ~2x; allow 2% tolerance for compounding and rounding.
-    assertApproxEqRel(value2, value1 * 2, 0.02e18, "user2 BNB value should be ~2x user");
+    // Each share is an equal pro-rata claim, so BNB value tracks the share count — not the raw deposit
+    // amounts (equal token inputs are not equal value). Assert value2/value1 == shares2/shares1.
+    assertApproxEqRel(value2 * shares1, value1 * shares2, 0.01e18, "BNB value should be proportional to shares");
   }
 
   function test_getUserBalanceInBnb_matchesShareValueInBnb() public {
@@ -2291,5 +2273,26 @@ contract SlisBNBV3ProviderTest is Test {
     provider.compound();
 
     assertGt(adapter.totalLiquidity(), liqBefore, "compound should add liquidity when spot ~ fair");
+  }
+
+  /// @dev Counter-test (one-sided idle must not brick compounding): with spot ~ fair (gate passes) but strictly one-sided idle inventory,
+  ///      the computed addable liquidity is zero, which would revert inside pool.mint. _collectAndCompound
+  ///      must instead hold the idle and return, so the permissionless compound() (and the deposit /
+  ///      withdraw / redeemShares that reach it) is never bricked by a single-sided balance.
+  function test_compound_oneSidedIdle_noOpsInsteadOfReverting() public {
+    _deposit(user, 10 ether, 10 ether);
+    uint128 liqBefore = adapter.totalLiquidity();
+
+    // Force a clean one-sided idle state: token0 only, token1 exactly zero. Spot ~ fair (fork default),
+    // so the spot-deviation gate passes and execution reaches the zero-liquidity no-op guard.
+    uint256 idle0 = 5 ether;
+    deal(SLISBNB, address(adapter), IERC20(SLISBNB).balanceOf(address(adapter)) + idle0);
+    stdstore.target(address(adapter)).sig("idleToken0()").checked_write(adapter.idleToken0() + idle0);
+    stdstore.target(address(adapter)).sig("idleToken1()").checked_write(uint256(0));
+
+    provider.compound(); // must NOT revert
+
+    assertEq(adapter.totalLiquidity(), liqBefore, "one-sided idle must not mint liquidity");
+    assertGe(adapter.idleToken0(), idle0, "one-sided idle is held, not lost");
   }
 }
