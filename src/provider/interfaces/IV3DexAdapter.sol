@@ -111,6 +111,11 @@ interface IV3DexAdapter {
   /// @notice Collect accrued fees and re-add them plus idle inventory as liquidity (compound).
   function collectAndCompound() external;
 
+  /// @notice Record tokens already transferred to the adapter as idle inventory, without minting into
+  ///         the pool. Used by the vault deposit path so new deposits enter as idle at the current fair
+  ///         composition (off-pool priced); a later spot-gated compound() deploys them.
+  function creditIdle(uint256 amount0, uint256 amount1) external;
+
   /* ─────────────────────── rebalance / rate config ────────────────── */
 
   /// @notice Exchange rate at the last successful center/init (rate-implied pairs; 0 for TWAP pairs).
