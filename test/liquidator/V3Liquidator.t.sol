@@ -201,6 +201,7 @@ contract V3LiquidatorTest is Test {
       amount1,
       (exp0 * 999) / 1000,
       (exp1 * 999) / 1000,
+      0,
       _user
     );
     vm.stopPrank();

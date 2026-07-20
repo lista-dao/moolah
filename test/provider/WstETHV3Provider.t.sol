@@ -196,7 +196,7 @@ contract WstETHV3ProviderTest is Test {
     vm.startPrank(user);
     IERC20(WSTETH).approve(address(provider), amtWst);
     IERC20(WETH).approve(address(provider), amtWeth);
-    (shares, , ) = provider.deposit(marketParams, amtWst, amtWeth, (e0 * 99) / 100, (e1 * 99) / 100, user);
+    (shares, , ) = provider.deposit(marketParams, amtWst, amtWeth, (e0 * 99) / 100, (e1 * 99) / 100, 0, user);
     vm.stopPrank();
   }
 

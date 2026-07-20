@@ -223,6 +223,7 @@ abstract contract V3Provider is
     uint256 amount1Desired,
     uint256 amount0Min,
     uint256 amount1Min,
+    uint256 minShares,
     address onBehalf
   ) external payable nonReentrant returns (uint256 shares, uint256 amount0Used, uint256 amount1Used) {
     if (marketParams.collateralToken != address(this)) revert InvalidCollateralToken();
@@ -321,6 +322,11 @@ abstract contract V3Provider is
     }
 
     if (shares == 0) revert ZeroShares();
+    // Caller-specified share-slippage floor. Protects a depositor from receiving fewer shares than their
+    // contribution warrants — e.g. a first-depositor inflation attack (H02 / Issue_04) that inflates the
+    // position via a direct NPM.increaseLiquidity donation, or the fair composition shifting between the
+    // off-chain preview and execution (M01). Pass 0 to disable.
+    if (shares < minShares) revert InsufficientShares();
 
     _mint(address(this), shares);
     _approve(address(this), address(MOOLAH), shares);
@@ -454,6 +460,15 @@ abstract contract V3Provider is
     return IV3DexAdapter(ADAPTER).positionAmountsAt(IV3DexAdapter(ADAPTER).spotSqrtPriceX96());
   }
 
+  /// @inheritdoc IV3Provider
+  /// @dev The managed position's token composition valued at the FAIR (manipulation-resistant) price,
+  ///      inclusive of idle inventory and collected fees. This is the ratio a subsequent deposit binds
+  ///      to; front-ends should size the two deposit legs in this ratio to minimise the refund. Returns
+  ///      (0, 0) before the first deposit (no position yet) — use previewDepositAmounts for that case.
+  function getFairComposition() public view returns (uint256 total0, uint256 total1) {
+    return IV3DexAdapter(ADAPTER).positionAmountsAt(IV3DexAdapter(ADAPTER).fairSqrtPriceX96());
+  }
+
   /// @notice Simulate a redemption of `shares` at the current pool price (for tight minAmount0/1).
   function previewRedeemUnderlying(uint256 shares) external view returns (uint256 amount0, uint256 amount1) {
     return IV3DexAdapter(ADAPTER).previewRemoveLiquidity(shares, totalSupply());
@@ -485,6 +500,25 @@ abstract contract V3Provider is
     }
     amount0 = (t0 * frac) / WAD;
     amount1 = (t1 * frac) / WAD;
+  }
+
+  /// @notice Given a desired token0 amount, the token1 amount that pairs with it at the current fair
+  ///         composition ratio, so a subsequent deposit consumes both legs fully (minimal refund).
+  /// @dev    amount1 = amount0 * T1 / T0, where (T0, T1) = getFairComposition(). Reverts if the fair
+  ///         composition has no token0 leg (in that one-sided case deposit token1 only). For the first
+  ///         deposit (no position yet) use previewDepositAmounts, which previews the spot mint instead.
+  function previewDepositForToken0(uint256 amount0) external view returns (uint256 amount1) {
+    (uint256 t0, uint256 t1) = getFairComposition();
+    if (t0 == 0) revert ZeroAmounts();
+    amount1 = (amount0 * t1) / t0;
+  }
+
+  /// @notice Mirror of previewDepositForToken0: the token0 amount that pairs with a desired token1
+  ///         amount at the current fair composition ratio (amount0 = amount1 * T0 / T1).
+  function previewDepositForToken1(uint256 amount1) external view returns (uint256 amount0) {
+    (uint256 t0, uint256 t1) = getFairComposition();
+    if (t1 == 0) revert ZeroAmounts();
+    amount0 = (amount1 * t0) / t1;
   }
 
   /// @notice IProvider hook — the "token" is this shares contract itself.
