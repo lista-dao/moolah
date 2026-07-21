@@ -676,15 +676,12 @@ abstract contract V3DexAdapter is
     uint256 totalShares
   ) external view returns (uint256 amount0, uint256 amount1) {
     if (totalShares == 0 || shares == 0) return (0, 0);
-    uint128 liquidityToRemove = uint128((uint256(_getPositionLiquidity()) * shares) / totalShares);
-    (amount0, amount1) = LiquidityAmounts.getAmountsForLiquidity(
-      spotSqrtPriceX96(),
-      TickMath.getSqrtRatioAtTick(tickLower),
-      TickMath.getSqrtRatioAtTick(tickUpper),
-      liquidityToRemove
-    );
-    amount0 += (idleToken0 * shares) / totalShares;
-    amount1 += (idleToken1 * shares) / totalShares;
+    // Pro-rata of the spot composition incl. pending fees + idle — matches removeLiquidity's actual
+    // (spot-priced) delivery, which the old formula understated by the uncollected fees. Spot (not fair)
+    // so the preview tracks the real burn; callers size minAmount from it.
+    (uint256 total0, uint256 total1) = positionAmountsAt(spotSqrtPriceX96());
+    amount0 = (total0 * shares) / totalShares;
+    amount1 = (total1 * shares) / totalShares;
   }
 
   /// @notice TWAP tick over TWAP_PERIOD seconds.
