@@ -567,6 +567,21 @@ contract SlisBNBV3ProviderTest is Test {
     assertEq(liquidator.balance, bnbBefore + out1); // WBNB unwrapped to BNB
   }
 
+  /// @dev A dust redeem whose pro-rata liquidity AND idle both round to 0 delivers (0,0). With
+  ///      minAmounts of 0 the overall-amount floor (0 >= 0) is trivially satisfied, so without the
+  ///      zero-output guard the shares would be burned for nothing. The guard must revert instead.
+  ///      Driven at the adapter to force the rounding deterministically (share fraction ≈ 0), which the
+  ///      provider path can't guarantee on a fork where position liquidity exceeds total shares.
+  function test_removeLiquidity_dustRoundsToZero_reverts() public {
+    _deposit(user, 10 ether, 10 ether); // establish a live position (+possible idle)
+
+    // A single wei against a colossal totalShares makes totalLiq*shares/totalShares and the pro-rata
+    // idle both floor to 0 → amount0 == amount1 == 0. removeLiquidity is onlyProvider.
+    vm.prank(address(provider));
+    vm.expectRevert(V3DexAdapter.ZeroAmount.selector);
+    adapter.removeLiquidity(1, type(uint256).max, 0, 0, user);
+  }
+
   function test_transferRestriction_directTransferReverts() public {
     _deposit(user, 10 ether, 10 ether);
 
@@ -665,6 +680,21 @@ contract SlisBNBV3ProviderTest is Test {
 
     uint256 price = providerOracle.peek(address(provider));
     assertGt(price, 0, "share price should be non-zero after deposit");
+  }
+
+  /// @dev Dust (zero-value) composition, valid feeds ⇒ peek floors to 1, not revert (else liquidation bricks).
+  function test_peek_dustPositionFloorsInsteadOfReverting() public {
+    _deposit(user, 10 ether, 10 ether); // totalSupply > 0 so peek runs the full valuation
+
+    // Force the adapter to report a zero-value composition at the fair price (dust position).
+    vm.mockCall(
+      address(adapter),
+      abi.encodeWithSelector(bytes4(keccak256("positionAmountsAt(uint160)"))),
+      abi.encode(uint256(0), uint256(0))
+    );
+
+    uint256 price = providerOracle.peek(address(provider));
+    assertEq(price, 1, "dust position floors to 1 (peek does not revert)");
   }
 
   function test_getTotalAmounts_nonZeroAfterDeposit() public {

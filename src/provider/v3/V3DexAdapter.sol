@@ -161,6 +161,7 @@ abstract contract V3DexAdapter is
   error InsufficientBalance();
   error InsufficientAmount();
   error SpotDeviationTooHigh();
+  error ZeroAmount();
 
   /* ─────────────────────────── constructor ────────────────────────── */
 
@@ -327,6 +328,11 @@ abstract contract V3DexAdapter is
     // Overall-amount slippage floor: bounds the total actually delivered to the receiver, consistent
     // with what previewRemoveLiquidity reports, and covers the idle-only / dust-exit path too.
     if (amount0 < minAmount0 || amount1 < minAmount1) revert InsufficientAmount();
+
+    // Zero-output guard: a dust redeem where both the pro-rata liquidity and idle round to 0 would
+    // otherwise burn the caller's shares and deliver nothing when minAmount0/1 are 0 (the floor above
+    // is trivially satisfied by 0 >= 0). Revert so the share burn rolls back instead of being lost.
+    if (shares > 0 && amount0 == 0 && amount1 == 0) revert ZeroAmount();
 
     if (amount0 > 0) _sendToken(TOKEN0, amount0, payable(receiver));
     if (amount1 > 0) _sendToken(TOKEN1, amount1, payable(receiver));

@@ -137,15 +137,18 @@ contract V3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     // Verified on-chain to the wei (e.g. peek(wstETH) == peek(WETH) × wstETH.stEthPerToken() / 1e18).
     uint256 price0 = IOracle(resilientOracle).peek(TOKEN0); // 8 decimals (rate-derived for the LST leg)
     uint256 price1 = IOracle(resilientOracle).peek(TOKEN1); // 8 decimals
-    if (price0 == 0 || price1 == 0) revert ZeroPrice(); // finding D
+    if (price0 == 0 || price1 == 0) revert ZeroPrice(); // broken feed: fail closed
 
     uint256 totalValue = (total0 * price0) / (10 ** DECIMALS0) + (total1 * price1) / (10 ** DECIMALS1);
-    if (totalValue == 0) revert ZeroPrice(); // finding D
 
     // 8-decimal USD price per ONE WHOLE share (10 ** SHARE_DECIMALS share-wei) — Moolah interprets peek()
     // using collateralToken.decimals() — minus the conservative haircut.
     uint256 raw = (totalValue * (10 ** SHARE_DECIMALS)) / supply;
-    return (raw * (BPS - haircutBps)) / BPS;
+    uint256 price = (raw * (BPS - haircutBps)) / BPS;
+    // Dust position rounds to 0: floor, don't revert (a reverting peek bricks liquidation). Avoid 0 —
+    // Moolah's liquidation math degenerates at price 0.
+    if (price == 0) price = 1;
+    return price;
   }
 
   /// @inheritdoc IOracle
