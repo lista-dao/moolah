@@ -2552,4 +2552,20 @@ contract SlisBNBV3ProviderTest is Test {
     vm.expectRevert(V3DexAdapter.SpotDeviationTooHigh.selector);
     provider.rebalance(0, 0, 0, fairTarget, block.timestamp, "");
   }
+
+  /// @dev setHaircutBps is a no-op when the value is unchanged (no redundant write / misleading event).
+  function test_setHaircutBps_noOpWhenUnchanged() public {
+    uint256 h0 = providerOracle.haircutBps();
+
+    vm.recordLogs();
+    vm.prank(manager);
+    providerOracle.setHaircutBps(h0); // unchanged → no-op
+    assertEq(vm.getRecordedLogs().length, 0, "no event emitted when haircut is unchanged");
+    assertEq(providerOracle.haircutBps(), h0, "haircut unchanged");
+
+    uint256 h1 = h0 == 0 ? 50 : 0;
+    vm.prank(manager);
+    providerOracle.setHaircutBps(h1); // real change → applies
+    assertEq(providerOracle.haircutBps(), h1, "haircut updated on a real change");
+  }
 }

@@ -58,18 +58,10 @@ contract SlisBNBV3DexAdapter is V3DexAdapter, ISlisBNBV3DexAdapter {
 
   /* ───────────────────────── hook overrides ───────────────────────── */
 
-  /// @dev slisBNB↔BNB rate from the StakeManager (1e18). 0 for any non-slisBNB/WBNB pair → base TWAP.
+  /// @dev slisBNB↔BNB rate from the StakeManager (1e18). The constructor pins TOKEN0 == slisBNB and
+  ///      TOKEN1 == WBNB, so the pair/order is fixed at deploy and the rate is always the direct
+  ///      slisBNB→BNB conversion (no runtime pair/order branch needed).
   function _lstNativeRate() internal view override returns (uint256) {
-    return _isSlisBnbWbnbPool() ? _poolPriceRate() : 0;
-  }
-
-  /* ─────────────────────────── internals ──────────────────────────── */
-
-  function _isSlisBnbWbnbPool() internal view returns (bool) {
-    return (TOKEN0 == SLISBNB && TOKEN1 == WBNB) || (TOKEN0 == WBNB && TOKEN1 == SLISBNB);
-  }
-
-  function _poolPriceRate() internal view returns (uint256) {
-    return TOKEN0 == SLISBNB ? STAKE_MANAGER.convertSnBnbToBnb(1e18) : STAKE_MANAGER.convertBnbToSnBnb(1e18);
+    return STAKE_MANAGER.convertSnBnbToBnb(1e18);
   }
 }
