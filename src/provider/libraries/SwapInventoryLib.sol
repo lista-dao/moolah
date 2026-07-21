@@ -36,6 +36,7 @@ library SwapInventoryLib {
   error ExceedAmountIn();
   error InsufficientOutput();
   error UnexpectedNative();
+  error InsufficientInventory();
 
   /// @notice Execute one backend-built swap. `sellToken0` ⇒ sell token0 for token1, else token1 for
   ///         token0. `nativeIn` ⇒ the venue takes the native coin for the wrapped-native input leg
@@ -60,8 +61,11 @@ library SwapInventoryLib {
     address tokenOut = sellToken0 ? token1 : token0;
 
     uint256 avail = sellToken0 ? total0 : total1;
-    if (amountIn > avail) amountIn = avail; // never spend more than the position holds
-    if (amountIn == 0) return (total0, total1);
+    if (avail == 0) return (total0, total1); // nothing to sell
+
+    // Stale swapData (requested > held): fail fast. Capping would desync the venue allowance from
+    // swapData and could underflow the totals. Now amountIn <= avail, so the allowance matches the pull.
+    if (amountIn > avail) revert InsufficientInventory();
 
     uint256 beforeIn = IERC20(tokenIn).balanceOf(address(this));
     uint256 beforeOut = IERC20(tokenOut).balanceOf(address(this));

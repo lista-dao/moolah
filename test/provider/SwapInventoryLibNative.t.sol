@@ -134,4 +134,32 @@ contract SwapInventoryLibNativeTest is Test {
     assertEq(t1, amountOut, "token1 total increased by received");
     assertEq(address(harness).balance, 1, "stray native left untouched (not wrapped, not reverted)");
   }
+
+  /// @notice requested amountIn > held ⇒ fail fast (was: silent cap + opaque allowance revert).
+  function test_swap_revertsWhenAmountInExceedsAvail() public {
+    uint256 avail = 5 ether; // the position (total0) holds only 5
+    uint256 amountIn = 10 ether; // stale swapData requests 10 (> avail)
+    bytes memory swapData = abi.encodeWithSelector(
+      NativeDonatingVenue.swap.selector,
+      address(tokenIn),
+      address(tokenOut),
+      amountIn,
+      uint256(9 ether)
+    );
+
+    vm.expectRevert(SwapInventoryLib.InsufficientInventory.selector);
+    harness.doSwap(
+      address(venue),
+      address(tokenIn), // token0
+      address(tokenOut), // token1
+      true, // sellToken0
+      amountIn,
+      9 ether, // amountOutMin
+      swapData,
+      avail, // total0 (available) < amountIn
+      0, // total1
+      WRAPPED_NATIVE,
+      false // nativeIn
+    );
+  }
 }
