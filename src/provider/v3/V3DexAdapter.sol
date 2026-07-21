@@ -160,6 +160,7 @@ abstract contract V3DexAdapter is
   error InvalidParam();
   error InsufficientBalance();
   error InsufficientAmount();
+  error SpotDeviationTooHigh();
 
   /* ─────────────────────────── constructor ────────────────────────── */
 
@@ -395,6 +396,7 @@ abstract contract V3DexAdapter is
     uint256 minAmount0,
     uint256 minAmount1,
     uint256 minLiquidity,
+    uint160 targetSqrtPriceX96,
     uint256 deadline,
     bytes calldata swapData
   ) external onlyProvider nonReentrant {
@@ -461,6 +463,16 @@ abstract contract V3DexAdapter is
     }
 
     if (uint256(mintedLiquidity) < minLiquidity) revert InsufficientLiquidityMinted();
+
+    // The minLiquidity floor alone can be satisfied by liquidity minted at a price manipulated around
+    // this call (then sandwiched on the back-swap). Bound the actual pool price after the swap+mint
+    // against the caller-supplied target: if the BOT's target != 0 (and the gate is enabled) the spot
+    // must be within maxSpotDeviationBps of it, so a price that was moved off the BOT's expectation
+    // reverts. target == 0 opts out (e.g. recenter with no price assertion).
+    if (targetSqrtPriceX96 != 0 && maxSpotDeviationBps != 0) {
+      if (!_priceWithinDeviation(spotSqrtPriceX96(), targetSqrtPriceX96, maxSpotDeviationBps))
+        revert SpotDeviationTooHigh();
+    }
 
     if (rateImplied) {
       uint256 oldCenterRate = lastCenterRate;
@@ -594,13 +606,17 @@ abstract contract V3DexAdapter is
   function _spotWithinFair() internal view returns (bool) {
     uint256 dev = maxSpotDeviationBps;
     if (dev == 0) return true;
-    uint256 fair = uint256(fairSqrtPriceX96());
-    uint256 spot = uint256(spotSqrtPriceX96());
-    uint256 priceFair = FullMath.mulDiv(fair, fair, 1 << 96);
-    uint256 priceSpot = FullMath.mulDiv(spot, spot, 1 << 96);
-    uint256 lo = FullMath.mulDiv(priceFair, BPS - dev, BPS);
-    uint256 hi = FullMath.mulDiv(priceFair, BPS + dev, BPS);
-    return priceSpot >= lo && priceSpot <= hi;
+    return _priceWithinDeviation(spotSqrtPriceX96(), fairSqrtPriceX96(), dev);
+  }
+
+  /// @dev True iff `aSqrt`'s price is within ±`dev` bps of `bSqrt`'s price (both sqrtPriceX96, Q96).
+  ///      Compared in price space (sqrt²) via overflow-safe mulDiv.
+  function _priceWithinDeviation(uint160 aSqrt, uint160 bSqrt, uint256 dev) internal pure returns (bool) {
+    uint256 priceA = FullMath.mulDiv(uint256(aSqrt), uint256(aSqrt), 1 << 96);
+    uint256 priceB = FullMath.mulDiv(uint256(bSqrt), uint256(bSqrt), 1 << 96);
+    uint256 lo = FullMath.mulDiv(priceB, BPS - dev, BPS);
+    uint256 hi = FullMath.mulDiv(priceB, BPS + dev, BPS);
+    return priceA >= lo && priceA <= hi;
   }
 
   /// @inheritdoc IV3DexAdapter

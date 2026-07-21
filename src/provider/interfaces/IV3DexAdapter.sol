@@ -152,6 +152,7 @@ interface IV3DexAdapter {
     uint256 minAmount0,
     uint256 minAmount1,
     uint256 minLiquidity,
+    uint160 targetSqrtPriceX96,
     uint256 deadline,
     bytes calldata swapData
   ) external;
