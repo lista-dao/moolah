@@ -375,7 +375,9 @@ contract WstETHV3ProviderTest is Test {
     vm.prank(bot);
     provider.rebalance(0, 0, 0, 0, block.timestamp, "");
 
-    assertGt(adapter.tokenId(), oldTokenId, "position re-minted");
+    // No-op recenter (unchanged range, no swap / target / floors) short-circuits to an in-place compound
+    // rather than burning and re-minting the identical position: same tokenId, value preserved.
+    assertEq(adapter.tokenId(), oldTokenId, "no-op recenter keeps the same position (no burn/mint)");
     assertLt(adapter.tickLower(), adapter.tickUpper(), "valid range");
     assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "rebalance ~value-neutral");
     assertEq(adapter.lastCenterRate(), IWstETH(WSTETH).stEthPerToken(), "center rate updated");

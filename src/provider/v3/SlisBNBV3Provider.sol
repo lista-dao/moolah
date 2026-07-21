@@ -86,6 +86,9 @@ contract SlisBNBV3Provider is V3Provider {
     uint256 price0 = IOracle(resilientOracle).peek(TOKEN0); // 8-decimal USD
     uint256 price1 = IOracle(resilientOracle).peek(TOKEN1); // 8-decimal USD
     uint256 bnbPrice = IOracle(resilientOracle).peek(BNB_ADDRESS); // 8-decimal USD
+    // Fail closed on a broken feed: a transiently-zero price would understate (possibly zero) the BNB
+    // value and make the slisBNBx minter burn the user's reward balance toward 0. Revert instead.
+    if (price0 == 0 || price1 == 0 || bnbPrice == 0) revert OracleZero();
 
     uint256 value0 = (user0 * price0 * 1e18) / (10 ** DECIMALS0);
     uint256 value1 = (user1 * price1 * 1e18) / (10 ** DECIMALS1);

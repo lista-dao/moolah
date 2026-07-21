@@ -412,6 +412,33 @@ abstract contract V3DexAdapter is
     int24 oldTickLower = tickLower;
     int24 oldTickUpper = tickUpper;
 
+    // Short-circuit a pure no-op recenter: the recomputed range matches the live one AND the caller
+    // asked us to enforce nothing (no swap-based inventory conversion, no target-price assertion, no
+    // slippage / min-liquidity floors). In that case a burn/mint would just re-create the identical
+    // position at the cost of gas and rounding dust. Compound accrued fees + idle into the existing
+    // position instead (itself spot-deviation guarded) and return. When any of those is supplied — a
+    // swap to run, a price/slippage/liquidity floor to honor, or a genuinely different range — we fall
+    // through to the full path so that work still happens and the guards are enforced.
+    if (
+      tokenId != 0 &&
+      newTickLower == oldTickLower &&
+      newTickUpper == oldTickUpper &&
+      swapData.length == 0 &&
+      targetSqrtPriceX96 == 0 &&
+      minAmount0 == 0 &&
+      minAmount1 == 0 &&
+      minLiquidity == 0
+    ) {
+      _collectAndCompound();
+      if (rateImplied) {
+        uint256 oldRate = lastCenterRate;
+        lastCenterRate = centerRate;
+        emit LastCenterRateUpdated(oldRate, centerRate);
+      }
+      emit Rebalanced(oldTickLower, oldTickUpper, newTickLower, newTickUpper, tokenId);
+      return;
+    }
+
     uint256 total0;
     uint256 total1;
     if (tokenId != 0) {
@@ -716,7 +743,9 @@ abstract contract V3DexAdapter is
     idleToken0 = toCompound0 - used0;
     idleToken1 = toCompound1 - used1;
 
-    emit Compounded(toCompound0, toCompound1, liquidityAdded);
+    // Emit the amounts actually consumed by increaseLiquidity, not the raw inputs — the leftover
+    // (toCompound - used) is held as idle, so the raw figures would overstate what was compounded.
+    emit Compounded(used0, used1, liquidityAdded);
   }
 
   function _getPositionLiquidity() internal view returns (uint128 liquidity) {
@@ -774,8 +803,16 @@ abstract contract V3DexAdapter is
       initialTickUpper = _ceilTick(currentTick + FALLBACK_HALF_RANGE_TICKS, tickSpacing);
     }
 
+    // _floorTick / _ceilTick can push an aligned tick just past the usable range (and TickMath /
+    // pool.mint would then revert). Clamp both bounds back into [MIN_TICK, MAX_TICK].
+    int24 minUsable = _ceilTick(TickMath.MIN_TICK, tickSpacing);
+    int24 maxUsable = _floorTick(TickMath.MAX_TICK, tickSpacing);
+    if (initialTickLower < minUsable) initialTickLower = minUsable;
+    if (initialTickUpper > maxUsable) initialTickUpper = maxUsable;
+
     if (initialTickLower >= initialTickUpper) {
-      initialTickUpper = initialTickLower + tickSpacing;
+      initialTickLower = maxUsable - tickSpacing;
+      initialTickUpper = maxUsable;
     }
   }
 
