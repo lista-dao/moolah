@@ -583,6 +583,29 @@ contract SlisBNBV3ProviderTest is Test {
     provider.transferFrom(MOOLAH_PROXY, user2, 1);
   }
 
+  /// @dev Even Moolah's own transferFrom must debit the allowance the owner granted it, rather than
+  ///      moving shares with an unbounded allowance. No allowance ⇒ revert; a set allowance is spent.
+  function test_transferRestriction_moolahTransferFromSpendsAllowance() public {
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    // The deposit path parked the shares in Moolah as collateral; move them back to `user` to hold.
+    vm.prank(user);
+    provider.withdrawShares(marketParams, shares, user, user);
+
+    // Moolah with no allowance from `user` cannot pull shares.
+    vm.prank(MOOLAH_PROXY);
+    vm.expectRevert();
+    provider.transferFrom(user, user2, shares);
+
+    // With an allowance set, Moolah's transferFrom succeeds and the allowance is debited.
+    vm.prank(user);
+    provider.approve(MOOLAH_PROXY, shares);
+    vm.prank(MOOLAH_PROXY);
+    provider.transferFrom(user, user2, shares);
+
+    assertEq(provider.balanceOf(user2), shares, "shares moved to user2");
+    assertEq(provider.allowance(user, MOOLAH_PROXY), 0, "allowance fully spent");
+  }
+
   function test_rebalance_onlyBot() public {
     _deposit(user, 10 ether, 10 ether);
 

@@ -330,10 +330,28 @@ contract SlisBNBV3ProviderRateTest is Test {
     vm.prank(bot);
     provider.rebalance(0, 0, 0, 0, block.timestamp, "");
 
-    assertGt(adapter.tokenId(), oldTokenId, "position should be re-minted");
+    // A no-op recenter — recomputed range equals the live one and the caller supplied no swap, target,
+    // or min floors — short-circuits to an in-place compound instead of burning and re-minting the
+    // identical position. Same tokenId (no churn), value preserved, center rate still refreshed.
+    assertEq(adapter.tokenId(), oldTokenId, "no-op recenter keeps the same position (no burn/mint)");
     assertLt(adapter.tickLower(), adapter.tickUpper(), "rate-derived range should be valid");
     assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "rebalance is ~value-neutral");
     assertEq(adapter.lastCenterRate(), IStakeManager(STAKE_MANAGER).convertSnBnbToBnb(1e18), "center rate updated");
+  }
+
+  /// @dev The no-op short-circuit is narrow: supplying any guard (here a min-liquidity floor) takes the
+  ///      full burn/mint recenter path even when the recomputed range is unchanged.
+  function test_rebalance_guardedRecenterTakesFullPath() public {
+    _deposit(10 ether, 10 ether);
+    vm.prank(manager);
+    adapter.setCenterRateThresholdBps(0);
+
+    uint256 oldTokenId = adapter.tokenId();
+    vm.prank(bot);
+    provider.rebalance(0, 0, 1, 0, block.timestamp, ""); // minLiquidity = 1 ⇒ not a no-op
+
+    assertGt(adapter.tokenId(), oldTokenId, "guarded recenter re-mints");
+    assertLt(adapter.tickLower(), adapter.tickUpper(), "range valid");
   }
 
   function test_rebalance_revertsWhenCenterRateDeviationBelowThreshold() public {

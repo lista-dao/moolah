@@ -210,6 +210,7 @@ abstract contract V3Provider is
     uint256 value
   ) public override(ERC20Upgradeable, IERC20) returns (bool) {
     if (msg.sender != address(MOOLAH)) revert OnlyMoolah();
+    _spendAllowance(from, msg.sender, value); // decrement the granted allowance like a standard ERC20 pull
     _transfer(from, to, value);
     return true;
   }
@@ -372,10 +373,12 @@ abstract contract V3Provider is
     if (receiver == address(0)) revert ZeroAddress();
     if (!_isSenderAuthorized(onBehalf)) revert Unauthorized();
 
+    // Compound accrued fees BEFORE Moolah's health check so the position is valued with fees folded in
+    // (not under-valued mid-withdrawal).
+    IV3DexAdapter(ADAPTER).collectAndCompound();
+
     MOOLAH.withdrawCollateral(marketParams, shares, onBehalf, address(this));
     _afterCollateralChange(marketParams.id(), onBehalf);
-
-    IV3DexAdapter(ADAPTER).collectAndCompound();
 
     // CEI: burn before the adapter removes liquidity and pushes underlying to `receiver`, so
     // totalSupply stays consistent with the reduced position during the (native-BNB) callback —
@@ -400,6 +403,9 @@ abstract contract V3Provider is
     if (receiver == address(0)) revert ZeroAddress();
     if (!_isSenderAuthorized(onBehalf)) revert Unauthorized();
 
+    // Compound accrued fees before Moolah's health check so it values the position with fees included.
+    IV3DexAdapter(ADAPTER).collectAndCompound();
+
     MOOLAH.withdrawCollateral(marketParams, shares, onBehalf, address(this));
     _afterCollateralChange(marketParams.id(), onBehalf);
 
@@ -413,6 +419,9 @@ abstract contract V3Provider is
     if (shares == 0) revert ZeroShares();
     if (onBehalf == address(0)) revert ZeroAddress();
     if (balanceOf(msg.sender) < shares) revert InsufficientShares();
+
+    // Compound accrued fees before supplying into Moolah so the position is valued with fees included.
+    IV3DexAdapter(ADAPTER).collectAndCompound();
 
     _transfer(msg.sender, address(this), shares);
     _approve(address(this), address(MOOLAH), shares);
@@ -549,6 +558,9 @@ abstract contract V3Provider is
   function _amountsValueUsd(uint256 amount0, uint256 amount1) internal view returns (uint256) {
     uint256 price0 = IOracle(resilientOracle).peek(TOKEN0); // 8 decimals
     uint256 price1 = IOracle(resilientOracle).peek(TOKEN1); // 8 decimals
+    // Fail closed: a broken feed on either leg (price 0) must revert, not silently value the position on
+    // one leg (which would under-price the collateral and enable unfair liquidation / over-borrow).
+    if (price0 == 0 || price1 == 0) revert OracleZero();
     return (amount0 * price0) / (10 ** DECIMALS0) + (amount1 * price1) / (10 ** DECIMALS1);
   }
 
