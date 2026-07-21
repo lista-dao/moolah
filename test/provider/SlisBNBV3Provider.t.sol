@@ -2496,6 +2496,35 @@ contract SlisBNBV3ProviderTest is Test {
     assertApproxEqAbs(pend1, col1 - owed1, 2, "simulated pending1 == actual collectable minus checkpointed");
   }
 
+  /// @dev previewRemoveLiquidity pro-rates the fee-inclusive fair composition, so it no longer
+  ///      under-reports by pending fees (was: spot principal + idle only).
+  function test_previewRemoveLiquidity_includesPendingFees() public {
+    (uint256 shares, , ) = _deposit(user, 100 ether, 100 ether);
+    uint256 supply = provider.totalSupply();
+
+    // Accrue real swap fees across the range.
+    PoolSwapper swapper = new PoolSwapper();
+    deal(WBNB, address(swapper), 5_000 ether);
+    deal(SLISBNB, address(swapper), 5_000 ether);
+    swapper.swapExactIn(POOL, false, 2_000 ether);
+    swapper.swapExactIn(POOL, true, 2_000 ether);
+
+    uint160 spot = adapter.spotSqrtPriceX96();
+
+    // New preview == pro-rata of the fee-inclusive spot composition (matches actual delivery).
+    (uint256 p0, uint256 p1) = adapter.previewRemoveLiquidity(shares, supply);
+    (uint256 t0, uint256 t1) = adapter.positionAmountsAt(spot);
+    assertEq(p0, (t0 * shares) / supply, "preview0 == pro-rata spot composition (incl. fees)");
+    assertEq(p1, (t1 * shares) / supply, "preview1 == pro-rata spot composition (incl. fees)");
+
+    // Old formula (spot principal + idle, no pending fees) under-reports on at least one leg.
+    uint128 liqRemove = uint128((uint256(adapter.totalLiquidity()) * shares) / supply);
+    (uint256 o0, uint256 o1) = adapter.amountsForLiquidity(liqRemove, spot);
+    o0 += (adapter.idleToken0() * shares) / supply;
+    o1 += (adapter.idleToken1() * shares) / supply;
+    assertTrue(p0 > o0 || p1 > o1, "preview now exceeds the fee-omitting spot formula");
+  }
+
   /// @dev Counter-test: rebalance now takes a target pool price and reverts if the actual pool price
   ///      after the swap+mint deviates from it beyond maxSpotDeviationBps. This is what stops a price
   ///      manipulated around the rebalance (making the minLiquidity floor pass on off-market liquidity,
