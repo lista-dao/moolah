@@ -105,6 +105,7 @@ contract V3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable
 
     resilientOracle = _resilientOracle;
     haircutBps = _haircutBps;
+    emit HaircutChanged(_haircutBps);
   }
 
   /* ─────────────────────── IOracle implementation ─────────────────── */
@@ -166,6 +167,7 @@ contract V3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   /// @inheritdoc IV3ProviderOracle
   function setHaircutBps(uint256 _haircutBps) external onlyRole(MANAGER) {
     if (_haircutBps > MAX_HAIRCUT_BPS) revert InvalidHaircut();
+    if (_haircutBps == haircutBps) return; // no-op: skip the redundant write + misleading event
     haircutBps = _haircutBps;
     emit HaircutChanged(_haircutBps);
   }
