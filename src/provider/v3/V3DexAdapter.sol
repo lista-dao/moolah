@@ -159,6 +159,7 @@ abstract contract V3DexAdapter is
   error SwapLossTooHigh();
   error InvalidParam();
   error InsufficientBalance();
+  error InsufficientAmount();
 
   /* ─────────────────────────── constructor ────────────────────────── */
 
@@ -299,7 +300,12 @@ abstract contract V3DexAdapter is
     uint128 liquidityToRemove = totalShares == 0 ? 0 : uint128((uint256(totalLiq) * shares) / totalShares);
 
     if (liquidityToRemove > 0) {
-      V3PositionLib.decreaseLiquidity(POSITION_MANAGER, tokenId, liquidityToRemove, minAmount0, minAmount1);
+      // Slippage is enforced on the OVERALL amount delivered (principal + fees + pro-rata idle) at the
+      // end of this function, NOT here on the burned principal alone. Callers size minAmount0/1 from
+      // previewRemoveLiquidity, which returns principal + pro-rata idle; a principal-only floor here
+      // would spuriously revert whenever idle is a meaningful share of the payout, and would not be
+      // enforced at all on an idle-only / dust (liquidityToRemove == 0) exit.
+      V3PositionLib.decreaseLiquidity(POSITION_MANAGER, tokenId, liquidityToRemove, 0, 0);
       (amount0, amount1) = V3PositionLib.collectAll(POSITION_MANAGER, tokenId);
     }
 
@@ -316,6 +322,10 @@ abstract contract V3DexAdapter is
         amount1 += idleOut1;
       }
     }
+
+    // Overall-amount slippage floor: bounds the total actually delivered to the receiver, consistent
+    // with what previewRemoveLiquidity reports, and covers the idle-only / dust-exit path too.
+    if (amount0 < minAmount0 || amount1 < minAmount1) revert InsufficientAmount();
 
     if (amount0 > 0) _sendToken(TOKEN0, amount0, payable(receiver));
     if (amount1 > 0) _sendToken(TOKEN1, amount1, payable(receiver));

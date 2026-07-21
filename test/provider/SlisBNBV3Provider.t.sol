@@ -1506,6 +1506,37 @@ contract SlisBNBV3ProviderTest is Test {
     provider.redeemShares(shares, min0, exp1 * 2, user2);
   }
 
+  /// @dev Counter-test: the removeLiquidity slippage floor must apply to the OVERALL amount delivered
+  ///      (principal + fees + pro-rata idle), matching what previewRedeemUnderlying reports — not to the
+  ///      burned principal alone. Previously a withdraw/redeem whose minAmount was sized from the preview
+  ///      reverted (decreaseLiquidity's principal-only check) once idle was a meaningful share of the
+  ///      payout. One-sided idle keeps the pre-removeLiquidity compound a no-op, so the idle survives to
+  ///      be paid out — the exact condition that tripped the old floor.
+  function test_redeemShares_minAmountFloor_coversIdlePayout() public {
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    vm.prank(MOOLAH_PROXY);
+    provider.transfer(user2, shares);
+
+    // Force a one-sided idle state (token0 only) so collectAndCompound no-ops and the idle is not
+    // deployed before removeLiquidity pays it out pro-rata.
+    uint256 idle0 = 5 ether;
+    deal(SLISBNB, address(adapter), IERC20(SLISBNB).balanceOf(address(adapter)) + idle0);
+    stdstore.target(address(adapter)).sig("idleToken0()").checked_write(adapter.idleToken0() + idle0);
+    stdstore.target(address(adapter)).sig("idleToken1()").checked_write(uint256(0));
+
+    // Preview reports principal + pro-rata idle; a tight (preview-sized) floor must now pass.
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
+    uint256 min0 = (exp0 * 999) / 1000;
+    uint256 min1 = (exp1 * 999) / 1000;
+    assertGt(exp0, 0, "preview includes idle payout");
+
+    vm.prank(user2);
+    (uint256 out0, uint256 out1) = provider.redeemShares(shares, min0, min1, user2);
+
+    assertGe(out0, min0, "delivered token0 >= preview-derived floor (incl. idle)");
+    assertGe(out1, min1, "delivered token1 >= floor");
+  }
+
   /* ──────────── withdraw token composition by price position ─────── */
 
   function test_withdraw_belowRange_returnsToken0Only() public {
