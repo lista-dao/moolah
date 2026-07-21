@@ -454,6 +454,57 @@ contract V3LiquidatorTest is Test {
     assertGt(IERC20(LISUSD).balanceOf(address(liquidator)), 0, "excess lisUSD in liquidator");
   }
 
+  /// @dev The V3Liquidation event must report the amounts actually redeemed in the callback, not the
+  ///      hardcoded 0 / 0 it previously logged. Both legs (SLISBNB, WBNB→native) are non-zero here.
+  function test_flashLiquidate_eventReportsRedeemedAmounts() public {
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    uint256 borrowed = _borrowAgainstCollateral(user);
+    _makeUnhealthy();
+
+    bytes memory swap0Data = abi.encodeWithSelector(mockSwap.swap.selector, SLISBNB, LISUSD, uint256(0), borrowed * 2);
+    bytes memory swap1Data = abi.encodeWithSelector(
+      mockSwap.swap.selector,
+      BNB_ADDRESS,
+      LISUSD,
+      uint256(0),
+      uint256(0)
+    );
+
+    V3Liquidator.FlashLiquidateParams memory params = V3Liquidator.FlashLiquidateParams({
+      v3Provider: address(provider),
+      minToken0Amt: 0,
+      minToken1Amt: 0,
+      redeemShares: true,
+      token0Pair: address(mockSwap),
+      token0Spender: address(0),
+      token1Pair: address(mockSwap),
+      token1Spender: address(0),
+      swapToken0Data: swap0Data,
+      swapToken1Data: swap1Data
+    });
+
+    vm.recordLogs();
+    vm.prank(bot);
+    liquidator.flashLiquidate(Id.unwrap(marketId), user, shares, params);
+
+    Vm.Log[] memory logs = vm.getRecordedLogs();
+    bool found;
+    for (uint256 i = 0; i < logs.length; i++) {
+      if (logs[i].topics[0] == V3Liquidator.V3Liquidation.selector) {
+        (uint256 seized, uint256 repaid, uint256 amount0, uint256 amount1) = abi.decode(
+          logs[i].data,
+          (uint256, uint256, uint256, uint256)
+        );
+        seized;
+        repaid;
+        assertGt(amount0, 0, "event reports redeemed token0");
+        assertGt(amount1, 0, "event reports redeemed token1");
+        found = true;
+      }
+    }
+    assertTrue(found, "V3Liquidation event emitted");
+  }
+
   /// @dev Regression: a stale absolute-balance check (`balanceOf(this) < repaidAssets`) lets an
   ///      unprofitable flash liquidation settle against loanToken the liquidator already holds from
   ///      unrelated prior activity, silently draining those reserves. Uses `_makeUnhealthyPartial` (not
