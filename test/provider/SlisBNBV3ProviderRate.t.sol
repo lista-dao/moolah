@@ -251,7 +251,7 @@ contract SlisBNBV3ProviderRateTest is Test {
     vm.startPrank(user);
     IERC20(SLISBNB).approve(address(provider), amtSlis);
     IERC20(WBNB).approve(address(provider), amtWbnb);
-    (shares, , ) = provider.deposit(marketParams, amtSlis, amtWbnb, (e0 * 99) / 100, (e1 * 99) / 100, user);
+    (shares, , ) = provider.deposit(marketParams, amtSlis, amtWbnb, (e0 * 99) / 100, (e1 * 99) / 100, 0, user);
     vm.stopPrank();
   }
 
@@ -328,12 +328,30 @@ contract SlisBNBV3ProviderRateTest is Test {
     adapter.setCenterRateThresholdBps(0);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, block.timestamp, "");
 
-    assertGt(adapter.tokenId(), oldTokenId, "position should be re-minted");
+    // A no-op recenter — recomputed range equals the live one and the caller supplied no swap, target,
+    // or min floors — short-circuits to an in-place compound instead of burning and re-minting the
+    // identical position. Same tokenId (no churn), value preserved, center rate still refreshed.
+    assertEq(adapter.tokenId(), oldTokenId, "no-op recenter keeps the same position (no burn/mint)");
     assertLt(adapter.tickLower(), adapter.tickUpper(), "rate-derived range should be valid");
     assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "rebalance is ~value-neutral");
     assertEq(adapter.lastCenterRate(), IStakeManager(STAKE_MANAGER).convertSnBnbToBnb(1e18), "center rate updated");
+  }
+
+  /// @dev The no-op short-circuit is narrow: supplying any guard (here a min-liquidity floor) takes the
+  ///      full burn/mint recenter path even when the recomputed range is unchanged.
+  function test_rebalance_guardedRecenterTakesFullPath() public {
+    _deposit(10 ether, 10 ether);
+    vm.prank(manager);
+    adapter.setCenterRateThresholdBps(0);
+
+    uint256 oldTokenId = adapter.tokenId();
+    vm.prank(bot);
+    provider.rebalance(0, 0, 1, 0, block.timestamp, ""); // minLiquidity = 1 ⇒ not a no-op
+
+    assertGt(adapter.tokenId(), oldTokenId, "guarded recenter re-mints");
+    assertLt(adapter.tickLower(), adapter.tickUpper(), "range valid");
   }
 
   function test_rebalance_revertsWhenCenterRateDeviationBelowThreshold() public {
@@ -341,7 +359,7 @@ contract SlisBNBV3ProviderRateTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.RateDeviationBelowThreshold.selector);
-    provider.rebalance(0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, block.timestamp, "");
   }
 
   function test_rebalance_revertsAfterDeadline() public {
@@ -349,7 +367,7 @@ contract SlisBNBV3ProviderRateTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.DeadlineExpired.selector);
-    provider.rebalance(0, 0, 0, block.timestamp - 1, "");
+    provider.rebalance(0, 0, 0, 0, block.timestamp - 1, "");
   }
 
   function test_rebalance_revertsWhenMinLiquidityTooHigh() public {
@@ -360,7 +378,7 @@ contract SlisBNBV3ProviderRateTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.InsufficientLiquidityMinted.selector);
-    provider.rebalance(0, 0, type(uint256).max, block.timestamp, "");
+    provider.rebalance(0, 0, type(uint256).max, 0, block.timestamp, "");
   }
 
   function _tick() internal view returns (int24 tick) {

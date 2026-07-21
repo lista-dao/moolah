@@ -54,6 +54,13 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
   /// @dev Whitelisted V3Provider contracts (collateral token = the provider itself).
   mapping(address => bool) public v3Providers;
 
+  /// @dev Pass-back of the leg amounts redeemed inside onMoolahLiquidate, so flashLiquidate can report
+  ///      the actual redeemed amount0 / amount1 in its V3Liquidation event rather than 0. Appended at
+  ///      the end of the storage layout (upgrade-safe). flashLiquidate zeroes them before each liquidate
+  ///      so a non-redeeming flash liquidation — or a stale value from an earlier call — reports 0.
+  uint256 private _redeemedAmount0;
+  uint256 private _redeemedAmount1;
+
   /* ──────────────────────────── events ────────────────────────────── */
 
   event TokenWhitelistChanged(address indexed token, bool status);
@@ -276,6 +283,11 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
     address effectiveToken0Spender = params.token0Spender == address(0) ? params.token0Pair : params.token0Spender;
     address effectiveToken1Spender = params.token1Spender == address(0) ? params.token1Pair : params.token1Spender;
 
+    // Clear any stale pass-back (e.g. from an earlier flashLiquidate in the same tx). The callback
+    // fills these in only when it redeems; a non-redeeming flash liquidation reports 0 / 0.
+    _redeemedAmount0 = 0;
+    _redeemedAmount1 = 0;
+
     (uint256 _seized, uint256 _repaid) = IMoolah(MOOLAH).liquidate(
       mp,
       borrower,
@@ -301,7 +313,7 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
       )
     );
 
-    emit V3Liquidation(id, params.v3Provider, borrower, _seized, _repaid, 0, 0);
+    emit V3Liquidation(id, params.v3Provider, borrower, _seized, _repaid, _redeemedAmount0, _redeemedAmount1);
   }
 
   /**
@@ -401,6 +413,10 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
       // leg is an ERC-20 sold via approve + call. Read it from the provider — never hardcode a chain.
       address wrappedNative = IV3Provider(d.v3Provider).WRAPPED_NATIVE();
 
+      // Snapshot before redeeming/swapping so profitability is judged on THIS liquidation's
+      // delta, not masked by loanToken balance already sitting idle from prior liquidations.
+      uint256 before = d.loanToken.balanceOf(address(this));
+
       // Redeem V3 shares → TOKEN0 + TOKEN1; the wrapped-native leg arrives as the native coin.
       (uint256 amount0, uint256 amount1) = IV3Provider(d.v3Provider).redeemShares(
         d.seized,
@@ -408,6 +424,10 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
         d.minToken1Amt,
         address(this)
       );
+
+      // Pass the actual redeemed amounts back to flashLiquidate for the V3Liquidation event.
+      _redeemedAmount0 = amount0;
+      _redeemedAmount1 = amount1;
 
       // Swap TOKEN0 → loanToken (skip if already loanToken or no swap requested).
       if (d.swapToken0 && amount0 > 0 && token0 != d.loanToken) {
@@ -427,7 +447,8 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
         if (nativeBalance > 0) IWBNB(wrappedNative).deposit{ value: nativeBalance }();
       }
 
-      if (d.loanToken.balanceOf(address(this)) < repaidAssets) revert NoProfit();
+      uint256 out = d.loanToken.balanceOf(address(this)) - before;
+      if (out < repaidAssets) revert NoProfit();
     }
 
     // Approve Moolah to pull the repayment (always done, flash or pre-funded).

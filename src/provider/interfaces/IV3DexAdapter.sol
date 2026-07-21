@@ -111,6 +111,11 @@ interface IV3DexAdapter {
   /// @notice Collect accrued fees and re-add them plus idle inventory as liquidity (compound).
   function collectAndCompound() external;
 
+  /// @notice Record tokens already transferred to the adapter as idle inventory, without minting into
+  ///         the pool. Used by the vault deposit path so new deposits enter as idle at the current fair
+  ///         composition (off-pool priced); a later spot-gated compound() deploys them.
+  function creditIdle(uint256 amount0, uint256 amount1) external;
+
   /* ─────────────────────── rebalance / rate config ────────────────── */
 
   /// @notice Exchange rate at the last successful center/init (rate-implied pairs; 0 for TWAP pairs).
@@ -135,12 +140,19 @@ interface IV3DexAdapter {
   /// @notice Set the per-swap rate-anchored loss cap (onlyRole MANAGER; ppm, 1e6 = 100%).
   function setMaxSwapLossBp(uint256 maxSwapLossBp) external;
 
+  /// @notice Max |pool spot − fair| price deviation (bps) tolerated when adding liquidity at pool spot.
+  function maxSpotDeviationBps() external view returns (uint256);
+
+  /// @notice Set the spot-vs-fair deviation gate (onlyRole MANAGER; bps of price, 0 disables).
+  function setMaxSpotDeviationBps(uint256 maxSpotDeviationBps) external;
+
   /// @notice Recenter the position to its range and convert inventory to the optimal ratio.
   ///         onlyProvider — the provider gates the caller with the BOT role.
   function rebalance(
     uint256 minAmount0,
     uint256 minAmount1,
     uint256 minLiquidity,
+    uint160 targetSqrtPriceX96,
     uint256 deadline,
     bytes calldata swapData
   ) external;

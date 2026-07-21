@@ -59,10 +59,11 @@ contract SlisBNBV3Provider is V3Provider {
     uint256 minAmount0,
     uint256 minAmount1,
     uint256 minLiquidity,
+    uint160 targetSqrtPriceX96,
     uint256 deadline,
     bytes calldata swapData
   ) external onlyRole(BOT) nonReentrant {
-    _guardedRebalance(minAmount0, minAmount1, minLiquidity, deadline, swapData);
+    _guardedRebalance(minAmount0, minAmount1, minLiquidity, targetSqrtPriceX96, deadline, swapData);
   }
 
   /* ─────────────────── slisBNBx: sync / view ──────────────────────── */
@@ -85,6 +86,9 @@ contract SlisBNBV3Provider is V3Provider {
     uint256 price0 = IOracle(resilientOracle).peek(TOKEN0); // 8-decimal USD
     uint256 price1 = IOracle(resilientOracle).peek(TOKEN1); // 8-decimal USD
     uint256 bnbPrice = IOracle(resilientOracle).peek(BNB_ADDRESS); // 8-decimal USD
+    // Fail closed on a broken feed: a transiently-zero price would understate (possibly zero) the BNB
+    // value and make the slisBNBx minter burn the user's reward balance toward 0. Revert instead.
+    if (price0 == 0 || price1 == 0 || bnbPrice == 0) revert OracleZero();
 
     uint256 value0 = (user0 * price0 * 1e18) / (10 ** DECIMALS0);
     uint256 value1 = (user1 * price1 * 1e18) / (10 ** DECIMALS1);
