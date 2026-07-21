@@ -17,6 +17,7 @@ import { V3DexAdapter } from "../../src/provider/v3/V3DexAdapter.sol";
 import { SwapInventoryLib } from "../../src/provider/libraries/SwapInventoryLib.sol";
 import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
 import { IV3PoolMinimal } from "../../src/provider/interfaces/IV3PoolMinimal.sol";
+import { INonfungiblePositionManager } from "../../src/provider/interfaces/INonfungiblePositionManager.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
 import { IMoolah, MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
@@ -1410,16 +1411,19 @@ contract SlisBNBV3ProviderTest is Test {
     _deposit(user, 10 ether, 10 ether);
     _pushPriceBelowRange();
 
-    (uint256 total0, ) = provider.getTotalAmounts();
-    assertGt(total0, 0, "should hold slisBNB before rebalance");
+    // rebalance's minAmount0 bounds the PRINCIPAL burned by decreaseLiquidity (fees are collected
+    // separately), so size it from the liquidity principal at spot — not getTotalAmounts(), which now
+    // also includes the pending fees the price-push swap accrued and would over-shoot the floor.
+    (uint256 principal0, ) = adapter.amountsForLiquidity(adapter.totalLiquidity(), adapter.spotSqrtPriceX96());
+    assertGt(principal0, 0, "should hold slisBNB principal before rebalance");
 
     // The rate-derived recenter target is unaffected by a pool swap, so disable the rate-drift guard.
     vm.prank(manager);
     adapter.setCenterRateThresholdBps(0);
 
-    // minAmount0 = total0 (exact), minAmount1 = 0 (position has no WBNB).
+    // minAmount0 = principal0 (exact), minAmount1 = 0 (position has no WBNB).
     vm.prank(bot);
-    provider.rebalance(total0, 0, 0, block.timestamp, "");
+    provider.rebalance(principal0, 0, 0, block.timestamp, "");
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
   }
@@ -1446,16 +1450,18 @@ contract SlisBNBV3ProviderTest is Test {
     _deposit(user, 10 ether, 10 ether);
     _pushPriceAboveRange();
 
-    (, uint256 total1) = provider.getTotalAmounts();
-    assertGt(total1, 0, "should hold WBNB before rebalance");
+    // minAmount1 bounds the principal burned by decreaseLiquidity (see the below-range test); size it
+    // from the liquidity principal at spot, not fee-inclusive getTotalAmounts().
+    (, uint256 principal1) = adapter.amountsForLiquidity(adapter.totalLiquidity(), adapter.spotSqrtPriceX96());
+    assertGt(principal1, 0, "should hold WBNB principal before rebalance");
 
     // The rate-derived recenter target is unaffected by a pool swap, so disable the rate-drift guard.
     vm.prank(manager);
     adapter.setCenterRateThresholdBps(0);
 
-    // minAmount0 = 0 (no slisBNB), minAmount1 = total1 (exact).
+    // minAmount0 = 0 (no slisBNB), minAmount1 = principal1 (exact).
     vm.prank(bot);
-    provider.rebalance(0, total1, 0, block.timestamp, "");
+    provider.rebalance(0, principal1, 0, block.timestamp, "");
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
   }
@@ -2355,5 +2361,54 @@ contract SlisBNBV3ProviderTest is Test {
 
     assertEq(adapter.totalLiquidity(), liqBefore, "one-sided idle must not mint liquidity");
     assertGe(adapter.idleToken0(), idle0, "one-sided idle is held, not lost");
+  }
+
+  /// @dev Counter-test: positionAmountsAt used to add only the
+  ///      checkpointed tokensOwed, ignoring fees accrued in the pool since the last poke — understating
+  ///      every valuation built on it. The fix simulates the live feeGrowthInside delta. This fork test
+  ///      cross-checks that simulated pending against the pool's ground truth: NPM.collect (which pokes
+  ///      the pool) returns checkpointed owed + freshly-earned, so collected - owed must equal our
+  ///      simulated pending to the wei.
+  function test_positionAmountsAt_pendingFees_crossCheckedAgainstCollect() public {
+    _deposit(user, 100 ether, 100 ether);
+
+    // Accrue real swap fees to the position by trading both directions across its range.
+    PoolSwapper swapper = new PoolSwapper();
+    deal(WBNB, address(swapper), 5_000 ether);
+    deal(SLISBNB, address(swapper), 5_000 ether);
+    swapper.swapExactIn(POOL, false, 2_000 ether); // token1 -> token0 (price up)
+    swapper.swapExactIn(POOL, true, 2_000 ether); // token0 -> token1 (price back down)
+
+    uint160 fair = adapter.fairSqrtPriceX96();
+    uint256 tid = adapter.tokenId();
+
+    // Stale total = the OLD formula: principal at fair + checkpointed tokensOwed + idle (no pending).
+    (, , , , , , , uint128 liq, , , uint128 owed0, uint128 owed1) = INonfungiblePositionManager(NPM).positions(tid);
+    (uint256 principal0, uint256 principal1) = adapter.amountsForLiquidity(liq, fair);
+    uint256 stale0 = principal0 + owed0 + adapter.idleToken0();
+    uint256 stale1 = principal1 + owed1 + adapter.idleToken1();
+
+    // With the fix, positionAmountsAt adds the simulated pending fees on top of the stale total.
+    (uint256 sim0, uint256 sim1) = adapter.positionAmountsAt(fair);
+    uint256 pend0 = sim0 - stale0;
+    uint256 pend1 = sim1 - stale1;
+    assertTrue(pend0 > 0 || pend1 > 0, "swaps must have accrued measurable pending fees");
+
+    // Ground truth: NPM.collect pokes the pool and returns owed + freshly-earned. Snapshot so the
+    // collect does not mutate the position under test.
+    uint256 snap = vm.snapshotState();
+    vm.prank(address(adapter));
+    (uint256 col0, uint256 col1) = INonfungiblePositionManager(NPM).collect(
+      INonfungiblePositionManager.CollectParams({
+        tokenId: tid,
+        recipient: address(adapter),
+        amount0Max: type(uint128).max,
+        amount1Max: type(uint128).max
+      })
+    );
+    assertTrue(vm.revertToState(snap), "snapshot revert failed");
+
+    assertApproxEqAbs(pend0, col0 - owed0, 2, "simulated pending0 == actual collectable minus checkpointed");
+    assertApproxEqAbs(pend1, col1 - owed1, 2, "simulated pending1 == actual collectable minus checkpointed");
   }
 }

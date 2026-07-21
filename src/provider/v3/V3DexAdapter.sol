@@ -73,6 +73,8 @@ abstract contract V3DexAdapter is
   uint256 internal constant INITIAL_RANGE_BPS = 100;
   /// @dev Fallback half-range (ticks) around spot for non-rate (TWAP) pairs.
   int24 internal constant FALLBACK_HALF_RANGE_TICKS = 500;
+  /// @dev Fixed-point 2^128, the denominator of Uniswap V3 fee-growth (feeGrowthInside/Global) values.
+  uint256 internal constant Q128 = 1 << 128;
 
   /* ──────────────────────────── storage ───────────────────────────── */
 
@@ -465,9 +467,20 @@ abstract contract V3DexAdapter is
   function positionAmountsAt(uint160 sqrtPriceX96) public view returns (uint256 total0, uint256 total1) {
     if (tokenId == 0) return (idleToken0, idleToken1);
 
-    (, , , , , , , uint128 liquidity, , , uint128 tokensOwed0, uint128 tokensOwed1) = POSITION_MANAGER.positions(
-      tokenId
-    );
+    (
+      ,
+      ,
+      ,
+      ,
+      ,
+      ,
+      ,
+      uint128 liquidity,
+      uint256 feeGrowthInside0Last,
+      uint256 feeGrowthInside1Last,
+      uint128 tokensOwed0,
+      uint128 tokensOwed1
+    ) = POSITION_MANAGER.positions(tokenId);
 
     (uint256 amount0, uint256 amount1) = LiquidityAmounts.getAmountsForLiquidity(
       sqrtPriceX96,
@@ -476,8 +489,58 @@ abstract contract V3DexAdapter is
       liquidity
     );
 
-    total0 = amount0 + uint256(tokensOwed0) + idleToken0;
-    total1 = amount1 + uint256(tokensOwed1) + idleToken1;
+    // `tokensOwed{0,1}` only reflect fees checkpointed at the last NPM poke (mint/increase/decrease/
+    // collect). Fees earned in the pool since then are NOT in tokensOwed, so add the live pending amount
+    // (simulated from feeGrowthInside deltas) — otherwise every valuation built on this view (totalAssets,
+    // oracle peek, health checks, liquidations, slisBNBx) systematically under-values the collateral.
+    (uint256 pending0, uint256 pending1) = _pendingFees(liquidity, feeGrowthInside0Last, feeGrowthInside1Last);
+
+    total0 = amount0 + uint256(tokensOwed0) + pending0 + idleToken0;
+    total1 = amount1 + uint256(tokensOwed1) + pending1 + idleToken1;
+  }
+
+  /// @dev Uncollected fees earned since the position's last checkpoint, mirroring Uniswap V3's
+  ///      Tick.getFeeGrowthInside + Position.update. Uses the pool's CURRENT tick and cumulative fee
+  ///      growth (a pool fact, not spot-price-manipulable for value extraction), so it only ever
+  ///      corrects a stale under-count. All fee-growth arithmetic wraps by design (unchecked), exactly
+  ///      as the reference libraries compiled under Solidity <0.8.
+  function _pendingFees(
+    uint128 liquidity,
+    uint256 feeGrowthInside0Last,
+    uint256 feeGrowthInside1Last
+  ) internal view returns (uint256 pending0, uint256 pending1) {
+    if (liquidity == 0) return (0, 0);
+
+    (, int24 tickCurrent) = IV3PoolMinimal(POOL).slot0();
+    uint256 fgGlobal0 = IV3PoolMinimal(POOL).feeGrowthGlobal0X128();
+    uint256 fgGlobal1 = IV3PoolMinimal(POOL).feeGrowthGlobal1X128();
+    (, , uint256 lowerOutside0, uint256 lowerOutside1) = IV3PoolMinimal(POOL).ticks(tickLower);
+    (, , uint256 upperOutside0, uint256 upperOutside1) = IV3PoolMinimal(POOL).ticks(tickUpper);
+
+    unchecked {
+      uint256 below0;
+      uint256 below1;
+      uint256 above0;
+      uint256 above1;
+      if (tickCurrent >= tickLower) {
+        below0 = lowerOutside0;
+        below1 = lowerOutside1;
+      } else {
+        below0 = fgGlobal0 - lowerOutside0;
+        below1 = fgGlobal1 - lowerOutside1;
+      }
+      if (tickCurrent < tickUpper) {
+        above0 = upperOutside0;
+        above1 = upperOutside1;
+      } else {
+        above0 = fgGlobal0 - upperOutside0;
+        above1 = fgGlobal1 - upperOutside1;
+      }
+      uint256 inside0 = fgGlobal0 - below0 - above0;
+      uint256 inside1 = fgGlobal1 - below1 - above1;
+      pending0 = FullMath.mulDiv(inside0 - feeGrowthInside0Last, liquidity, Q128);
+      pending1 = FullMath.mulDiv(inside1 - feeGrowthInside1Last, liquidity, Q128);
+    }
   }
 
   /// @inheritdoc IV3DexAdapter
