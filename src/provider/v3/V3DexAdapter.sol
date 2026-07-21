@@ -713,9 +713,14 @@ abstract contract V3DexAdapter is
     secondsAgos[0] = TWAP_PERIOD;
     secondsAgos[1] = 0;
     (int56[] memory tickCumulatives, ) = IListaV3Pool(POOL).observe(secondsAgos);
-    int56 delta = tickCumulatives[1] - tickCumulatives[0];
-    twapTick = int24(delta / int56(uint56(TWAP_PERIOD)));
-    if (delta < 0 && (delta % int56(uint56(TWAP_PERIOD)) != 0)) twapTick--;
+    // Match Uniswap's OracleLibrary.consult: the cumulative-tick subtraction is expected to wrap (the
+    // reference compiled under Solidity <0.8 with implicit wrap-around), so compute the TWAP tick in an
+    // unchecked block — otherwise a wrapped int56 delta would spuriously revert under 0.8 checked math.
+    unchecked {
+      int56 delta = tickCumulatives[1] - tickCumulatives[0];
+      twapTick = int24(delta / int56(uint56(TWAP_PERIOD)));
+      if (delta < 0 && (delta % int56(uint56(TWAP_PERIOD)) != 0)) twapTick--;
+    }
   }
 
   /// @dev Send `token` to `to`, unwrapping the wrapped-native token to native coin.
