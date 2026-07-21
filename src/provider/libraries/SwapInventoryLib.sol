@@ -83,10 +83,13 @@ library SwapInventoryLib {
 
     // Wrap any native this call delivered — a native-out venue's proceeds (instantWithdraw → BNB) or a
     // native-in venue's unspent refund — back into the wrapped-native ERC-20, so it is booked into the
-    // totals via the spent/received deltas and never stranded. Native can only belong to the
-    // wrapped-native leg; if neither leg is it, there is nowhere to book the native ⇒ revert.
-    if (address(this).balance > beforeNative) {
-      if (tokenIn != wrappedNative && tokenOut != wrappedNative) revert UnexpectedNative();
+    // totals via the spent/received deltas and never stranded. Only a wrapped-native leg can legitimately
+    // deliver native; wrap the delta ONLY when either leg is the wrapped-native token. If NEITHER leg is
+    // (an ERC-20↔ERC-20 swap on a future non-native pair), any native that appears is an unsolicited
+    // donation the venue forwarded (e.g. a router that sweeps its native balance; an attacker can seed it
+    // with 1 wei) — it is not part of this swap's accounting, so leave it untouched rather than reverting
+    // and bricking the rebalance.
+    if ((tokenIn == wrappedNative || tokenOut == wrappedNative) && address(this).balance > beforeNative) {
       IWBNB(wrappedNative).deposit{ value: address(this).balance - beforeNative }();
     }
 
