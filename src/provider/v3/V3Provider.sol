@@ -270,7 +270,7 @@ abstract contract V3Provider is
       // The addLiquidity refund is deliberately NOT sent to the depositor here (refundTo = this vault):
       // a native-BNB refund before shares are minted would expose a window where adapter NAV already
       // includes the new liquidity but totalSupply() is stale, letting a malicious depositor reenter and
-      // read an inflated share price (C-1). The vault refunds the depositor only after _mint below.
+      // read an inflated share price. The vault refunds the depositor only after _mint below.
       if (_amount0Desired > 0) IERC20(TOKEN0).safeTransfer(ADAPTER, _amount0Desired);
       if (_amount1Desired > 0) IERC20(TOKEN1).safeTransfer(ADAPTER, _amount1Desired);
       uint128 liquidityAdded;
@@ -324,9 +324,9 @@ abstract contract V3Provider is
 
     if (shares == 0) revert ZeroShares();
     // Caller-specified share-slippage floor. Protects a depositor from receiving fewer shares than their
-    // contribution warrants — e.g. a first-depositor inflation attack (H02 / Issue_04) that inflates the
-    // position via a direct NPM.increaseLiquidity donation, or the fair composition shifting between the
-    // off-chain preview and execution (M01). Pass 0 to disable.
+    // contribution warrants — e.g. a first-depositor inflation attack that inflates the position via a
+    // direct NPM.increaseLiquidity donation, or the fair composition shifting between the off-chain
+    // preview and execution. Pass 0 to disable.
     if (shares < minShares) revert InsufficientShares();
 
     _mint(address(this), shares);
@@ -354,9 +354,9 @@ abstract contract V3Provider is
     // NOTE: the subsequent-deposit path deliberately does NOT deploy the freshly-parked
     // idle into the pool here. Deposits enter as idle valued at the fair composition and are matched by
     // proportionally-minted shares, so the deposit is exactly value-conserving and never touches the pool
-    // spot price. The idle is deployed later by the permissionless compound() (keeper cadence) or the
-    // next deposit/withdraw's collectAndCompound, always spot-gated. Deploying it inline here would mint
-    // at spot and realize a small IL shared by all holders — a (tiny) dilution triggered by a new deposit.
+    // spot price. The idle is deployed later by the BOT-gated compound() (keeper cadence) or a rebalance,
+    // both slippage-bounded. Deploying it inline here would mint at spot and realize a small IL shared by
+    // all holders — a (tiny) dilution triggered by a new deposit.
   }
 
   /// @inheritdoc IV3Provider
@@ -430,7 +430,7 @@ abstract contract V3Provider is
 
   /// @inheritdoc IV3Provider
   /// @dev Liquidation-critical path: no protocol value floor — caller's minAmount0/1 is the only
-  ///      guard (a hard floor here would brick atomic liquidation; see finding C4).
+  ///      guard (a hard floor here would brick atomic liquidation).
   function redeemShares(
     uint256 shares,
     uint256 minAmount0,

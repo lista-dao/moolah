@@ -99,7 +99,7 @@ interface IV3DexAdapter {
   /// @notice Remove the `shares/totalShares` pro-rata slice of liquidity AND idle inventory, sending
   ///         the underlying directly to `receiver` (WBNB unwrapped to native BNB). Used by the vault's
   ///         withdraw / redeemShares. No protocol value floor — the caller's minAmount0/1 is the guard
-  ///         (keeps liquidation live; see finding C4).
+  ///         (keeps liquidation live).
   function removeLiquidity(
     uint256 shares,
     uint256 totalShares,

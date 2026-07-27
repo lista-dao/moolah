@@ -111,9 +111,9 @@ abstract contract V3DexAdapter is
   uint256 public maxSwapLossBp;
 
   /// @dev Max allowed |pool spot − fair| price deviation (bps of price) for adding liquidity at the pool
-  ///      spot: the compound (permissionless) and the rebalance re-mint both call increaseLiquidity/mint
-  ///      with amountMin = 0 at the pool spot, so a flash-loan that skews spot could make the vault add
-  ///      liquidity at a manipulated price and get sandwiched on the attacker's back-swap. fairSqrtPriceX96
+  ///      spot: the (BOT-gated) compound and the rebalance re-mint both call increaseLiquidity/mint at the
+  ///      pool spot, so a flash-loan that skews spot could make the vault add liquidity at a manipulated
+  ///      price and get sandwiched on the attacker's back-swap. fairSqrtPriceX96
   ///      is rate-anchored (flash-loan-immune for the LST pairs), so gating spot against it neutralises
   ///      that vector. 0 disables the gate. Default INITIAL_RANGE_BPS (1%).
   uint256 public maxSpotDeviationBps;
@@ -311,7 +311,7 @@ abstract contract V3DexAdapter is
       (amount0, amount1) = V3PositionLib.collectAll(POSITION_MANAGER, tokenId);
     }
 
-    // Pro-rata idle inventory (finding C): redeem the same fraction of idle as of liquidity.
+    // Pro-rata idle inventory: redeem the same fraction of idle as of liquidity.
     if (totalShares > 0) {
       uint256 idleOut0 = (idleToken0 * shares) / totalShares;
       uint256 idleOut1 = (idleToken1 * shares) / totalShares;
@@ -713,9 +713,9 @@ abstract contract V3DexAdapter is
 
     // One-sided inventory relative to the active range yields zero addable liquidity, which would
     // revert inside pool.mint (require(amount > 0)). Hold everything as idle and skip this round
-    // instead of reverting, so deposit / withdraw / redeemShares (which reach here permissionlessly)
-    // are never bricked by a single-sided balance. The idle is deployed on a later compound once the
-    // opposite leg arrives or a rebalance recenters the range.
+    // instead of reverting, so a BOT compound / rebalance is never bricked by a single-sided balance.
+    // The idle is deployed on a later compound once the opposite leg arrives or a rebalance recenters
+    // the range.
     uint128 addable = LiquidityAmounts.getLiquidityForAmounts(
       spotSqrtPriceX96(),
       TickMath.getSqrtRatioAtTick(tickLower),
