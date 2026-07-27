@@ -2408,8 +2408,9 @@ contract SlisBNBV3ProviderTest is Test {
     uint128 liqBefore = adapter.totalLiquidity();
     _skewSpotUp();
 
-    // Permissionless compound must SKIP the re-add at the manipulated spot (no new liquidity minted).
-    provider.compound();
+    // BOT compound must SKIP the re-add at the manipulated spot (no new liquidity minted).
+    vm.prank(bot);
+    provider.compound(0, 0);
 
     assertEq(adapter.totalLiquidity(), liqBefore, "compound must not add liquidity at a manipulated spot");
     assertGe(adapter.idleToken1(), 50 ether, "collected fees + old idle held as idle, never minted");
@@ -2421,15 +2422,16 @@ contract SlisBNBV3ProviderTest is Test {
 
     uint128 liqBefore = adapter.totalLiquidity();
     // No skew: the live pool spot ~ rate (fair) at the fork block, so the gate lets the compound through.
-    provider.compound();
+    vm.prank(bot);
+    provider.compound(0, 0);
 
     assertGt(adapter.totalLiquidity(), liqBefore, "compound should add liquidity when spot ~ fair");
   }
 
-  /// @dev Counter-test (one-sided idle must not brick compounding): with spot ~ fair (gate passes) but strictly one-sided idle inventory,
-  ///      the computed addable liquidity is zero, which would revert inside pool.mint. _collectAndCompound
-  ///      must instead hold the idle and return, so the permissionless compound() (and the deposit /
-  ///      withdraw / redeemShares that reach it) is never bricked by a single-sided balance.
+  /// @dev Counter-test (one-sided idle must not brick compounding): with spot ~ fair (gate passes) but
+  ///      strictly one-sided idle inventory, the computed addable liquidity is zero, which would revert
+  ///      inside pool.mint. _collectAndCompound must instead hold the idle and return, so a BOT compound
+  ///      is never bricked by a single-sided balance.
   function test_compound_oneSidedIdle_noOpsInsteadOfReverting() public {
     _deposit(user, 10 ether, 10 ether);
     uint128 liqBefore = adapter.totalLiquidity();
@@ -2441,10 +2443,35 @@ contract SlisBNBV3ProviderTest is Test {
     stdstore.target(address(adapter)).sig("idleToken0()").checked_write(adapter.idleToken0() + idle0);
     stdstore.target(address(adapter)).sig("idleToken1()").checked_write(uint256(0));
 
-    provider.compound(); // must NOT revert
+    vm.prank(bot);
+    provider.compound(0, 0); // must NOT revert
 
     assertEq(adapter.totalLiquidity(), liqBefore, "one-sided idle must not mint liquidity");
     assertGe(adapter.idleToken0(), idle0, "one-sided idle is held, not lost");
+  }
+
+  /// @dev Issue_25: adding CLAMM liquidity (compound) must not be permissionless — a non-BOT caller
+  ///      cannot force a compound at a manipulated spot. It is the sole fee-deploy path besides rebalance;
+  ///      user flows (deposit/withdraw/redeemShares) no longer trigger it.
+  function test_compound_onlyBot() public {
+    _deposit(user, 10 ether, 10 ether);
+    _injectIdle(1 ether, 1 ether);
+    vm.prank(user);
+    vm.expectRevert();
+    provider.compound(0, 0);
+  }
+
+  /// @dev Issue_25: a permissionless user deposit must NOT deploy fees/idle into pool liquidity (no
+  ///      permissionless compound). Idle accumulates; only a BOT compound/rebalance deploys it.
+  function test_deposit_doesNotCompound() public {
+    _deposit(user, 10 ether, 10 ether);
+    _injectIdle(1 ether, 1 ether);
+    uint128 liqBefore = adapter.totalLiquidity();
+
+    _deposit(user2, 10 ether, 10 ether); // second deposit must not compound the injected idle
+
+    assertEq(adapter.totalLiquidity(), liqBefore, "deposit must not deploy idle as liquidity");
+    assertGe(adapter.idleToken0(), 1 ether, "idle from the injection is still held");
   }
 
   /// @dev Counter-test: positionAmountsAt used to add only the

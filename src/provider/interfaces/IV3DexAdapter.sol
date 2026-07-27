@@ -108,8 +108,9 @@ interface IV3DexAdapter {
     address receiver
   ) external returns (uint256 amount0, uint256 amount1);
 
-  /// @notice Collect accrued fees and re-add them plus idle inventory as liquidity (compound).
-  function collectAndCompound() external;
+  /// @notice Collect accrued fees and re-add them plus idle inventory as liquidity (compound). BOT-gated
+  ///         at the provider; `amount0Min`/`amount1Min` are the caller-supplied slippage floor.
+  function collectAndCompound(uint256 amount0Min, uint256 amount1Min) external;
 
   /// @notice Record tokens already transferred to the adapter as idle inventory, without minting into
   ///         the pool. Used by the vault deposit path so new deposits enter as idle at the current fair

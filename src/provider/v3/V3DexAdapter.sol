@@ -341,8 +341,8 @@ abstract contract V3DexAdapter is
   }
 
   /// @inheritdoc IV3DexAdapter
-  function collectAndCompound() external onlyProvider nonReentrant {
-    _collectAndCompound();
+  function collectAndCompound(uint256 amount0Min, uint256 amount1Min) external onlyProvider nonReentrant {
+    _collectAndCompound(amount0Min, amount1Min);
   }
 
   /// @inheritdoc IV3DexAdapter
@@ -435,7 +435,7 @@ abstract contract V3DexAdapter is
       minAmount1 == 0 &&
       minLiquidity == 0
     ) {
-      _collectAndCompound();
+      _collectAndCompound(minAmount0, minAmount1);
       if (rateImplied) {
         uint256 oldRate = lastCenterRate;
         lastCenterRate = centerRate;
@@ -691,7 +691,7 @@ abstract contract V3DexAdapter is
 
   /* ─────────────────────────── internals ──────────────────────────── */
 
-  function _collectAndCompound() internal {
+  function _collectAndCompound(uint256 amount0Min, uint256 amount1Min) internal {
     if (tokenId == 0) return;
 
     (uint256 fees0, uint256 fees1) = V3PositionLib.collectAll(POSITION_MANAGER, tokenId);
@@ -700,12 +700,10 @@ abstract contract V3DexAdapter is
     uint256 toCompound1 = fees1 + idleToken1;
     if (toCompound0 == 0 && toCompound1 == 0) return;
 
-    // Never add liquidity at a manipulated pool spot. This compound runs (permissionlessly) as a
-    // side effect of deposit/withdraw/redeemShares with amountMin = 0, so a flash-loan that skews spot
-    // could make the vault add liquidity at a bad price and get sandwiched on the back-swap. fair is
-    // rate-anchored, so if spot deviates from it we SKIP the re-add (not revert — must not brick the
-    // user's hot-path op) and hold the collected fees as idle (valued at fair, unexposed) until a later
-    // compound when spot ~= fair.
+    // Defense-in-depth: the caller (BOT-gated compound / rebalance) supplies amount0Min/amount1Min as
+    // the primary slippage guard, but also never add liquidity at a manipulated pool spot. fair is
+    // rate-anchored, so if spot deviates from it we SKIP the re-add (hold as idle for a later compound
+    // when spot ~= fair) rather than deploy at a bad ratio.
     if (!_spotWithinFair()) {
       idleToken0 = toCompound0;
       idleToken1 = toCompound1;
@@ -739,8 +737,8 @@ abstract contract V3DexAdapter is
       tokenId,
       toCompound0,
       toCompound1,
-      0,
-      0
+      amount0Min,
+      amount1Min
     );
 
     idleToken0 = toCompound0 - used0;

@@ -254,10 +254,10 @@ abstract contract V3Provider is
       IERC20(TOKEN1).safeTransferFrom(msg.sender, address(this), _amount1Desired);
     }
 
-    // Compound accrued fees first so existing holders capture them before new shares dilute. This also
-    // folds all outstanding fees into the position / idle, so the composition snapshot below is complete.
-    IV3DexAdapter(ADAPTER).collectAndCompound();
-
+    // No inline compound: positionAmountsAt(fair) below already includes pending fees (simulated from
+    // fee-growth deltas), so the composition snapshot is complete and existing holders keep their fees
+    // without deploying liquidity here. Fees are deployed only via the BOT-gated, slippage-bounded
+    // compound() / rebalance.
     uint256 supplyBefore = totalSupply();
     uint160 fairSqrtPriceX96 = IV3DexAdapter(ADAPTER).fairSqrtPriceX96();
 
@@ -373,10 +373,9 @@ abstract contract V3Provider is
     if (receiver == address(0)) revert ZeroAddress();
     if (!_isSenderAuthorized(onBehalf)) revert Unauthorized();
 
-    // Compound accrued fees BEFORE Moolah's health check so the position is valued with fees folded in
-    // (not under-valued mid-withdrawal).
-    IV3DexAdapter(ADAPTER).collectAndCompound();
-
+    // No inline compound — deploying liquidity is BOT-gated. The health check still counts pending fees:
+    // the oracle prices the share via positionAmountsAt(fair), which is fee-inclusive. removeLiquidity
+    // below still collects the withdrawer's pro-rata fees.
     MOOLAH.withdrawCollateral(marketParams, shares, onBehalf, address(this));
     _afterCollateralChange(marketParams.id(), onBehalf);
 
@@ -403,9 +402,8 @@ abstract contract V3Provider is
     if (receiver == address(0)) revert ZeroAddress();
     if (!_isSenderAuthorized(onBehalf)) revert Unauthorized();
 
-    // Compound accrued fees before Moolah's health check so it values the position with fees included.
-    IV3DexAdapter(ADAPTER).collectAndCompound();
-
+    // No inline compound — deploying liquidity is BOT-gated. The health check still counts pending fees:
+    // the oracle prices the share via positionAmountsAt(fair), which is fee-inclusive.
     MOOLAH.withdrawCollateral(marketParams, shares, onBehalf, address(this));
     _afterCollateralChange(marketParams.id(), onBehalf);
 
@@ -420,9 +418,8 @@ abstract contract V3Provider is
     if (onBehalf == address(0)) revert ZeroAddress();
     if (balanceOf(msg.sender) < shares) revert InsufficientShares();
 
-    // Compound accrued fees before supplying into Moolah so the position is valued with fees included.
-    IV3DexAdapter(ADAPTER).collectAndCompound();
-
+    // No inline compound — deploying liquidity is BOT-gated. The health check still counts pending fees:
+    // the oracle prices the share via positionAmountsAt(fair), which is fee-inclusive.
     _transfer(msg.sender, address(this), shares);
     _approve(address(this), address(MOOLAH), shares);
     MOOLAH.supplyCollateral(marketParams, shares, onBehalf, "");
@@ -444,8 +441,8 @@ abstract contract V3Provider is
     if (receiver == address(0)) revert ZeroAddress();
     if (balanceOf(msg.sender) < shares) revert InsufficientShares();
 
-    IV3DexAdapter(ADAPTER).collectAndCompound();
-
+    // No inline compound — fee re-deployment is BOT-gated (compound() / rebalance). removeLiquidity below
+    // still collects the caller's pro-rata fees.
     // CEI: burn the caller's shares before the adapter sends underlying to `receiver` (see withdraw).
     uint256 supply = totalSupply();
     _burn(msg.sender, shares);
@@ -612,14 +609,14 @@ abstract contract V3Provider is
     if (msg.sender != ADAPTER && msg.sender != WRAPPED_NATIVE) revert NotAdapter();
   }
 
-  /// @notice Permissionlessly collect and compound accrued swap fees back into the position.
-  /// @dev Lets keepers sweep fees on a regular cadence instead of only as a side effect of user actions,
-  ///      so fees never accumulate into a large amount that could be sandwiched, and so buy-and-hold
-  ///      vaults keep compounding. Safe to leave permissionless: the adapter's
-  ///      _collectAndCompound self-gates on the spot-vs-fair deviation and simply skips the re-add (holding
-  ///      fees as idle) when the pool spot is manipulated, so a caller cannot force a bad-price compound.
-  function compound() external nonReentrant {
-    IV3DexAdapter(ADAPTER).collectAndCompound();
+  /// @notice Collect accrued swap fees + idle and compound them back into the position.
+  /// @dev BOT-gated with a caller-supplied slippage floor (amount0Min/amount1Min forwarded to the
+  ///      adapter's increaseLiquidity). Adding CLAMM liquidity is the one operation that must not be
+  ///      permissionless: a manipulated pool spot lets a caller force a bad-price re-add and sandwich it.
+  ///      This is the sole liquidity-deploy path for accrued fees/idle (the other is BOT rebalance); no
+  ///      user hot-path triggers it. Keeper runs this on a cadence.
+  function compound(uint256 amount0Min, uint256 amount1Min) external onlyRole(BOT) nonReentrant {
+    IV3DexAdapter(ADAPTER).collectAndCompound(amount0Min, amount1Min);
   }
 
   /* ─────────────────── rebalance loss guard (NAV + daily caps) ──────────────── */
