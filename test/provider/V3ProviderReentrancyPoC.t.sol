@@ -10,8 +10,8 @@ import { IV3Provider } from "../../src/provider/interfaces/IV3Provider.sol";
 import { SlisBNBV3ProviderTest } from "./SlisBNBV3Provider.t.sol";
 
 /**
- * @title V3Provider C-1 regression — deposit-refund reentrancy must NOT inflate the share oracle
- * @notice C-1 (Critical): V3Provider.deposit forwarded tokens to the adapter and called addLiquidity
+ * @title V3Provider deposit-refund reentrancy regression — must NOT inflate the share oracle
+ * @notice Regression: V3Provider.deposit forwarded tokens to the adapter and called addLiquidity
  *         — which refunded unused WBNB via a native-BNB call to the DEPOSITOR — BEFORE minting and
  *         supplying the new shares. During that refund callback:
  *           - adapter NAV already included the freshly-added liquidity, but
@@ -33,7 +33,7 @@ contract V3ProviderReentrancyPoC is SlisBNBV3ProviderTest {
   Attacker attacker;
   address constant victimB = address(0xB0B); // receives the big deposit's collateral (recoverable)
 
-  function test_C1_depositRefundReentrancy_neutralized() public {
+  function test_depositRefundReentrancy_neutralized() public {
     // 1) Bootstrap a small shared position so supply > 0.
     _deposit(user, 1 ether, 1 ether);
 

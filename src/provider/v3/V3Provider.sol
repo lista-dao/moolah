@@ -308,8 +308,11 @@ abstract contract V3Provider is
         frac = f0 < f1 ? f0 : f1;
       }
 
-      amount0Used = (t0 * frac) / WAD;
-      amount1Used = (t1 * frac) / WAD;
+      // Round the consumed amounts UP so the depositor pays >= their pro-rata share (shares below round
+      // down) — any sub-wei rounding favors existing holders, never the depositor. Both stay <= the
+      // desired input since frac <= dᵢ·WAD/tᵢ, so no over-consumption.
+      amount0Used = (t0 * frac + WAD - 1) / WAD;
+      amount1Used = (t1 * frac + WAD - 1) / WAD;
       // Repurposed slippage guard: amount0Min/amount1Min are now the minimum of each leg that must be
       // consumed (the rest is refunded), protecting the depositor from an unexpected composition ratio.
       if (amount0Used < amount0Min || amount1Used < amount1Min) revert InsufficientAmount();

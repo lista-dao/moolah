@@ -394,7 +394,7 @@ contract SlisBNBV3ProviderTest is Test {
     assertGt(shares2, shares1, "larger-value deposit yields more shares");
   }
 
-  /// @dev H02 / Issue_04 (+ M01) counter-test. The minShares floor makes a deposit revert instead of
+  /// @dev minShares-floor counter-test. The minShares floor makes a deposit revert instead of
   ///      silently under-crediting the depositor when it would receive fewer shares than demanded — the
   ///      protection against a first-depositor inflation attack (a direct NPM.increaseLiquidity donation
   ///      inflates the composition so a normal deposit rounds down) and against the fair composition
@@ -2450,7 +2450,7 @@ contract SlisBNBV3ProviderTest is Test {
     assertGe(adapter.idleToken0(), idle0, "one-sided idle is held, not lost");
   }
 
-  /// @dev Issue_25: adding CLAMM liquidity (compound) must not be permissionless — a non-BOT caller
+  /// @dev adding CLAMM liquidity (compound) must not be permissionless — a non-BOT caller
   ///      cannot force a compound at a manipulated spot. It is the sole fee-deploy path besides rebalance;
   ///      user flows (deposit/withdraw/redeemShares) no longer trigger it.
   function test_compound_onlyBot() public {
@@ -2461,7 +2461,7 @@ contract SlisBNBV3ProviderTest is Test {
     provider.compound(0, 0);
   }
 
-  /// @dev Issue_25: a permissionless user deposit must NOT deploy fees/idle into pool liquidity (no
+  /// @dev a permissionless user deposit must NOT deploy fees/idle into pool liquidity (no
   ///      permissionless compound). Idle accumulates; only a BOT compound/rebalance deploys it.
   function test_deposit_doesNotCompound() public {
     _deposit(user, 10 ether, 10 ether);
@@ -2472,6 +2472,30 @@ contract SlisBNBV3ProviderTest is Test {
 
     assertEq(adapter.totalLiquidity(), liqBefore, "deposit must not deploy idle as liquidity");
     assertGe(adapter.idleToken0(), 1 ether, "idle from the injection is still held");
+  }
+
+  /// @dev deposit rounding: the consumed leg amounts must be rounded UP (shares round down),
+  ///      so any sub-wei rounding favors existing holders, never the depositor.
+  function test_deposit_consumedAmountsRoundedUp() public {
+    _deposit(user, 10 ether, 10 ether); // establish supply > 0
+
+    uint256 supplyBefore = provider.totalSupply();
+    (uint256 t0, uint256 t1) = adapter.positionAmountsAt(adapter.fairSqrtPriceX96());
+
+    uint256 d0 = 7 ether;
+    uint256 d1 = 5 ether; // deliberately imbalanced so t*frac/WAD has a remainder
+    (uint256 shares, uint256 u0, uint256 u1) = _deposit(user2, d0, d1);
+
+    // Reconstruct the bound fraction and assert the used amounts are the CEIL (old code floored).
+    uint256 f0 = (d0 * 1e18) / t0;
+    uint256 f1 = (d1 * 1e18) / t1;
+    uint256 frac = f0 < f1 ? f0 : f1;
+    assertEq(u0, (t0 * frac + 1e18 - 1) / 1e18, "amount0Used ceil-rounded (favors holders)");
+    assertEq(u1, (t1 * frac + 1e18 - 1) / 1e18, "amount1Used ceil-rounded (favors holders)");
+
+    // No-dilution invariant: depositor pays >= pro-rata (used * supplyBefore >= composition * shares).
+    assertGe(u0 * supplyBefore, t0 * shares, "token0: paid >= pro-rata");
+    assertGe(u1 * supplyBefore, t1 * shares, "token1: paid >= pro-rata");
   }
 
   /// @dev Counter-test: positionAmountsAt used to add only the
