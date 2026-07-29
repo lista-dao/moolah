@@ -523,14 +523,31 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
       _redeemedAmount0 = amount0;
       _redeemedAmount1 = amount1;
 
-      // Swap TOKEN0 → loanToken (skip if already loanToken or no swap requested).
+      // Swap TOKEN0 → loanToken (skip if already loanToken or no swap requested). For the native leg,
+      // minToken0Amt is the msg.value the bot's swapData was built against.
       if (d.swapToken0 && amount0 > 0 && token0 != d.loanToken) {
-        _swapRedeemedLeg(token0 == wrappedNative, d.token0Pair, d.token0Spender, token0, amount0, d.swapToken0Data);
+        _swapRedeemedLeg(
+          token0 == wrappedNative,
+          d.token0Pair,
+          d.token0Spender,
+          token0,
+          amount0,
+          d.minToken0Amt,
+          d.swapToken0Data
+        );
       }
 
       // Swap TOKEN1 → loanToken.
       if (d.swapToken1 && amount1 > 0 && token1 != d.loanToken) {
-        _swapRedeemedLeg(token1 == wrappedNative, d.token1Pair, d.token1Spender, token1, amount1, d.swapToken1Data);
+        _swapRedeemedLeg(
+          token1 == wrappedNative,
+          d.token1Pair,
+          d.token1Spender,
+          token1,
+          amount1,
+          d.minToken1Amt,
+          d.swapToken1Data
+        );
       }
 
       // If the loan token IS the wrapped-native, its leg was redeemed as the native coin and its swap
@@ -589,10 +606,15 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
     address spender,
     address token,
     uint256 amount,
+    uint256 nativeValue,
     bytes memory swapData
   ) private {
     if (isNativeLeg) {
-      (bool ok, ) = pair.call{ value: amount }(swapData);
+      // msg.value must equal the input amount encoded in swapData (1inch native swaps). The bot builds
+      // swapData for the pre-agreed min; redeemShares guarantees actual >= min so the balance covers
+      // `nativeValue`, and the leftover stays to be wrapped/reflowed. Sending the variable actual amount
+      // would mismatch the encoded amount and revert, failing the whole liquidation.
+      (bool ok, ) = pair.call{ value: nativeValue }(swapData);
       require(ok, SwapFailed());
     } else {
       token.safeApprove(spender, amount);

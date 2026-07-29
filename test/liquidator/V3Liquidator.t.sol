@@ -38,6 +38,30 @@ contract MockOracle is IOracle {
   }
 }
 
+/// @dev Strict 1inch-like mock: a native swap requires msg.value == amountIn EXACTLY (no >=, no refund),
+///      matching real aggregators. Used to prove the native leg sends the encoded (min) amount, not the
+///      variable actual redeemed amount (which would mismatch and revert the whole liquidation).
+contract MockOneInchStrict is Test {
+  address constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+
+  function swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin) external payable {
+    if (tokenIn == BNB_ADDRESS) {
+      require(msg.value == amountIn, "MSG_VALUE_NEQ_AMOUNTIN");
+    } else {
+      require(msg.value == 0, "MSG_VALUE_MUST_BE_0");
+      IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
+    }
+    if (tokenOut == BNB_ADDRESS) {
+      deal(address(this), amountOutMin);
+      (bool s, ) = msg.sender.call{ value: amountOutMin }("");
+      require(s, "BNB_TRANSFER_FAILED");
+    } else {
+      deal(tokenOut, address(this), amountOutMin);
+      IERC20(tokenOut).transfer(msg.sender, amountOutMin);
+    }
+  }
+}
+
 contract V3LiquidatorTest is Test {
   using MarketParamsLib for MarketParams;
 
@@ -455,6 +479,47 @@ contract V3LiquidatorTest is Test {
     assertEq(_collateral(user), 0, "borrower collateral seized");
     // Excess lisUSD (borrowed*2 - repaidAssets ≈ borrowed) remains in liquidator.
     assertGt(IERC20(LISUSD).balanceOf(address(liquidator)), 0, "excess lisUSD in liquidator");
+  }
+
+  /// @dev The native (BNB) leg must send msg.value == the encoded (min) amount the bot's swapData was
+  ///      built for — NOT the variable actual redeemed amount. Against a strict aggregator (real 1inch,
+  ///      msg.value == amountIn exactly) sending the actual amount reverts and fails the whole flash
+  ///      liquidation. Uses a strict mock: passes with the fix, reverts without it.
+  function test_flashLiquidate_nativeLeg_sendsEncodedMinAmount() public {
+    MockOneInchStrict strictSwap = new MockOneInchStrict();
+    vm.prank(manager);
+    liquidator.setPairWhitelist(address(strictSwap), true);
+
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    uint256 borrowed = _borrowAgainstCollateral(user);
+    _makeUnhealthy();
+
+    // Bot commits the native swapData to this exact input; the actual redeemed BNB is far larger, so
+    // sending the actual amount (pre-fix) would make msg.value != amountIn and the strict mock revert.
+    uint256 minBnb = 0.01 ether;
+
+    // token0 (SLISBNB, ERC20) → covers repayment; strict mock requires msg.value == 0 for ERC20.
+    bytes memory swap0 = abi.encodeWithSelector(strictSwap.swap.selector, SLISBNB, LISUSD, uint256(0), borrowed * 2);
+    // token1 (WBNB → native BNB) → strict mock requires msg.value == amountIn == minBnb.
+    bytes memory swap1 = abi.encodeWithSelector(strictSwap.swap.selector, BNB_ADDRESS, LISUSD, minBnb, uint256(0));
+
+    V3Liquidator.FlashLiquidateParams memory params = V3Liquidator.FlashLiquidateParams({
+      v3Provider: address(provider),
+      minToken0Amt: 0,
+      minToken1Amt: minBnb, // the msg.value the native swapData is built for
+      redeemShares: true,
+      token0Pair: address(strictSwap),
+      token0Spender: address(0),
+      token1Pair: address(strictSwap),
+      token1Spender: address(0),
+      swapToken0Data: swap0,
+      swapToken1Data: swap1
+    });
+
+    vm.prank(bot);
+    liquidator.flashLiquidate(Id.unwrap(marketId), user, shares, params); // reverts pre-fix (sends actual != minBnb)
+
+    assertEq(_collateral(user), 0, "borrower collateral seized");
   }
 
   /// @dev The V3Liquidation event must report the amounts actually redeemed in the callback, not the

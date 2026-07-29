@@ -288,10 +288,12 @@ contract V3LiquidatorEthTest is Test {
     );
 
     // token0 (wstETH) leg: no swap — left in the liquidator as residue.
+    // minToken1Amt IS the native msg.value the swapData was built for (must equal nativeAmountIn), and
+    // doubles as the redeemShares floor (actual redeemed WETH >= it). The leftover above it stays as residue.
     V3Liquidator.FlashLiquidateParams memory params = V3Liquidator.FlashLiquidateParams({
       v3Provider: address(provider),
       minToken0Amt: 0,
-      minToken1Amt: 0,
+      minToken1Amt: nativeAmountIn,
       redeemShares: true,
       token0Pair: address(0),
       token0Spender: address(0),
