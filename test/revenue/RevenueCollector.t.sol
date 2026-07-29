@@ -169,6 +169,59 @@ contract RevenueCollectorTest is Test {
     assertEq(token4.balanceOf(address(revenueCollector)), 20 ether);
   }
 
+  function test_batchAccrueVaultFees() public {
+    MockMoolahVault vault1 = new MockMoolahVault();
+    MockMoolahVault vault2 = new MockMoolahVault();
+
+    address[] memory vaults = new address[](2);
+    vaults[0] = address(vault1);
+    vaults[1] = address(vault2);
+
+    // only BOT can call
+    vm.expectRevert(); // AccessControlUnauthorizedAccount
+    revenueCollector.batchAccrueVaultFees(vaults);
+
+    vm.prank(bot);
+    revenueCollector.batchAccrueVaultFees(vaults);
+
+    // each vault received a deposit(0, revenueCollector) call
+    assertEq(vault1.depositCalls(), 1);
+    assertEq(vault1.lastAssets(), 0);
+    assertEq(vault1.lastReceiver(), address(revenueCollector));
+    assertEq(vault2.depositCalls(), 1);
+    assertEq(vault2.lastAssets(), 0);
+    assertEq(vault2.lastReceiver(), address(revenueCollector));
+  }
+
+  function test_accrueVaultFee() public {
+    MockMoolahVault vault = new MockMoolahVault();
+
+    vm.expectRevert(); // AccessControlUnauthorizedAccount
+    revenueCollector.accrueVaultFee(address(vault));
+
+    vm.prank(bot);
+    revenueCollector.accrueVaultFee(address(vault));
+
+    assertEq(vault.depositCalls(), 1);
+    assertEq(vault.lastAssets(), 0);
+    assertEq(vault.lastReceiver(), address(revenueCollector));
+  }
+
+  function test_batchAccrueVaultFees_invalidLength() public {
+    address[] memory empty = new address[](0);
+    vm.prank(bot);
+    vm.expectRevert("invalid length");
+    revenueCollector.batchAccrueVaultFees(empty);
+
+    address[] memory tooMany = new address[](31);
+    for (uint256 i = 0; i < 31; i++) {
+      tooMany[i] = address(new MockMoolahVault());
+    }
+    vm.prank(bot);
+    vm.expectRevert("invalid length");
+    revenueCollector.batchAccrueVaultFees(tooMany);
+  }
+
   function test_emergencyWithdraw() public {
     // fund revenue collector
     token0.setBalance(address(revenueCollector), 50 ether);
@@ -223,4 +276,17 @@ contract MockStableSwap {
   }
 
   receive() external payable {}
+}
+
+contract MockMoolahVault {
+  uint256 public depositCalls;
+  uint256 public lastAssets;
+  address public lastReceiver;
+
+  function deposit(uint256 assets, address receiver) external returns (uint256) {
+    depositCalls += 1;
+    lastAssets = assets;
+    lastReceiver = receiver;
+    return 0;
+  }
 }
