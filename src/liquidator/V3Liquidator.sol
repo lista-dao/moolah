@@ -9,6 +9,7 @@ import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 
 import { IV3Provider } from "../provider/interfaces/IV3Provider.sol";
 import { IWBNB } from "../provider/interfaces/IWBNB.sol";
+import { ILiquidationVault } from "./ILiquidationVault.sol";
 import "./Interface.sol";
 
 /**
@@ -33,6 +34,8 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
   error WhitelistSameStatus();
   error NotWhitelisted();
   error SwapFailed();
+  error NotAuthorized();
+  error InvalidFundSource();
 
   /* ──────────────────────────── constants ─────────────────────────── */
 
@@ -61,12 +64,22 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
   uint256 private _redeemedAmount0;
   uint256 private _redeemedAmount1;
 
+  /// @dev Shared liquidation fund pool (LiquidationVault). 0 => legacy behavior (no pull/reflow).
+  ///      Appended for the UUPS upgrade; no existing slot moves.
+  address public fundSource;
+  /// @dev Tokens never pushed to the vault on reflow (e.g. the transfer-restricted V3 share collateral,
+  ///      which the vault cannot hold or sell). Appended.
+  mapping(address => bool) public reflowBlacklist;
+
   /* ──────────────────────────── events ────────────────────────────── */
 
   event TokenWhitelistChanged(address indexed token, bool status);
   event MarketWhitelistChanged(bytes32 indexed id, bool status);
   event PairWhitelistChanged(address indexed pair, bool status);
   event V3ProviderWhitelistChanged(address indexed provider, bool status);
+  event FundSourceChanged(address indexed oldFundSource, address indexed newFundSource);
+  event FundReflowed(address indexed token, uint256 amount);
+  event ReflowBlacklistChanged(address indexed token, bool blacklisted);
   event SellToken(
     address indexed pair,
     address spender,
@@ -158,25 +171,62 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
     _disableInitializers();
   }
 
-  function initialize(address admin, address manager, address bot) external initializer {
+  function initialize(address admin, address manager, address bot, address _fundSource) external initializer {
     require(admin != address(0) && manager != address(0) && bot != address(0), "zero address");
     __AccessControl_init();
     __ReentrancyGuard_init();
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
     _grantRole(MANAGER, manager);
     _grantRole(BOT, bot);
+
+    // Optional fund pool at deploy time (0 = legacy pre-funded behavior). The setFundSource registration
+    // check can't run here — the vault registers this liquidator only after the proxy exists — so only
+    // reject an obvious non-contract; wire registration in the vault right after deployment.
+    if (_fundSource != address(0)) {
+      require(_fundSource.code.length > 0, InvalidFundSource());
+      fundSource = _fundSource;
+      emit FundSourceChanged(address(0), _fundSource);
+    }
   }
 
   receive() external payable {}
 
   /* ─────────────────────── withdrawals ────────────────────────────── */
 
-  function withdrawERC20(address token, uint256 amount) external onlyRole(MANAGER) {
+  /// @dev Gate relaxed for the shared fund pool: MANAGER or fundSource (the vault's collect* call).
+  ///      Transfer target stays msg.sender, so the vault collects into itself.
+  function withdrawERC20(address token, uint256 amount) external {
+    require(hasRole(MANAGER, msg.sender) || msg.sender == fundSource, NotAuthorized());
     token.safeTransfer(msg.sender, amount);
   }
 
-  function withdrawETH(uint256 amount) external onlyRole(MANAGER) {
+  function withdrawETH(uint256 amount) external {
+    require(hasRole(MANAGER, msg.sender) || msg.sender == fundSource, NotAuthorized());
     msg.sender.safeTransferETH(amount);
+  }
+
+  /* ─────────────────────── fund pool ──────────────────────────────── */
+
+  /// @dev Sets the shared liquidation fund pool. Allows 0 (rollback to legacy pre-funded behavior). A
+  ///      non-zero fundSource gains withdraw* pull rights, so it must be a contract that has already
+  ///      registered this liquidator (guards against a mis-set address draining assets).
+  function setFundSource(address _fundSource) external onlyRole(MANAGER) {
+    if (_fundSource != address(0)) {
+      require(
+        _fundSource.code.length > 0 && ILiquidationVault(_fundSource).liquidators(address(this)),
+        InvalidFundSource()
+      );
+    }
+    emit FundSourceChanged(fundSource, _fundSource);
+    fundSource = _fundSource;
+  }
+
+  /// @dev Blacklist tokens from reflow (e.g. the transfer-restricted V3 share collateral). Blacklisted
+  ///      tokens are never pushed to the vault; they stay here to be redeemed via redeemV3Shares.
+  function setReflowBlacklist(address token, bool status) external onlyRole(MANAGER) {
+    require(token != address(0), "zero address");
+    reflowBlacklist[token] = status;
+    emit ReflowBlacklistChanged(token, status);
   }
 
   /* ─────────────────────── whitelists ─────────────────────────────── */
@@ -245,10 +295,40 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
     require(marketWhitelist[id], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
 
-    // Pre-approve Moolah to pull the repayment; cleared after the call.
-    params.loanToken.safeApprove(MOOLAH, type(uint256).max);
-    IMoolah(MOOLAH).liquidate(params, borrower, seizedAssets, repaidShares, "");
-    params.loanToken.safeApprove(MOOLAH, 0);
+    // Non-redeeming callback: lets the shared pool (if set) fund the repayment; the callback approves
+    // the exact repaidAssets. With fundSource == 0 this is the legacy pre-funded path — the contract
+    // must already hold the loanToken.
+    (uint256 _seized, uint256 _repaid) = IMoolah(MOOLAH).liquidate(
+      params,
+      borrower,
+      seizedAssets,
+      repaidShares,
+      abi.encode(
+        V3LiquidateData({
+          v3Provider: params.collateralToken,
+          loanToken: params.loanToken,
+          seized: seizedAssets,
+          redeemShares: false,
+          minToken0Amt: 0,
+          minToken1Amt: 0,
+          swapToken0: false,
+          swapToken1: false,
+          token0Pair: address(0),
+          token0Spender: address(0),
+          token1Pair: address(0),
+          token1Spender: address(0),
+          swapToken0Data: "",
+          swapToken1Data: ""
+        })
+      )
+    );
+
+    // Reflow the loanToken residue to the vault (no-op when fundSource == 0). The seized V3 shares stay
+    // here (transfer-restricted collateral) to be redeemed later via redeemV3Shares — never reflowed.
+    _reflow(params.loanToken);
+
+    // No redemption on this path, so the redeemed legs are 0. Emit for parity with flashLiquidate.
+    emit V3Liquidation(id, params.collateralToken, borrower, _seized, _repaid, 0, 0);
   }
 
   /**
@@ -314,6 +394,14 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
     );
 
     emit V3Liquidation(id, params.v3Provider, borrower, _seized, _repaid, _redeemedAmount0, _redeemedAmount1);
+
+    // Reflow the arb residue to the vault (no-op when fundSource == 0): the loanToken plus any redeemed
+    // TOKEN0/TOKEN1 leftover and unswapped native. The V3 shares are fully redeemed on the redeem path,
+    // so none are held; on the hold-shares path they stay here (never reflowed — collateral).
+    _reflow(mp.loanToken);
+    _reflow(IV3Provider(params.v3Provider).TOKEN0());
+    _reflow(IV3Provider(params.v3Provider).TOKEN1());
+    _reflow(BNB_ADDRESS);
   }
 
   /**
@@ -334,6 +422,12 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
   ) external nonReentrant onlyRole(BOT) returns (uint256 amount0, uint256 amount1) {
     require(v3Providers[v3Provider], NotWhitelisted());
     (amount0, amount1) = IV3Provider(v3Provider).redeemShares(shares, minAmt0, minAmt1, receiver);
+    // When redeemed into this contract, reflow the legs to the vault (no-op when fundSource == 0).
+    if (receiver == address(this)) {
+      _reflow(IV3Provider(v3Provider).TOKEN0());
+      _reflow(IV3Provider(v3Provider).TOKEN1());
+      _reflow(BNB_ADDRESS);
+    }
   }
 
   /* ─────────────────────── sell tokens ────────────────────────────── */
@@ -449,6 +543,14 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
 
       uint256 out = d.loanToken.balanceOf(address(this)) - before;
       if (out < repaidAssets) revert NoProfit();
+    } else if (fundSource != address(0)) {
+      // Pre-funded path with a shared pool: pull the exact shortfall from the vault. Local balance is
+      // consumed first, so the vault only tops up the difference (repaidAssets is exact here — Moolah
+      // computed it before this callback and before its own transferFrom).
+      uint256 bal = d.loanToken.balanceOf(address(this));
+      if (bal < repaidAssets) {
+        ILiquidationVault(fundSource).provideFund(d.loanToken, repaidAssets - bal);
+      }
     }
 
     // Approve Moolah to pull the repayment (always done, flash or pre-funded).
@@ -456,6 +558,26 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
   }
 
   /* ─────────────────────────── internals ──────────────────────────── */
+
+  /// @dev Reflow (push) the full balance of `token` to the vault. No-op when fundSource is unset, the
+  ///      token is blacklisted, or the balance is zero. `token == BNB_ADDRESS` reflows native BNB.
+  function _reflow(address token) private {
+    address _fundSource = fundSource;
+    if (_fundSource == address(0) || reflowBlacklist[token]) return;
+    if (token == BNB_ADDRESS) {
+      uint256 bal = address(this).balance;
+      if (bal > 0) {
+        _fundSource.safeTransferETH(bal);
+        emit FundReflowed(token, bal);
+      }
+    } else {
+      uint256 bal = token.balanceOf(address(this));
+      if (bal > 0) {
+        token.safeTransfer(_fundSource, bal);
+        emit FundReflowed(token, bal);
+      }
+    }
+  }
 
   /// @dev Sell a redeemed collateral leg into loanToken inside the liquidation callback. The wrapped-
   ///      native leg arrives as the native coin (the provider unwraps it on exit), so it is sold via

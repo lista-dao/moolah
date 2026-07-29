@@ -141,7 +141,9 @@ contract V3LiquidatorEthTest is Test {
     // 4) V3Liquidator.
     V3Liquidator implL = new V3Liquidator(MOOLAH_PROXY);
     liquidator = V3Liquidator(
-      payable(new ERC1967Proxy(address(implL), abi.encodeCall(V3Liquidator.initialize, (admin, manager, bot))))
+      payable(
+        new ERC1967Proxy(address(implL), abi.encodeCall(V3Liquidator.initialize, (admin, manager, bot, address(0))))
+      )
     );
 
     mockSwap = new MockOneInch();

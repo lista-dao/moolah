@@ -11,6 +11,7 @@ import { SlisBNBV3DexAdapter } from "../../src/provider/v3/SlisBNBV3DexAdapter.s
 import { SlisBNBV3ProviderOracle } from "../../src/provider/v3/SlisBNBV3ProviderOracle.sol";
 import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
 import { V3Liquidator } from "../../src/liquidator/V3Liquidator.sol";
+import { LiquidationVault } from "../../src/liquidator/LiquidationVault.sol";
 import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
 import { IMoolah, MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
@@ -145,7 +146,9 @@ contract V3LiquidatorTest is Test {
     // Deploy V3Liquidator.
     V3Liquidator implL = new V3Liquidator(MOOLAH_PROXY);
     liquidator = V3Liquidator(
-      payable(new ERC1967Proxy(address(implL), abi.encodeCall(V3Liquidator.initialize, (admin, manager, bot))))
+      payable(
+        new ERC1967Proxy(address(implL), abi.encodeCall(V3Liquidator.initialize, (admin, manager, bot, address(0))))
+      )
     );
 
     mockSwap = new MockOneInch();
@@ -718,5 +721,156 @@ contract V3LiquidatorTest is Test {
     vm.prank(user);
     vm.expectRevert();
     liquidator.withdrawERC20(LISUSD, 1);
+  }
+
+  /* ─────────────────── LiquidationVault integration ──────────────────── */
+
+  /// @dev Deploy a LiquidationVault proxy and (optionally) register this liquidator as a fund source.
+  function _deployVault(bool register) internal returns (LiquidationVault vault) {
+    address vaultImpl = address(new LiquidationVault());
+    vault = LiquidationVault(
+      payable(new ERC1967Proxy(vaultImpl, abi.encodeCall(LiquidationVault.initialize, (admin, manager, manager, bot))))
+    );
+    if (register) {
+      vm.prank(manager);
+      vault.setLiquidator(address(liquidator), true);
+    }
+  }
+
+  /// @dev setFundSource must reject a non-contract and a vault that has not registered this liquidator,
+  ///      accept a registered vault, and allow 0 (rollback to legacy pre-funded behavior).
+  function test_setFundSource_validatesRegistration() public {
+    LiquidationVault vault = _deployVault(false); // not registered yet
+
+    vm.prank(manager);
+    vm.expectRevert(V3Liquidator.InvalidFundSource.selector);
+    liquidator.setFundSource(makeAddr("eoa")); // no code
+
+    vm.prank(manager);
+    vm.expectRevert(V3Liquidator.InvalidFundSource.selector);
+    liquidator.setFundSource(address(vault)); // contract, but not registered
+
+    vm.prank(manager);
+    vault.setLiquidator(address(liquidator), true);
+    vm.prank(manager);
+    liquidator.setFundSource(address(vault));
+    assertEq(liquidator.fundSource(), address(vault), "fundSource set");
+
+    vm.prank(manager);
+    liquidator.setFundSource(address(0)); // disable → legacy
+    assertEq(liquidator.fundSource(), address(0), "fundSource cleared");
+
+    vm.prank(user);
+    vm.expectRevert();
+    liquidator.setFundSource(address(vault)); // not manager
+  }
+
+  /// @dev withdraw* is callable by MANAGER and by the registered fundSource (the vault's collect*),
+  ///      and reverts for anyone else. Transfer target is msg.sender, so the vault collects into itself.
+  function test_withdraw_authorizedForVaultAndManager() public {
+    LiquidationVault vault = _deployVault(true);
+    vm.prank(manager);
+    liquidator.setFundSource(address(vault));
+
+    deal(LISUSD, address(liquidator), 3 ether);
+
+    vm.prank(user); // random caller
+    vm.expectRevert(V3Liquidator.NotAuthorized.selector);
+    liquidator.withdrawERC20(LISUSD, 1 ether);
+
+    vm.prank(address(vault)); // fundSource path — lands on the vault
+    liquidator.withdrawERC20(LISUSD, 1 ether);
+    assertEq(IERC20(LISUSD).balanceOf(address(vault)), 1 ether, "vault collected");
+
+    vm.prank(manager); // manager path
+    liquidator.withdrawERC20(LISUSD, 1 ether);
+    assertEq(IERC20(LISUSD).balanceOf(manager), 1 ether, "manager withdrew");
+  }
+
+  /// @dev With a fund pool set, a non-redeeming liquidate() pulls the exact repayment shortfall from the
+  ///      vault inside onMoolahLiquidate — the liquidator need hold no loanToken of its own.
+  function test_liquidate_pullsShortfallFromVault() public {
+    LiquidationVault vault = _deployVault(true);
+    vm.prank(manager);
+    liquidator.setFundSource(address(vault));
+
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    _borrowAgainstCollateral(user);
+    _makeUnhealthyPartial(5_000); // 50% price → liquidatable, full seize repays < debt (positive repaidAssets)
+
+    // Fund the vault; the liquidator itself holds NO loanToken.
+    deal(LISUSD, address(vault), 1_000_000 ether);
+    assertEq(IERC20(LISUSD).balanceOf(address(liquidator)), 0, "liquidator unfunded");
+    uint256 vaultBefore = IERC20(LISUSD).balanceOf(address(vault));
+
+    vm.prank(bot);
+    liquidator.liquidate(Id.unwrap(marketId), user, shares, 0);
+
+    assertEq(_collateral(user), 0, "borrower collateral seized");
+    assertGt(vaultBefore - IERC20(LISUSD).balanceOf(address(vault)), 0, "vault funded the repayment");
+    // Exact shortfall pulled, Moolah took repaidAssets → nothing left over on the liquidator.
+    assertEq(IERC20(LISUSD).balanceOf(address(liquidator)), 0, "no residual loanToken on liquidator");
+    assertGt(provider.balanceOf(address(liquidator)), 0, "seized shares held (to be redeemed later)");
+  }
+
+  /// @dev With a fund pool set, flashLiquidate reflows the arb residue (loanToken profit + leftover legs)
+  ///      to the vault instead of leaving it on the liquidator.
+  function test_flashLiquidate_reflowsResidueToVault() public {
+    LiquidationVault vault = _deployVault(true);
+    vm.prank(manager);
+    liquidator.setFundSource(address(vault));
+
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    uint256 borrowed = _borrowAgainstCollateral(user);
+    _makeUnhealthy();
+
+    bytes memory swap0Data = abi.encodeWithSelector(mockSwap.swap.selector, SLISBNB, LISUSD, uint256(0), borrowed * 2);
+    bytes memory swap1Data = abi.encodeWithSelector(
+      mockSwap.swap.selector,
+      BNB_ADDRESS,
+      LISUSD,
+      uint256(0),
+      uint256(0)
+    );
+
+    V3Liquidator.FlashLiquidateParams memory params = V3Liquidator.FlashLiquidateParams({
+      v3Provider: address(provider),
+      minToken0Amt: 0,
+      minToken1Amt: 0,
+      redeemShares: true,
+      token0Pair: address(mockSwap),
+      token0Spender: address(0),
+      token1Pair: address(mockSwap),
+      token1Spender: address(0),
+      swapToken0Data: swap0Data,
+      swapToken1Data: swap1Data
+    });
+
+    vm.prank(bot);
+    liquidator.flashLiquidate(Id.unwrap(marketId), user, shares, params);
+
+    assertEq(_collateral(user), 0, "borrower collateral seized");
+    // Residue reflowed: liquidator drained, vault received the loanToken profit.
+    assertEq(IERC20(LISUSD).balanceOf(address(liquidator)), 0, "liquidator loanToken reflowed");
+    assertGt(IERC20(LISUSD).balanceOf(address(vault)), 0, "vault received arb profit");
+  }
+
+  /// @dev initialize wires an optional fund pool directly (no registration check — the vault registers
+  ///      this liquidator only after the proxy exists); a non-contract fundSource reverts.
+  function test_initialize_setsFundSource() public {
+    LiquidationVault vault = _deployVault(false);
+    V3Liquidator implL = new V3Liquidator(MOOLAH_PROXY);
+
+    // Non-contract fundSource → revert.
+    vm.expectRevert(V3Liquidator.InvalidFundSource.selector);
+    new ERC1967Proxy(address(implL), abi.encodeCall(V3Liquidator.initialize, (admin, manager, bot, makeAddr("eoa"))));
+
+    // Contract fundSource → set at init (registration in the vault happens afterwards).
+    V3Liquidator liq = V3Liquidator(
+      payable(
+        new ERC1967Proxy(address(implL), abi.encodeCall(V3Liquidator.initialize, (admin, manager, bot, address(vault))))
+      )
+    );
+    assertEq(liq.fundSource(), address(vault), "fundSource set at init");
   }
 }
