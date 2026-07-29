@@ -20,8 +20,6 @@ contract MockStakeManager is IStakeManager {
     return (_amountInSlisBnb * 1e18) / exchangeRate;
   }
 
-  function deposit() external payable {}
-
   function instantWithdraw(uint256) external pure returns (uint256) {
     return 0;
   }
