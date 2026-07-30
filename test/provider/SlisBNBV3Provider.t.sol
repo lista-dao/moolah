@@ -2576,6 +2576,36 @@ contract SlisBNBV3ProviderTest is Test {
     assertTrue(p0 > o0 || p1 > o1, "preview now exceeds the fee-omitting spot formula");
   }
 
+  /// @dev Partial-withdraw fee fairness: accrued fees are swept to idle and split pro-rata, so a partial
+  ///      exit takes only its share and does not drop the remaining holders' per-share value.
+  function test_removeLiquidity_partialWithdraw_feesSplitProRata() public {
+    // Two depositors, so `user` holds only part of the position (a genuinely partial exit).
+    (uint256 shares1, , ) = _deposit(user, 100 ether, 100 ether);
+    _deposit(user2, 100 ether, 100 ether);
+
+    // Accrue real swap fees across the range (balanced both ways → spot ends near start).
+    PoolSwapper swapper = new PoolSwapper();
+    deal(WBNB, address(swapper), 5_000 ether);
+    deal(SLISBNB, address(swapper), 5_000 ether);
+    swapper.swapExactIn(POOL, false, 2_000 ether);
+    swapper.swapExactIn(POOL, true, 2_000 ether);
+
+    // Remaining-holder per-share redeemable value (fee-inclusive) BEFORE the partial withdraw.
+    uint256 probe = 1e18;
+    (uint256 before0, uint256 before1) = provider.previewRedeemUnderlying(probe);
+
+    // `user` exits its full stake — but that is only ~50% of the position (user2 stays in).
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares1);
+    vm.prank(user);
+    provider.withdraw(marketParams, shares1, (exp0 * 99) / 100, (exp1 * 99) / 100, user, user);
+
+    // Per-share value must not drop: the fees `user` left behind stay with the remaining holders (kept
+    // in idle and counted in NAV). Pre-fix `user` scooped them → at least one leg would drop here.
+    (uint256 after0, uint256 after1) = provider.previewRedeemUnderlying(probe);
+    assertGe(after0, before0, "token0 per-share not diluted by fee over-collection");
+    assertGe(after1, before1, "token1 per-share not diluted by fee over-collection");
+  }
+
   /// @dev Counter-test: rebalance now takes a target pool price and reverts if the actual pool price
   ///      after the swap+mint deviates from it beyond maxSpotDeviationBps. This is what stops a price
   ///      manipulated around the rebalance (making the minLiquidity floor pass on off-market liquidity,

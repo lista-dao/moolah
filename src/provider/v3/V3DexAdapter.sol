@@ -298,15 +298,22 @@ abstract contract V3DexAdapter is
     uint256 minAmount1,
     address receiver
   ) external onlyProvider nonReentrant returns (uint256 amount0, uint256 amount1) {
+    // Sweep fees into idle first so they split pro-rata: decreaseLiquidity settles the whole position's
+    // fees into tokensOwed, so collecting them with the pro-rata principal would pay this withdrawer
+    // 100% of the fees. collect only claims owed tokens (no swap / no spot move), so it is safe here.
+    if (tokenId != 0) {
+      (uint256 fee0, uint256 fee1) = V3PositionLib.collectAll(POSITION_MANAGER, tokenId);
+      if (fee0 > 0) idleToken0 += fee0;
+      if (fee1 > 0) idleToken1 += fee1;
+    }
+
     uint128 totalLiq = _getPositionLiquidity();
     uint128 liquidityToRemove = totalShares == 0 ? 0 : uint128((uint256(totalLiq) * shares) / totalShares);
 
     if (liquidityToRemove > 0) {
-      // Slippage is enforced on the OVERALL amount delivered (principal + fees + pro-rata idle) at the
-      // end of this function, NOT here on the burned principal alone. Callers size minAmount0/1 from
-      // previewRemoveLiquidity, which returns principal + pro-rata idle; a principal-only floor here
-      // would spuriously revert whenever idle is a meaningful share of the payout, and would not be
-      // enforced at all on an idle-only / dust (liquidityToRemove == 0) exit.
+      // Fees drained above, so this returns only the freshly-burned pro-rata principal. Slippage is
+      // enforced on the OVERALL delivered amount at function end (min sized from previewRemoveLiquidity =
+      // principal + pro-rata idle+fees), not on the burned principal here.
       V3PositionLib.decreaseLiquidity(POSITION_MANAGER, tokenId, liquidityToRemove, 0, 0);
       (amount0, amount1) = V3PositionLib.collectAll(POSITION_MANAGER, tokenId);
     }
