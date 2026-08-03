@@ -8,6 +8,7 @@ import { SafeERC20, IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/Saf
 
 import { IStableSwap } from "../dex/interfaces/IStableSwap.sol";
 import { ILiquidator } from "../liquidator/ILiquidator.sol";
+import { IMoolahVault } from "../moolah-vault/interfaces/IMoolahVault.sol";
 
 /**
  * @title RevenueCollector
@@ -38,6 +39,7 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   event StableSwapFeeCollected(address indexed pool);
   event LiquidationFeeCollected(address indexed liquidator, address indexed asset, uint256 amount);
   event EmergencyWithdraw(address indexed asset, uint256 amount, address indexed to);
+  event VaultFeeAccrued(address indexed vault);
 
   constructor() {
     _disableInitializers();
@@ -106,6 +108,34 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     IStableSwap(pool).withdraw_admin_fees();
 
     emit StableSwapFeeCollected(pool);
+  }
+
+  /**
+   * @dev Triggers fee accrual on Moolah vaults by depositing 0 assets.
+   * A zero-asset deposit mints no shares but runs the vault's `_accrueFee` logic,
+   * realizing accrued fees to the vault's fee recipient.
+   * @param vaults The list of Moolah vaults to accrue fees on
+   */
+  function batchAccrueVaultFees(address[] calldata vaults) external onlyRole(BOT) {
+    require(vaults.length > 0 && vaults.length <= MAX_LENGTH, "invalid length");
+
+    for (uint256 i = 0; i < vaults.length; i++) {
+      _accrueVaultFee(vaults[i]);
+    }
+  }
+
+  /**
+   * @dev Triggers fee accrual on a single Moolah vault by depositing 0 assets.
+   * @param vault The address of the Moolah vault
+   */
+  function accrueVaultFee(address vault) external onlyRole(BOT) {
+    _accrueVaultFee(vault);
+  }
+
+  function _accrueVaultFee(address vault) internal {
+    IMoolahVault(vault).deposit(0, address(this));
+
+    emit VaultFeeAccrued(vault);
   }
 
   /**
