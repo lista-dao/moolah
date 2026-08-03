@@ -294,30 +294,11 @@ abstract contract V3Provider is
       // spot price never enters share issuance, so the mint-at-spot / value-at-fair gap that let a
       // depositor be over-credited (with idle present) is eliminated. Value-conserving: the depositor
       // adds exactly `frac` of each composition leg and receives `frac` of the supply.
-      (uint256 t0, uint256 t1) = IV3DexAdapter(ADAPTER).positionAmountsAt(fairSqrtPriceX96);
-      if (_amountsValueUsd(t0, t1) == 0) revert ZeroShares();
-
-      uint256 frac; // WAD-scaled fraction of the existing composition being added
-      if (t0 == 0) {
-        frac = (_amount1Desired * WAD) / t1;
-      } else if (t1 == 0) {
-        frac = (_amount0Desired * WAD) / t0;
-      } else {
-        uint256 f0 = (_amount0Desired * WAD) / t0;
-        uint256 f1 = (_amount1Desired * WAD) / t1;
-        frac = f0 < f1 ? f0 : f1;
-      }
-
-      // Round the consumed amounts UP so the depositor pays >= their pro-rata share (shares below round
-      // down) — any sub-wei rounding favors existing holders, never the depositor. Both stay <= the
-      // desired input since frac <= dᵢ·WAD/tᵢ, so no over-consumption.
-      amount0Used = (t0 * frac + WAD - 1) / WAD;
-      amount1Used = (t1 * frac + WAD - 1) / WAD;
+      // min(fair, spot) share credit + fair-pinned consumed amounts (see _quoteDeposit).
+      (shares, amount0Used, amount1Used) = _quoteDeposit(supplyBefore, _amount0Desired, _amount1Desired);
       // Repurposed slippage guard: amount0Min/amount1Min are now the minimum of each leg that must be
       // consumed (the rest is refunded), protecting the depositor from an unexpected composition ratio.
       if (amount0Used < amount0Min || amount1Used < amount1Min) revert InsufficientAmount();
-
-      shares = (supplyBefore * frac) / WAD;
 
       // Park the consumed tokens into the adapter's idle inventory (deployed later by compound()).
       if (amount0Used > 0) IERC20(TOKEN0).safeTransfer(ADAPTER, amount0Used);
@@ -511,6 +492,28 @@ abstract contract V3Provider is
     amount1 = (t1 * frac) / WAD;
   }
 
+  /// @notice Preview the shares a deposit would mint — the exact min(fair, spot) credit deposit() uses.
+  ///         Frontends size `minShares` off this (× a slippage tolerance). First deposit (supply == 0)
+  ///         previews the oracle-valued opening mint.
+  /// @param amount0Desired token0 offered by the depositor.
+  /// @param amount1Desired token1 offered by the depositor.
+  /// @return shares shares deposit() would mint for these amounts.
+  function previewDepositShares(uint256 amount0Desired, uint256 amount1Desired) external view returns (uint256 shares) {
+    uint256 supplyBefore = totalSupply();
+    if (supplyBefore > 0) {
+      (shares, , ) = _quoteDeposit(supplyBefore, amount0Desired, amount1Desired);
+      return shares;
+    }
+    (uint128 liquidity, , ) = IV3DexAdapter(ADAPTER).previewAddLiquidity(amount0Desired, amount1Desired);
+    (uint256 added0, uint256 added1) = IV3DexAdapter(ADAPTER).amountsForLiquidity(
+      liquidity,
+      IV3DexAdapter(ADAPTER).fairSqrtPriceX96()
+    );
+    uint256 assetPrice = IOracle(resilientOracle).peek(asset());
+    if (assetPrice > 0)
+      shares = (_amountsValueUsd(added0, added1) * (10 ** uint256(accountingAssetDecimals))) / assetPrice;
+  }
+
   /// @notice Given a desired token0 amount, the token1 amount that pairs with it at the current fair
   ///         composition ratio, so a subsequent deposit consumes both legs fully (minimal refund).
   /// @dev    amount1 = amount0 * T1 / T0, where (T0, T1) = getFairComposition(). Reverts if the fair
@@ -562,6 +565,57 @@ abstract contract V3Provider is
     // one leg (which would under-price the collateral and enable unfair liquidation / over-borrow).
     if (price0 == 0 || price1 == 0) revert OracleZero();
     return (amount0 * price0) / (10 ** DECIMALS0) + (amount1 * price1) / (10 ** DECIMALS1);
+  }
+
+  /// @dev WAD-fraction of a composition covered by given amounts, on the binding (smaller) leg:
+  ///      min(amount0/comp0, amount1/comp1) × WAD. Single-sided composition binds on the present leg;
+  ///      all-zero composition reverts (div-by-zero) — callers guard it.
+  /// @param amount0 token0 amount being priced.
+  /// @param amount1 token1 amount being priced.
+  /// @param comp0   token0 of the composition priced against.
+  /// @param comp1   token1 of the composition priced against.
+  /// @return WAD-scaled fraction (1e18 == the full composition).
+  function _compositionFractionWad(
+    uint256 amount0,
+    uint256 amount1,
+    uint256 comp0,
+    uint256 comp1
+  ) internal pure returns (uint256) {
+    if (comp0 == 0) return (amount1 * WAD) / comp1;
+    if (comp1 == 0) return (amount0 * WAD) / comp0;
+    uint256 frac0 = (amount0 * WAD) / comp0;
+    uint256 frac1 = (amount1 * WAD) / comp1;
+    return frac0 < frac1 ? frac0 : frac1;
+  }
+
+  /// @dev Quote a subsequent deposit (supplyBefore > 0): consumed amounts pinned to the FAIR composition
+  ///      (rounded up); shares = min(sharesFair, sharesSpot), the spot quote re-pricing the SAME consumed
+  ///      amounts. Withdraw settles at spot, so the min caps the credit at what a spot exit can back
+  ///      (closes the deposit-withdraw cycle). Shared with previewDepositShares — preview can't drift.
+  /// @param supplyBefore   share supply before this deposit.
+  /// @param amount0Desired token0 offered by the depositor.
+  /// @param amount1Desired token1 offered by the depositor.
+  /// @return shares      shares to mint = min(fair, spot).
+  /// @return amount0Used token0 consumed and parked to idle (rest refunded).
+  /// @return amount1Used token1 consumed and parked to idle (rest refunded).
+  function _quoteDeposit(
+    uint256 supplyBefore,
+    uint256 amount0Desired,
+    uint256 amount1Desired
+  ) internal view returns (uint256 shares, uint256 amount0Used, uint256 amount1Used) {
+    (uint256 t0, uint256 t1) = IV3DexAdapter(ADAPTER).positionAmountsAt(IV3DexAdapter(ADAPTER).fairSqrtPriceX96());
+    if (_amountsValueUsd(t0, t1) == 0) revert ZeroShares();
+
+    uint256 frac = _compositionFractionWad(amount0Desired, amount1Desired, t0, t1);
+    amount0Used = (t0 * frac + WAD - 1) / WAD;
+    amount1Used = (t1 * frac + WAD - 1) / WAD;
+
+    uint256 sharesFair = (supplyBefore * frac) / WAD;
+    (uint256 s0, uint256 s1) = IV3DexAdapter(ADAPTER).positionAmountsAt(IV3DexAdapter(ADAPTER).spotSqrtPriceX96());
+    uint256 sharesSpot = (s0 == 0 && s1 == 0)
+      ? type(uint256).max // degenerate spot composition: do not let it lower the credit
+      : (supplyBefore * _compositionFractionWad(amount0Used, amount1Used, s0, s1)) / WAD;
+    shares = sharesFair < sharesSpot ? sharesFair : sharesSpot;
   }
 
   /// @dev Single-asset ERC-4626 entry is disabled — this is a two-token LP vault. Use the two-token

@@ -11,8 +11,10 @@ import { IProvider } from "./IProvider.sol";
  *         (IV3ProviderOracle). The vault is no longer an IOracle.
  */
 interface IV3Provider is IProvider {
+  /// @notice token0 of the underlying V3 pool (token0 < token1 by address).
   function TOKEN0() external view returns (address);
 
+  /// @notice token1 of the underlying V3 pool.
   function TOKEN1() external view returns (address);
 
   /// @notice Wrapped-native token of the pool's chain (WBNB on BSC, WETH on Ethereum). On exit the
@@ -31,8 +33,17 @@ interface IV3Provider is IProvider {
   function getFairComposition() external view returns (uint256 total0, uint256 total1);
 
   /// @notice Deposit token0/token1 into the V3 position and supply resulting shares as Moolah
-  ///         collateral on behalf of `onBehalf`. Reverts if the minted shares are below `minShares`
-  ///         (share-slippage floor; pass 0 to disable).
+  ///         collateral on behalf of `onBehalf`.
+  /// @param marketParams   target Moolah market (collateral token must be this vault).
+  /// @param amount0Desired token0 offered (unused excess is refunded).
+  /// @param amount1Desired token1 offered (unused excess is refunded).
+  /// @param amount0Min     min token0 that must be consumed, else revert.
+  /// @param amount1Min     min token1 that must be consumed, else revert.
+  /// @param minShares      share-slippage floor: revert if minted shares < this (0 disables).
+  /// @param onBehalf       Moolah collateral owner credited with the shares.
+  /// @return shares        shares minted and supplied.
+  /// @return amount0Used   token0 actually consumed.
+  /// @return amount1Used   token1 actually consumed.
   function deposit(
     MarketParams calldata marketParams,
     uint256 amount0Desired,
@@ -44,6 +55,14 @@ interface IV3Provider is IProvider {
   ) external payable returns (uint256 shares, uint256 amount0Used, uint256 amount1Used);
 
   /// @notice Withdraw shares from Moolah, remove liquidity, and return token0/token1 to `receiver`.
+  /// @param marketParams market to pull the collateral from.
+  /// @param shares       shares to burn.
+  /// @param minAmount0   min token0 delivered, else revert.
+  /// @param minAmount1   min token1 delivered, else revert.
+  /// @param onBehalf     collateral owner whose shares are withdrawn.
+  /// @param receiver     recipient of the underlying (wrapped-native leg paid as native coin).
+  /// @return amount0     token0 delivered.
+  /// @return amount1     token1 delivered.
   function withdraw(
     MarketParams calldata marketParams,
     uint256 shares,
@@ -54,6 +73,10 @@ interface IV3Provider is IProvider {
   ) external returns (uint256 amount0, uint256 amount1);
 
   /// @notice Withdraw provider shares from Moolah collateral without redeeming the underlying position.
+  /// @param marketParams market to pull the collateral from.
+  /// @param shares       shares to withdraw.
+  /// @param onBehalf     collateral owner whose shares are withdrawn.
+  /// @param receiver     recipient of the share tokens.
   function withdrawShares(
     MarketParams calldata marketParams,
     uint256 shares,
@@ -62,9 +85,18 @@ interface IV3Provider is IProvider {
   ) external;
 
   /// @notice Supply wallet-held provider shares as Moolah collateral.
+  /// @param marketParams market to supply into.
+  /// @param shares       shares to supply.
+  /// @param onBehalf     collateral owner credited with the shares.
   function supplyShares(MarketParams calldata marketParams, uint256 shares, address onBehalf) external;
 
   /// @notice Redeem shares already held by the caller (e.g. a liquidator) for the underlying token0/token1.
+  /// @param shares     shares to redeem.
+  /// @param minAmount0 min token0 delivered, else revert.
+  /// @param minAmount1 min token1 delivered, else revert.
+  /// @param receiver   recipient of the underlying (wrapped-native leg paid as native coin).
+  /// @return amount0   token0 delivered.
+  /// @return amount1   token1 delivered.
   function redeemShares(
     uint256 shares,
     uint256 minAmount0,
