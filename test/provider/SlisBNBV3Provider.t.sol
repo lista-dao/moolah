@@ -403,12 +403,9 @@ contract SlisBNBV3ProviderTest is Test {
   function test_deposit_minShares_guardsShareSlippage() public {
     _deposit(user, 10 ether, 10 ether);
 
-    // Preview the shares a balanced 10/10 deposit would mint at the current fair composition.
-    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(10 ether, 10 ether);
-    uint256 supplyBefore = provider.totalSupply();
-    (uint256 t0, uint256 t1) = provider.getFairComposition();
-    uint256 fracExp = (exp0 * 1e18) / t0 < (exp1 * 1e18) / t1 ? (exp0 * 1e18) / t0 : (exp1 * 1e18) / t1;
-    uint256 expectedShares = (supplyBefore * fracExp) / 1e18;
+    // previewDepositShares returns the exact min(fair, spot) credit deposit() will mint, so the floor
+    // below is measured against the real amount (not a fair-only estimate that a spot move could fail).
+    uint256 expectedShares = provider.previewDepositShares(10 ether, 10 ether);
 
     deal(SLISBNB, user2, 10 ether);
     deal(WBNB, user2, 10 ether);
@@ -830,6 +827,94 @@ contract SlisBNBV3ProviderTest is Test {
     (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(10 ether, 10 ether);
     assertGt(exp0, 0, "fair composition consumes token0 regardless of spot");
     assertGt(exp1, 0, "fair composition consumes token1 regardless of spot");
+  }
+
+  /* ───────────── deposit crediting: min(fair, spot) shares ───────────── */
+
+  /// @dev Push the pool spot off the rate-anchored fair by selling WBNB (token1) into the pool.
+  function _skewSpotUp(uint256 wbnbIn) internal {
+    PoolSwapper sw = new PoolSwapper();
+    deal(WBNB, address(sw), wbnbIn);
+    sw.swapExactIn(POOL, false, wbnbIn);
+  }
+
+  /// @dev At a skewed spot the SAME deposit is credited fewer shares than at fair — the spot quote (same
+  ///      consumed amounts) wins the min, capping the credit at what a spot exit can back. Pre-fix
+  ///      (fair-only issuance) the skew would not change the credited shares, so this fails pre-fix.
+  function test_deposit_skewedSpotCreditsFewerShares() public {
+    _deposit(user, 100 ether, 100 ether); // seed
+
+    uint256 snap = vm.snapshotState();
+    (uint256 sharesFair, , ) = _deposit(user2, 100 ether, 100 ether); // no skew → fair basis
+    vm.revertToState(snap);
+
+    _skewSpotUp(300 ether);
+    (uint256 sharesSkew, , ) = _deposit(user2, 100 ether, 100 ether);
+
+    assertLt(sharesSkew, sharesFair, "skewed spot must credit fewer shares (min fair/spot)");
+    assertGt(sharesSkew, 0, "still mints > 0");
+  }
+
+  /// @dev previewDepositShares returns exactly what deposit() mints — unskewed AND at a skewed spot — so
+  ///      frontends can size minShares off it without the mint drifting below their floor.
+  function test_previewDepositShares_matchesActualMint() public {
+    _deposit(user, 100 ether, 100 ether); // seed
+
+    uint256 snap = vm.snapshotState();
+    uint256 preview1 = provider.previewDepositShares(100 ether, 100 ether);
+    (uint256 actual1, , ) = _deposit(user2, 100 ether, 100 ether);
+    vm.revertToState(snap);
+    assertEq(preview1, actual1, "preview matches mint (unskewed)");
+
+    _skewSpotUp(300 ether);
+    uint256 preview2 = provider.previewDepositShares(100 ether, 100 ether);
+    (uint256 actual2, , ) = _deposit(user2, 100 ether, 100 ether);
+    assertEq(preview2, actual2, "preview matches mint (skewed spot)");
+    assertLt(preview2, preview1, "skew lowers the previewed shares (min = spot quote)");
+  }
+
+  /// @dev The deposit->withdraw cycle at a skewed spot is no longer profitable: the exiter cannot walk
+  ///      out with more fair value than it put in (the core deposit-withdraw leak, closed).
+  function test_depositWithdraw_cycleNotProfitableAtSkewedSpot() public {
+    _deposit(user, 100 ether, 100 ether); // seed
+    _skewSpotUp(300 ether);
+
+    (uint256 shares, uint256 in0, uint256 in1) = _deposit(user2, 100 ether, 100 ether);
+    (uint256 e0, uint256 e1) = provider.previewRedeemUnderlying(shares);
+    vm.prank(user2);
+    (uint256 out0, uint256 out1) = provider.withdraw(
+      marketParams,
+      shares,
+      (e0 * 90) / 100,
+      (e1 * 90) / 100,
+      user2,
+      user2
+    );
+
+    assertLe(_valueUSD(out0, out1), _valueUSD(in0, in1), "cycle must not extract fair value after the fix");
+  }
+
+  /// @dev MEV backstop: an attacker front-running a spot skew squeezes the credited shares; the
+  ///      depositor's minShares (set to its fair-basis expectation) reverts rather than settle low.
+  function test_deposit_minSharesBackstopsSpotSqueeze() public {
+    _deposit(user, 100 ether, 100 ether); // seed
+
+    uint256 snap = vm.snapshotState();
+    (uint256 fairShares, , ) = _deposit(user2, 100 ether, 100 ether); // fair-basis expectation
+    vm.revertToState(snap);
+
+    _skewSpotUp(300 ether); // attacker front-run
+
+    deal(SLISBNB, user2, 100 ether);
+    deal(WBNB, user2, 100 ether);
+    (, uint256 e0, uint256 e1) = provider.previewDepositAmounts(100 ether, 100 ether);
+    vm.startPrank(user2);
+    IERC20(SLISBNB).approve(address(provider), 100 ether);
+    IERC20(WBNB).approve(address(provider), 100 ether);
+    // minShares = fair expectation → after the squeeze the credit is lower → revert.
+    vm.expectRevert(V3Provider.InsufficientShares.selector);
+    provider.deposit(marketParams, 100 ether, 100 ether, (e0 * 99) / 100, (e1 * 99) / 100, fairShares, user2);
+    vm.stopPrank();
   }
 
   function test_previewDepositForToken_pairsLegsAtFairComposition() public {
