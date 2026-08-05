@@ -2986,6 +2986,163 @@ contract LendingBrokerTest is Test {
     Position memory posAfter = moolah.position(marketParams.id(), borrower);
     assertLt(posAfter.borrowShares, posBefore.borrowShares, "clean shares should liquidate");
   }
+
+  // ==========================================================================
+  // Relayer protocol fee: 10% cut on broker revenue (interest + penalty)
+  // ==========================================================================
+
+  uint256 constant FEE_WAD = 1e18;
+  address constant FEE_RECIPIENT = address(0xFEE);
+
+  /// @dev enable the protocol fee on the LISUSD relayer via the V2 reinitializer (rate hardcoded to 10%)
+  function _enableRelayerFee(address recipient) internal {
+    vm.prank(ADMIN);
+    relayer.initializeV2(recipient);
+  }
+
+  function test_relayer_initializeV2_setsFeeConfig() public {
+    _enableRelayerFee(FEE_RECIPIENT);
+    assertEq(relayer.feeRate(), relayer.DEFAULT_FEE_RATE(), "feeRate not defaulted to 10%");
+    assertEq(relayer.feeRate(), 0.1e18, "feeRate not 10%");
+    assertEq(relayer.feeRecipient(), FEE_RECIPIENT, "feeRecipient not set");
+  }
+
+  function test_relayer_initializeV2_onlyAdmin() public {
+    vm.prank(MANAGER); // MANAGER lacks DEFAULT_ADMIN_ROLE
+    vm.expectRevert();
+    relayer.initializeV2(FEE_RECIPIENT);
+  }
+
+  function test_relayer_initializeV2_cannotRunTwice() public {
+    _enableRelayerFee(FEE_RECIPIENT);
+    vm.prank(ADMIN);
+    vm.expectRevert(); // reinitializer(2) already consumed
+    relayer.initializeV2(FEE_RECIPIENT);
+  }
+
+  function test_relayer_initializeV2_rejectsZeroRecipient() public {
+    vm.prank(ADMIN);
+    vm.expectRevert(bytes("relayer/zero-address-provided"));
+    relayer.initializeV2(address(0));
+  }
+
+  /// @dev the fee is floored: recipient receives exactly floor(amount * feeRate / WAD),
+  ///      the remainder stays in the relayer/vault flow.
+  function test_relayer_supplyToVault_skimsFee() public {
+    _enableRelayerFee(FEE_RECIPIENT);
+
+    uint256 amount = 1000 ether;
+    uint256 expectedFee = (amount * 0.1e18) / FEE_WAD; // 100 ether
+
+    uint256 before = LISUSD.balanceOf(FEE_RECIPIENT);
+    _triggerInterestFlush(amount);
+    uint256 received = LISUSD.balanceOf(FEE_RECIPIENT) - before;
+
+    assertEq(received, expectedFee, "fee recipient did not receive 10%");
+  }
+
+  /// @dev with no fee configured (default state) the relayer behaves exactly as before.
+  function test_relayer_supplyToVault_noFeeWhenDisabled() public {
+    uint256 before = LISUSD.balanceOf(FEE_RECIPIENT);
+    _triggerInterestFlush(1000 ether);
+    assertEq(LISUSD.balanceOf(FEE_RECIPIENT), before, "no fee should be taken when disabled");
+    assertEq(relayer.feeRate(), 0, "feeRate should default to 0");
+  }
+
+  /// @dev end-to-end: repaying a fixed position early routes 10% of both the accrued
+  ///      interest and the early-repay penalty to the fee recipient.
+  function test_relayer_fixedRepay_feeOnInterestAndPenalty() public {
+    _enableRelayerFee(FEE_RECIPIENT);
+
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: 30, duration: 30 days, apr: 110 * 1e25 });
+    vm.prank(BOT);
+    broker.updateFixedTermAndRate(term, false);
+
+    uint256 fixedAmt = 500 ether;
+    vm.prank(borrower);
+    broker.borrow(fixedAmt, 30);
+
+    skip(10 days); // repay early -> penalty applies
+
+    FixedLoanPosition memory pos = broker.userFixedPositions(borrower)[0];
+    uint256 posId = pos.posId;
+
+    // full close: interest + principal + penalty
+    uint256 repayAmt = broker.getUserTotalDebt(borrower) + 10 ether;
+    (uint256 interestRepaid, uint256 penalty, ) = broker.previewRepayFixedLoanPosition(borrower, repayAmt, posId);
+    assertGt(interestRepaid, 0, "no interest accrued");
+    assertGt(penalty, 0, "no penalty for early repay");
+
+    // interest and penalty are supplied to the relayer in two separate calls,
+    // so the fee is floored on each independently.
+    uint256 expectedFee = (interestRepaid * 0.1e18) / FEE_WAD + (penalty * 0.1e18) / FEE_WAD;
+
+    LISUSD.setBalance(borrower, repayAmt);
+    uint256 feeBefore = LISUSD.balanceOf(FEE_RECIPIENT);
+    vm.startPrank(borrower);
+    IERC20(address(LISUSD)).approve(address(broker), type(uint256).max);
+    broker.repay(repayAmt, posId, borrower);
+    vm.stopPrank();
+
+    assertEq(LISUSD.balanceOf(FEE_RECIPIENT) - feeBefore, expectedFee, "fee on interest+penalty mismatch");
+  }
+
+  /// @dev end-to-end: repaying a dynamic position routes 10% of the accrued interest to the fee recipient.
+  function test_relayer_dynamicRepay_feeOnInterest() public {
+    _enableRelayerFee(FEE_RECIPIENT);
+
+    uint256 amount = 400 ether;
+    vm.prank(borrower);
+    broker.borrow(amount);
+
+    skip(30 days);
+
+    uint256 accruedInterest = broker.getUserTotalDebt(borrower) - amount;
+    assertGt(accruedInterest, 0, "no dynamic interest accrued");
+    uint256 expectedFee = (accruedInterest * 0.1e18) / FEE_WAD;
+
+    LISUSD.setBalance(borrower, accruedInterest); // repay interest only
+    uint256 feeBefore = LISUSD.balanceOf(FEE_RECIPIENT);
+    vm.startPrank(borrower);
+    IERC20(address(LISUSD)).approve(address(broker), type(uint256).max);
+    broker.repay(accruedInterest, borrower);
+    vm.stopPrank();
+
+    assertApproxEqAbs(LISUSD.balanceOf(FEE_RECIPIENT) - feeBefore, expectedFee, 1, "fee on dynamic interest mismatch");
+  }
+
+  function test_relayer_setFeeRate_onlyManager() public {
+    _enableRelayerFee(FEE_RECIPIENT);
+
+    vm.prank(address(0xdead));
+    vm.expectRevert();
+    relayer.setFeeRate(0.2e18);
+
+    vm.prank(MANAGER);
+    relayer.setFeeRate(0.2e18);
+    assertEq(relayer.feeRate(), 0.2e18);
+
+    uint256 tooHigh = relayer.MAX_FEE() + 1;
+    vm.prank(MANAGER);
+    vm.expectRevert(bytes("relayer/max-fee-exceeded"));
+    relayer.setFeeRate(tooHigh);
+  }
+
+  function test_relayer_setFeeRecipient_onlyManager() public {
+    _enableRelayerFee(FEE_RECIPIENT);
+
+    vm.prank(address(0xdead));
+    vm.expectRevert();
+    relayer.setFeeRecipient(address(0xabcd));
+
+    vm.prank(MANAGER);
+    relayer.setFeeRecipient(address(0xabcd));
+    assertEq(relayer.feeRecipient(), address(0xabcd));
+
+    vm.prank(MANAGER);
+    vm.expectRevert(bytes("relayer/zero-address-provided"));
+    relayer.setFeeRecipient(address(0));
+  }
 }
 
 /// @dev Mock swap pair that converts tokenIn -> tokenOut at oracle price.
