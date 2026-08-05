@@ -69,6 +69,9 @@ interface IV3DexAdapter {
   /// @notice Current pool spot price (slot0).
   function spotSqrtPriceX96() external view returns (uint160);
 
+  /// @notice Live LST↔native center rate the next rebalance will use (0 for pure-TWAP pairs).
+  function centerRate() external view returns (uint256);
+
   /// @notice Simulate adding `amount0Desired/amount1Desired` at the current spot price.
   function previewAddLiquidity(
     uint256 amount0Desired,
@@ -147,13 +150,22 @@ interface IV3DexAdapter {
   /// @notice Set the spot-vs-fair deviation gate (onlyRole MANAGER; bps of price, 0 disables).
   function setMaxSpotDeviationBps(uint256 maxSpotDeviationBps) external;
 
-  /// @notice Recenter the position to its range and convert inventory to the optimal ratio.
-  ///         onlyProvider — the provider gates the caller with the BOT role.
+  /// @notice Max |live center rate − BOT-supplied expectedCenterRate| deviation (bps) tolerated on
+  ///         rebalance (0 disables the guard).
+  function maxCenterRateDeviationBps() external view returns (uint256);
+
+  /// @notice Set the center-rate deviation gate (onlyRole MANAGER; bps, 0 disables).
+  function setMaxCenterRateDeviationBps(uint256 maxCenterRateDeviationBps) external;
+
+  /// @notice Recenter the position and convert inventory to the optimal ratio. onlyProvider (the provider
+  ///         gates on BOT). `expectedCenterRate` = the live rate the BOT built against (0 = skip); reverts
+  ///         if it deviates from the on-chain rate by more than `maxCenterRateDeviationBps`.
   function rebalance(
     uint256 minAmount0,
     uint256 minAmount1,
     uint256 minLiquidity,
     uint160 targetSqrtPriceX96,
+    uint256 expectedCenterRate,
     uint256 deadline,
     bytes calldata swapData
   ) external;
