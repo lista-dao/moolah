@@ -705,13 +705,22 @@ abstract contract V3Provider is
     uint256 minAmount1,
     uint256 minLiquidity,
     uint160 targetSqrtPriceX96,
+    uint256 expectedCenterRate,
     uint256 deadline,
     bytes calldata swapData
   ) internal {
     uint256 navBefore = _positionValueUsd();
     if (totalSupply() != 0 && navBefore == 0) revert OracleZero();
 
-    IV3DexAdapter(ADAPTER).rebalance(minAmount0, minAmount1, minLiquidity, targetSqrtPriceX96, deadline, swapData);
+    IV3DexAdapter(ADAPTER).rebalance(
+      minAmount0,
+      minAmount1,
+      minLiquidity,
+      targetSqrtPriceX96,
+      expectedCenterRate,
+      deadline,
+      swapData
+    );
 
     uint256 navAfter = _positionValueUsd();
 

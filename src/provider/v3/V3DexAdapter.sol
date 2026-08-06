@@ -118,8 +118,12 @@ abstract contract V3DexAdapter is
   ///      that vector. 0 disables the gate. Default INITIAL_RANGE_BPS (1%).
   uint256 public maxSpotDeviationBps;
 
+  /// @dev Max |live center rate − BOT expectedCenterRate| deviation on rebalance (BPS; 0 = off). Guards
+  ///      the range anchor against a build↔exec rate anomaly the fair-NAV loss caps can't see.
+  uint256 public maxCenterRateDeviationBps;
+
   /// @dev Reserved storage for future base variables (keep subclass storage stable on upgrade).
-  uint256[45] private __gap;
+  uint256[44] private __gap;
 
   /* ───────────────────────────── events ───────────────────────────── */
 
@@ -133,6 +137,7 @@ abstract contract V3DexAdapter is
   event SwapPairWhitelistSet(address indexed swapPair, bool status);
   event MaxSwapLossBpChanged(uint256 maxSwapLossBp);
   event MaxSpotDeviationBpsChanged(uint256 maxSpotDeviationBps);
+  event MaxCenterRateDeviationBpsChanged(uint256 maxCenterRateDeviationBps);
   event CompoundSkippedSpotDeviated(uint160 spotSqrtPriceX96, uint160 fairSqrtPriceX96);
   event CompoundSkippedNoLiquidity(uint256 idleToken0, uint256 idleToken1);
   event IdleCredited(uint256 amount0, uint256 amount1);
@@ -161,6 +166,7 @@ abstract contract V3DexAdapter is
   error InsufficientBalance();
   error InsufficientAmount();
   error SpotDeviationTooHigh();
+  error CenterRateDeviationTooHigh();
   error ZeroAmount();
 
   /* ─────────────────────────── constructor ────────────────────────── */
@@ -383,6 +389,14 @@ abstract contract V3DexAdapter is
     emit MaxSpotDeviationBpsChanged(_maxSpotDeviationBps);
   }
 
+  /// @notice Max relative deviation (BPS) allowed between the live center rate and the BOT-supplied
+  ///         expectedCenterRate on rebalance. 0 disables the guard (default).
+  function setMaxCenterRateDeviationBps(uint256 _maxCenterRateDeviationBps) external onlyRole(MANAGER) {
+    if (_maxCenterRateDeviationBps > BPS) revert InvalidThreshold();
+    maxCenterRateDeviationBps = _maxCenterRateDeviationBps;
+    emit MaxCenterRateDeviationBpsChanged(_maxCenterRateDeviationBps);
+  }
+
   /// @notice Whitelist (or remove) a swap venue the rebalance inventory conversion may call. Backend-built
   ///         calldata can only target whitelisted venues.
   /// @dev Defense-in-depth: a swap venue must never be a token / pool / NPM the adapter holds or trusts,
@@ -410,6 +424,7 @@ abstract contract V3DexAdapter is
     uint256 minAmount1,
     uint256 minLiquidity,
     uint160 targetSqrtPriceX96,
+    uint256 expectedCenterRate,
     uint256 deadline,
     bytes calldata swapData
   ) external onlyProvider nonReentrant {
@@ -420,6 +435,14 @@ abstract contract V3DexAdapter is
     uint256 centerRate = _lstNativeRate();
     bool rateImplied = centerRate != 0;
     if (rateImplied) _requireCenterRateDeviation(centerRate);
+
+    // Assert the live rate still matches the BOT's expectedCenterRate; 0 keeps prior behavior.
+    if (rateImplied && expectedCenterRate != 0 && maxCenterRateDeviationBps != 0) {
+      uint256 delta = centerRate > expectedCenterRate
+        ? centerRate - expectedCenterRate
+        : expectedCenterRate - centerRate;
+      if ((delta * BPS) / expectedCenterRate > maxCenterRateDeviationBps) revert CenterRateDeviationTooHigh();
+    }
 
     (int24 newTickLower, int24 newTickUpper) = _initialTickRange(centerRate);
     int24 oldTickLower = tickLower;
@@ -637,6 +660,11 @@ abstract contract V3DexAdapter is
   function spotSqrtPriceX96() public view returns (uint160 sqrtPriceX96) {
     // Decode only sqrtPriceX96/tick (width-agnostic to feeProtocol uint8/uint32; see IV3PoolMinimal).
     (sqrtPriceX96, ) = IV3PoolMinimal(POOL).slot0();
+  }
+
+  /// @inheritdoc IV3DexAdapter
+  function centerRate() external view returns (uint256) {
+    return _lstNativeRate();
   }
 
   /// @dev True when the pool spot price is within `maxSpotDeviationBps` (bps of price) of the fair price.
