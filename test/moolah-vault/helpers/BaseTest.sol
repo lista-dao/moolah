@@ -31,7 +31,10 @@ uint256 constant BLOCK_TIME = 1;
 uint256 constant MIN_TEST_ASSETS = 1e8;
 uint256 constant MAX_TEST_ASSETS = 1e28;
 uint184 constant CAP = type(uint128).max;
-uint256 constant NB_MARKETS = ConstantsLib.MAX_QUEUE_LENGTH + 1;
+// Number of markets created in setUp. Kept fixed (and independent of
+// ConstantsLib.MAX_QUEUE_LENGTH) so the shared setUp stays cheap; the max-queue-length
+// boundary is exercised by dedicated tests that create markets on demand.
+uint256 constant NB_MARKETS = 100;
 
 contract BaseTest is Test {
   using MathLib for uint256;
