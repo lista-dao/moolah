@@ -485,7 +485,7 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
     require(actualIn <= amountIn, ExceedAmount());
     require(actualOut >= amountOutMin, NoProfit());
 
-    emit SellToken(pair, pair, BNB_ADDRESS, tokenOut, amountIn, actualOut);
+    emit SellToken(pair, pair, BNB_ADDRESS, tokenOut, actualIn, actualOut);
   }
 
   /* ──────────────────── Moolah callback ───────────────────────────── */

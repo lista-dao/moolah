@@ -62,6 +62,20 @@ contract MockOneInchStrict is Test {
   }
 }
 
+/// @dev Native swap venue that consumes only part of the forwarded value and refunds the rest, so the
+///      measured input differs from the requested amountIn.
+contract MockRefundingNativeSwap is Test {
+  function swap(address tokenOut, uint256 consume, uint256 amountOut) external payable {
+    require(msg.value >= consume, "VALUE_LT_CONSUME");
+    deal(tokenOut, address(this), amountOut);
+    IERC20(tokenOut).transfer(msg.sender, amountOut);
+    if (msg.value > consume) {
+      (bool s, ) = msg.sender.call{ value: msg.value - consume }("");
+      require(s, "REFUND_FAILED");
+    }
+  }
+}
+
 contract V3LiquidatorTest is Test {
   using MarketParamsLib for MarketParams;
 
@@ -756,6 +770,28 @@ contract V3LiquidatorTest is Test {
 
     assertEq(IERC20(LISUSD).balanceOf(address(liquidator)), amountOut, "received lisUSD");
     assertEq(address(liquidator).balance, 0, "BNB consumed");
+  }
+
+  /// @dev SellToken reports the MEASURED native input, matching the ERC20 path. A venue that refunds part
+  ///      of the forwarded value must not be logged as if the full amountIn was sold.
+  function test_sellBNB_emitsMeasuredInputOnRefund() public {
+    MockRefundingNativeSwap venue = new MockRefundingNativeSwap();
+    vm.prank(manager);
+    liquidator.setPairWhitelist(address(venue), true);
+
+    uint256 amountIn = 1 ether;
+    uint256 consumed = 0.6 ether; // venue refunds 0.4
+    uint256 amountOut = 300 ether;
+    deal(address(liquidator), amountIn);
+
+    bytes memory swapData = abi.encodeWithSelector(venue.swap.selector, LISUSD, consumed, amountOut);
+
+    vm.expectEmit(true, true, true, true);
+    emit V3Liquidator.SellToken(address(venue), address(venue), BNB_ADDRESS, LISUSD, consumed, amountOut);
+    vm.prank(bot);
+    liquidator.sellBNB(address(venue), LISUSD, amountIn, amountOut, swapData);
+
+    assertEq(address(liquidator).balance, amountIn - consumed, "refund retained");
   }
 
   /* ─────────────────── withdrawals ────────────────────────────────── */
