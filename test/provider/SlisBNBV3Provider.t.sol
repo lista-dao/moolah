@@ -300,10 +300,13 @@ contract SlisBNBV3ProviderTest is Test {
     (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
     uint256 min0 = (exp0 * 999) / 1000;
     uint256 min1 = (exp1 * 999) / 1000;
+    // min0/min1 floor the CONSUMED amounts, not the entry price; minShares is the only guard against a
+    // bad price, so mirror production and never pass 0.
+    uint256 minShares = (provider.previewDepositShares(amount0, amount1) * 999) / 1000;
     vm.startPrank(_user);
     IERC20(SLISBNB).approve(address(provider), amount0);
     IERC20(WBNB).approve(address(provider), amount1);
-    (shares, used0, used1) = provider.deposit(marketParams, amount0, amount1, min0, min1, 0, _user);
+    (shares, used0, used1) = provider.deposit(marketParams, amount0, amount1, min0, min1, minShares, _user);
     vm.stopPrank();
   }
 
@@ -394,7 +397,7 @@ contract SlisBNBV3ProviderTest is Test {
     assertGt(shares2, shares1, "larger-value deposit yields more shares");
   }
 
-  /// @dev H02 / Issue_04 (+ M01) counter-test. The minShares floor makes a deposit revert instead of
+  /// @dev minShares-floor counter-test. The minShares floor makes a deposit revert instead of
   ///      silently under-crediting the depositor when it would receive fewer shares than demanded — the
   ///      protection against a first-depositor inflation attack (a direct NPM.increaseLiquidity donation
   ///      inflates the composition so a normal deposit rounds down) and against the fair composition
@@ -403,12 +406,9 @@ contract SlisBNBV3ProviderTest is Test {
   function test_deposit_minShares_guardsShareSlippage() public {
     _deposit(user, 10 ether, 10 ether);
 
-    // Preview the shares a balanced 10/10 deposit would mint at the current fair composition.
-    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(10 ether, 10 ether);
-    uint256 supplyBefore = provider.totalSupply();
-    (uint256 t0, uint256 t1) = provider.getFairComposition();
-    uint256 fracExp = (exp0 * 1e18) / t0 < (exp1 * 1e18) / t1 ? (exp0 * 1e18) / t0 : (exp1 * 1e18) / t1;
-    uint256 expectedShares = (supplyBefore * fracExp) / 1e18;
+    // previewDepositShares returns the exact min(fair, spot) credit deposit() will mint, so the floor
+    // below is measured against the real amount (not a fair-only estimate that a spot move could fail).
+    uint256 expectedShares = provider.previewDepositShares(10 ether, 10 ether);
 
     deal(SLISBNB, user2, 10 ether);
     deal(WBNB, user2, 10 ether);
@@ -627,7 +627,7 @@ contract SlisBNBV3ProviderTest is Test {
     // manager cannot rebalance — revert fires on role check before amounts matter.
     vm.prank(manager);
     vm.expectRevert();
-    provider.rebalance(1, 1, 1, 0, block.timestamp, "");
+    provider.rebalance(1, 1, 1, 0, 0, block.timestamp, "");
 
     // Disable the rate-drift guard — a pool swap does NOT move the StakeManager rate, so the
     // default 1% center-rate threshold would block this rebalance with RateDeviationBelowThreshold.
@@ -640,7 +640,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint256 min1 = (total1 * 999) / 1000;
     uint256 oldTokenId = adapter.tokenId();
     vm.prank(bot);
-    provider.rebalance(min0, min1, 0, 0, block.timestamp, "");
+    provider.rebalance(min0, min1, 0, 0, 0, block.timestamp, "");
 
     assertGt(adapter.tokenId(), oldTokenId, "position NFT should be re-minted");
     assertLt(adapter.tickLower(), adapter.tickUpper());
@@ -659,7 +659,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint256 min0 = (total0 * 999) / 1000;
     uint256 min1 = (total1 * 999) / 1000;
     vm.prank(bot);
-    provider.rebalance(min0, min1, 0, 0, block.timestamp, "");
+    provider.rebalance(min0, min1, 0, 0, 0, block.timestamp, "");
 
     // Share count is unchanged after rebalance.
     assertEq(_collateral(user), shares, "shares should be unchanged after rebalance");
@@ -795,6 +795,19 @@ contract SlisBNBV3ProviderTest is Test {
     assertApproxEqAbs(used1, exp1, 1, "used1 should match preview within 1 wei");
   }
 
+  /// @dev Subsequent-deposit branch (supply > 0): the preview must equal what deposit() consumes to the
+  ///      wei. Both round the fair composition UP, so a floor-rounded preview would under-report by 1 wei.
+  function test_previewDeposit_amountsMatchActual_subsequentDeposit() public {
+    _deposit(user, 100 ether, 100 ether); // seed so the frac branch is taken
+
+    (uint128 liquidity, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(10 ether, 10 ether);
+    assertEq(liquidity, 0, "subsequent deposit parks to idle, mints no liquidity");
+
+    (, uint256 used0, uint256 used1) = _depositWithMin(user2, 10 ether, 10 ether, 0, 0);
+    assertEq(used0, exp0, "used0 == preview exactly");
+    assertEq(used1, exp1, "used1 == preview exactly");
+  }
+
   function test_previewDeposit_derivedMinAmounts_succeed() public {
     uint256 amount0 = 10 ether;
     uint256 amount1 = 10 ether;
@@ -830,6 +843,94 @@ contract SlisBNBV3ProviderTest is Test {
     (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(10 ether, 10 ether);
     assertGt(exp0, 0, "fair composition consumes token0 regardless of spot");
     assertGt(exp1, 0, "fair composition consumes token1 regardless of spot");
+  }
+
+  /* ───────────── deposit crediting: min(fair, spot) shares ───────────── */
+
+  /// @dev Push the pool spot off the rate-anchored fair by selling WBNB (token1) into the pool.
+  function _skewSpotUp(uint256 wbnbIn) internal {
+    PoolSwapper sw = new PoolSwapper();
+    deal(WBNB, address(sw), wbnbIn);
+    sw.swapExactIn(POOL, false, wbnbIn);
+  }
+
+  /// @dev At a skewed spot the SAME deposit is credited fewer shares than at fair — the spot quote (same
+  ///      consumed amounts) wins the min, capping the credit at what a spot exit can back. Pre-fix
+  ///      (fair-only issuance) the skew would not change the credited shares, so this fails pre-fix.
+  function test_deposit_skewedSpotCreditsFewerShares() public {
+    _deposit(user, 100 ether, 100 ether); // seed
+
+    uint256 snap = vm.snapshotState();
+    (uint256 sharesFair, , ) = _deposit(user2, 100 ether, 100 ether); // no skew → fair basis
+    vm.revertToState(snap);
+
+    _skewSpotUp(300 ether);
+    (uint256 sharesSkew, , ) = _deposit(user2, 100 ether, 100 ether);
+
+    assertLt(sharesSkew, sharesFair, "skewed spot must credit fewer shares (min fair/spot)");
+    assertGt(sharesSkew, 0, "still mints > 0");
+  }
+
+  /// @dev previewDepositShares returns exactly what deposit() mints — unskewed AND at a skewed spot — so
+  ///      frontends can size minShares off it without the mint drifting below their floor.
+  function test_previewDepositShares_matchesActualMint() public {
+    _deposit(user, 100 ether, 100 ether); // seed
+
+    uint256 snap = vm.snapshotState();
+    uint256 preview1 = provider.previewDepositShares(100 ether, 100 ether);
+    (uint256 actual1, , ) = _deposit(user2, 100 ether, 100 ether);
+    vm.revertToState(snap);
+    assertEq(preview1, actual1, "preview matches mint (unskewed)");
+
+    _skewSpotUp(300 ether);
+    uint256 preview2 = provider.previewDepositShares(100 ether, 100 ether);
+    (uint256 actual2, , ) = _deposit(user2, 100 ether, 100 ether);
+    assertEq(preview2, actual2, "preview matches mint (skewed spot)");
+    assertLt(preview2, preview1, "skew lowers the previewed shares (min = spot quote)");
+  }
+
+  /// @dev The deposit->withdraw cycle at a skewed spot is no longer profitable: the exiter cannot walk
+  ///      out with more fair value than it put in (the core deposit-withdraw leak, closed).
+  function test_depositWithdraw_cycleNotProfitableAtSkewedSpot() public {
+    _deposit(user, 100 ether, 100 ether); // seed
+    _skewSpotUp(300 ether);
+
+    (uint256 shares, uint256 in0, uint256 in1) = _deposit(user2, 100 ether, 100 ether);
+    (uint256 e0, uint256 e1) = provider.previewRedeemUnderlying(shares);
+    vm.prank(user2);
+    (uint256 out0, uint256 out1) = provider.withdraw(
+      marketParams,
+      shares,
+      (e0 * 90) / 100,
+      (e1 * 90) / 100,
+      user2,
+      user2
+    );
+
+    assertLe(_valueUSD(out0, out1), _valueUSD(in0, in1), "cycle must not extract fair value after the fix");
+  }
+
+  /// @dev MEV backstop: an attacker front-running a spot skew squeezes the credited shares; the
+  ///      depositor's minShares (set to its fair-basis expectation) reverts rather than settle low.
+  function test_deposit_minSharesBackstopsSpotSqueeze() public {
+    _deposit(user, 100 ether, 100 ether); // seed
+
+    uint256 snap = vm.snapshotState();
+    (uint256 fairShares, , ) = _deposit(user2, 100 ether, 100 ether); // fair-basis expectation
+    vm.revertToState(snap);
+
+    _skewSpotUp(300 ether); // attacker front-run
+
+    deal(SLISBNB, user2, 100 ether);
+    deal(WBNB, user2, 100 ether);
+    (, uint256 e0, uint256 e1) = provider.previewDepositAmounts(100 ether, 100 ether);
+    vm.startPrank(user2);
+    IERC20(SLISBNB).approve(address(provider), 100 ether);
+    IERC20(WBNB).approve(address(provider), 100 ether);
+    // minShares = fair expectation → after the squeeze the credit is lower → revert.
+    vm.expectRevert(V3Provider.InsufficientShares.selector);
+    provider.deposit(marketParams, 100 ether, 100 ether, (e0 * 99) / 100, (e1 * 99) / 100, fairShares, user2);
+    vm.stopPrank();
   }
 
   function test_previewDepositForToken_pairsLegsAtFairComposition() public {
@@ -1201,7 +1302,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     // Rebalance uses an internally derived range; caller only supplies execution guards.
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
 
@@ -1237,7 +1338,7 @@ contract SlisBNBV3ProviderTest is Test {
     bytes memory data = abi.encode(address(mockSwap), true, amountIn, (fairOut * 99) / 100, false, inner);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
 
     assertGt(adapter.tokenId(), oldTokenId, "position re-minted after swap");
     assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "fair swap ~value-neutral");
@@ -1255,7 +1356,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.NotWhitelistedPair.selector);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
   }
 
   /// @notice Defense-in-depth: a swap venue may never be the position's own tokens / pool / NPM.
@@ -1296,7 +1397,7 @@ contract SlisBNBV3ProviderTest is Test {
     bytes memory data = abi.encode(STAKE_MANAGER, true, amountIn, (fairOut * 99) / 100, false, inner);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
 
     assertGt(adapter.tokenId(), oldTokenId, "position re-minted after instantWithdraw conversion");
     assertApproxEqRel(
@@ -1326,7 +1427,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(SwapInventoryLib.InsufficientOutput.selector);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
   }
 
   /// @notice The other swap direction (sellToken0 = false): sell WBNB → slisBNB, value-neutral.
@@ -1345,7 +1446,7 @@ contract SlisBNBV3ProviderTest is Test {
     bytes memory data = abi.encode(address(mockSwap), false, amountIn, (fairOut * 99) / 100, false, inner);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
     assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "WBNB->slisBNB swap ~value-neutral");
   }
 
@@ -1372,7 +1473,7 @@ contract SlisBNBV3ProviderTest is Test {
     bytes memory data = abi.encode(STAKE_MANAGER, false, amountIn, (fairOut * 99) / 100, true, inner); // nativeIn=true
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
 
     assertGt(adapter.tokenId(), oldTokenId, "position re-minted after deposit conversion");
     assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "deposit conversion ~value-neutral");
@@ -1399,7 +1500,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(SwapInventoryLib.InsufficientOutput.selector); // slisBNB received = 0 < amountOutMin
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
   }
 
   /* ─────────── rebalance after price leaves range (fully WBNB) ──────── */
@@ -1444,7 +1545,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     // Rebalance uses an internally derived range; caller only supplies execution guards.
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
 
@@ -1476,7 +1577,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     // minAmount0 = principal0 (exact), minAmount1 = 0 (position has no WBNB).
     vm.prank(bot);
-    provider.rebalance(principal0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(principal0, 0, 0, 0, 0, block.timestamp, "");
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
   }
@@ -1494,7 +1595,7 @@ contract SlisBNBV3ProviderTest is Test {
     // minAmount0 one unit above actual → should revert with NPM slippage check.
     vm.prank(bot);
     vm.expectRevert();
-    provider.rebalance(total0 + 1, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(total0 + 1, 0, 0, 0, 0, block.timestamp, "");
   }
 
   /// @dev When price is above range the position is 100% WBNB (token1).
@@ -1514,7 +1615,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     // minAmount0 = 0 (no slisBNB), minAmount1 = principal1 (exact).
     vm.prank(bot);
-    provider.rebalance(0, principal1, 0, 0, block.timestamp, "");
+    provider.rebalance(0, principal1, 0, 0, 0, block.timestamp, "");
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
   }
@@ -1532,7 +1633,7 @@ contract SlisBNBV3ProviderTest is Test {
     // minAmount1 one unit above actual → should revert with NPM slippage check.
     vm.prank(bot);
     vm.expectRevert();
-    provider.rebalance(0, total1 + 1, 0, 0, block.timestamp, "");
+    provider.rebalance(0, total1 + 1, 0, 0, 0, block.timestamp, "");
   }
 
   function test_withdraw_minAmount_tooHigh_reverts() public {
@@ -2113,7 +2214,7 @@ contract SlisBNBV3ProviderTest is Test {
     adapter.setCenterRateThresholdBps(0);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
   }
@@ -2128,7 +2229,7 @@ contract SlisBNBV3ProviderTest is Test {
     adapter.setCenterRateThresholdBps(0);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
   }
@@ -2173,7 +2274,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.SwapLossTooHigh.selector);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
   }
 
   function test_lossGuard_perSwapCap_passesWithinCap() public {
@@ -2187,7 +2288,7 @@ contract SlisBNBV3ProviderTest is Test {
     bytes memory data = _sellToken0Data(amountIn, (fairOut * 97) / 100, 0);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
     assertGt(adapter.tokenId(), oldTokenId, "position re-minted (3% swap loss within 5% per-swap cap)");
   }
 
@@ -2211,7 +2312,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3Provider.RebalanceLossTooHigh.selector);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
   }
 
   // ── per-UTC-day cumulative loss cap ──
@@ -2234,7 +2335,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3Provider.DailyLossExceeded.selector);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
   }
 
   function test_lossGuard_dailyCap_dailyAccumulatorResetsNextDay() public {
@@ -2252,7 +2353,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     bytes memory data1 = _sellToken0Data(amountIn, (fairOut * 90) / 100, 0);
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data1);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data1);
     uint256 accumDay1 = provider.dailyLossAccum();
     uint256 day1 = provider.dailyLossDay();
     assertGt(accumDay1, 0, "loss accrued on day 1");
@@ -2261,7 +2362,7 @@ contract SlisBNBV3ProviderTest is Test {
     vm.warp(block.timestamp + 1 days);
     bytes memory data2 = _sellToken0Data(amountIn, (fairOut * 90) / 100, 0);
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data2);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data2);
 
     assertGt(provider.dailyLossDay(), day1, "UTC day advanced");
     assertLt(provider.dailyLossAccum(), (accumDay1 * 3) / 2, "accumulator reset for the new day (not doubled)");
@@ -2318,7 +2419,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     bytes memory d1 = _sellToken0Data(amountIn, (fairOut * 90) / 100, 0);
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, d1);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, d1);
     uint256 loss1 = provider.dailyLossAccum();
     assertGt(loss1, 0, "rebalance 1 accrued loss");
 
@@ -2328,14 +2429,14 @@ contract SlisBNBV3ProviderTest is Test {
 
     bytes memory d2 = _sellToken0Data(amountIn, (fairOut * 90) / 100, 0);
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, d2);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, d2);
     // Proves cumulative `+=` (a `= loss` overwrite would leave accum ≈ loss1, failing this).
     assertGt(provider.dailyLossAccum(), (loss1 * 3) / 2, "same-day loss accumulates across rebalances");
 
     bytes memory d3 = _sellToken0Data(amountIn, (fairOut * 90) / 100, 0);
     vm.prank(bot);
     vm.expectRevert(V3Provider.DailyLossExceeded.selector);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, d3);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, d3);
   }
 
   /// @notice Fail-closed: if the feed returns 0 for a non-empty vault, rebalance must revert (not run
@@ -2347,7 +2448,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3Provider.OracleZero.selector);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
   }
 
   /// @notice The per-swap cap also covers the sell-token1 direction (WBNB→slisBNB), exercising `_fairAmount0ForAmount1`.
@@ -2364,13 +2465,13 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.SwapLossTooHigh.selector);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
   }
 
   /* ───────────── Spot-vs-fair gate when adding liquidity at pool spot ───────────── */
 
   function test_spotDeviationGate_defaults() public view {
-    assertEq(adapter.maxSpotDeviationBps(), 100, "default spot-deviation gate = 1%");
+    assertEq(adapter.maxSpotDeviationBps(), 50, "default spot-deviation gate = 0.5%");
   }
 
   function test_setMaxSpotDeviationBps_accessAndCaps() public {
@@ -2408,8 +2509,9 @@ contract SlisBNBV3ProviderTest is Test {
     uint128 liqBefore = adapter.totalLiquidity();
     _skewSpotUp();
 
-    // Permissionless compound must SKIP the re-add at the manipulated spot (no new liquidity minted).
-    provider.compound();
+    // BOT compound must SKIP the re-add at the manipulated spot (no new liquidity minted).
+    vm.prank(bot);
+    provider.compound(0, 0);
 
     assertEq(adapter.totalLiquidity(), liqBefore, "compound must not add liquidity at a manipulated spot");
     assertGe(adapter.idleToken1(), 50 ether, "collected fees + old idle held as idle, never minted");
@@ -2421,15 +2523,16 @@ contract SlisBNBV3ProviderTest is Test {
 
     uint128 liqBefore = adapter.totalLiquidity();
     // No skew: the live pool spot ~ rate (fair) at the fork block, so the gate lets the compound through.
-    provider.compound();
+    vm.prank(bot);
+    provider.compound(0, 0);
 
     assertGt(adapter.totalLiquidity(), liqBefore, "compound should add liquidity when spot ~ fair");
   }
 
-  /// @dev Counter-test (one-sided idle must not brick compounding): with spot ~ fair (gate passes) but strictly one-sided idle inventory,
-  ///      the computed addable liquidity is zero, which would revert inside pool.mint. _collectAndCompound
-  ///      must instead hold the idle and return, so the permissionless compound() (and the deposit /
-  ///      withdraw / redeemShares that reach it) is never bricked by a single-sided balance.
+  /// @dev Counter-test (one-sided idle must not brick compounding): with spot ~ fair (gate passes) but
+  ///      strictly one-sided idle inventory, the computed addable liquidity is zero, which would revert
+  ///      inside pool.mint. _collectAndCompound must instead hold the idle and return, so a BOT compound
+  ///      is never bricked by a single-sided balance.
   function test_compound_oneSidedIdle_noOpsInsteadOfReverting() public {
     _deposit(user, 10 ether, 10 ether);
     uint128 liqBefore = adapter.totalLiquidity();
@@ -2441,10 +2544,59 @@ contract SlisBNBV3ProviderTest is Test {
     stdstore.target(address(adapter)).sig("idleToken0()").checked_write(adapter.idleToken0() + idle0);
     stdstore.target(address(adapter)).sig("idleToken1()").checked_write(uint256(0));
 
-    provider.compound(); // must NOT revert
+    vm.prank(bot);
+    provider.compound(0, 0); // must NOT revert
 
     assertEq(adapter.totalLiquidity(), liqBefore, "one-sided idle must not mint liquidity");
     assertGe(adapter.idleToken0(), idle0, "one-sided idle is held, not lost");
+  }
+
+  /// @dev adding CLAMM liquidity (compound) must not be permissionless — a non-BOT caller
+  ///      cannot force a compound at a manipulated spot. It is the sole fee-deploy path besides rebalance;
+  ///      user flows (deposit/withdraw/redeemShares) no longer trigger it.
+  function test_compound_onlyBot() public {
+    _deposit(user, 10 ether, 10 ether);
+    _injectIdle(1 ether, 1 ether);
+    vm.prank(user);
+    vm.expectRevert();
+    provider.compound(0, 0);
+  }
+
+  /// @dev a permissionless user deposit must NOT deploy fees/idle into pool liquidity (no
+  ///      permissionless compound). Idle accumulates; only a BOT compound/rebalance deploys it.
+  function test_deposit_doesNotCompound() public {
+    _deposit(user, 10 ether, 10 ether);
+    _injectIdle(1 ether, 1 ether);
+    uint128 liqBefore = adapter.totalLiquidity();
+
+    _deposit(user2, 10 ether, 10 ether); // second deposit must not compound the injected idle
+
+    assertEq(adapter.totalLiquidity(), liqBefore, "deposit must not deploy idle as liquidity");
+    assertGe(adapter.idleToken0(), 1 ether, "idle from the injection is still held");
+  }
+
+  /// @dev deposit rounding: the consumed leg amounts must be rounded UP (shares round down),
+  ///      so any sub-wei rounding favors existing holders, never the depositor.
+  function test_deposit_consumedAmountsRoundedUp() public {
+    _deposit(user, 10 ether, 10 ether); // establish supply > 0
+
+    uint256 supplyBefore = provider.totalSupply();
+    (uint256 t0, uint256 t1) = adapter.positionAmountsAt(adapter.fairSqrtPriceX96());
+
+    uint256 d0 = 7 ether;
+    uint256 d1 = 5 ether; // deliberately imbalanced so t*frac/WAD has a remainder
+    (uint256 shares, uint256 u0, uint256 u1) = _deposit(user2, d0, d1);
+
+    // Reconstruct the bound fraction and assert the used amounts are the CEIL (old code floored).
+    uint256 f0 = (d0 * 1e18) / t0;
+    uint256 f1 = (d1 * 1e18) / t1;
+    uint256 frac = f0 < f1 ? f0 : f1;
+    assertEq(u0, (t0 * frac + 1e18 - 1) / 1e18, "amount0Used ceil-rounded (favors holders)");
+    assertEq(u1, (t1 * frac + 1e18 - 1) / 1e18, "amount1Used ceil-rounded (favors holders)");
+
+    // No-dilution invariant: depositor pays >= pro-rata (used * supplyBefore >= composition * shares).
+    assertGe(u0 * supplyBefore, t0 * shares, "token0: paid >= pro-rata");
+    assertGe(u1 * supplyBefore, t1 * shares, "token1: paid >= pro-rata");
   }
 
   /// @dev Counter-test: positionAmountsAt used to add only the
@@ -2525,6 +2677,36 @@ contract SlisBNBV3ProviderTest is Test {
     assertTrue(p0 > o0 || p1 > o1, "preview now exceeds the fee-omitting spot formula");
   }
 
+  /// @dev Partial-withdraw fee fairness: accrued fees are swept to idle and split pro-rata, so a partial
+  ///      exit takes only its share and does not drop the remaining holders' per-share value.
+  function test_removeLiquidity_partialWithdraw_feesSplitProRata() public {
+    // Two depositors, so `user` holds only part of the position (a genuinely partial exit).
+    (uint256 shares1, , ) = _deposit(user, 100 ether, 100 ether);
+    _deposit(user2, 100 ether, 100 ether);
+
+    // Accrue real swap fees across the range (balanced both ways → spot ends near start).
+    PoolSwapper swapper = new PoolSwapper();
+    deal(WBNB, address(swapper), 5_000 ether);
+    deal(SLISBNB, address(swapper), 5_000 ether);
+    swapper.swapExactIn(POOL, false, 2_000 ether);
+    swapper.swapExactIn(POOL, true, 2_000 ether);
+
+    // Remaining-holder per-share redeemable value (fee-inclusive) BEFORE the partial withdraw.
+    uint256 probe = 1e18;
+    (uint256 before0, uint256 before1) = provider.previewRedeemUnderlying(probe);
+
+    // `user` exits its full stake — but that is only ~50% of the position (user2 stays in).
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares1);
+    vm.prank(user);
+    provider.withdraw(marketParams, shares1, (exp0 * 99) / 100, (exp1 * 99) / 100, user, user);
+
+    // Per-share value must not drop: the fees `user` left behind stay with the remaining holders (kept
+    // in idle and counted in NAV). Pre-fix `user` scooped them → at least one leg would drop here.
+    (uint256 after0, uint256 after1) = provider.previewRedeemUnderlying(probe);
+    assertGe(after0, before0, "token0 per-share not diluted by fee over-collection");
+    assertGe(after1, before1, "token1 per-share not diluted by fee over-collection");
+  }
+
   /// @dev Counter-test: rebalance now takes a target pool price and reverts if the actual pool price
   ///      after the swap+mint deviates from it beyond maxSpotDeviationBps. This is what stops a price
   ///      manipulated around the rebalance (making the minLiquidity floor pass on off-market liquidity,
@@ -2540,7 +2722,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint160 badTarget = uint160(uint256(adapter.spotSqrtPriceX96()) * 2); // ~4x price, well beyond ±1%
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.SpotDeviationTooHigh.selector);
-    provider.rebalance(0, 0, 0, badTarget, block.timestamp, "");
+    provider.rebalance(0, 0, 0, badTarget, 0, block.timestamp, "");
   }
 
   function test_rebalance_passesWhenPoolPriceMatchesTarget() public {
@@ -2551,7 +2733,7 @@ contract SlisBNBV3ProviderTest is Test {
     // Target == the actual pool price ⇒ within the band ⇒ the deviation check passes.
     uint160 target = adapter.spotSqrtPriceX96();
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, target, block.timestamp, "");
+    provider.rebalance(0, 0, 0, target, 0, block.timestamp, "");
     assertLt(adapter.tickLower(), adapter.tickUpper(), "recentered with a matching target");
   }
 
@@ -2565,11 +2747,11 @@ contract SlisBNBV3ProviderTest is Test {
     uint160 bad = uint160(uint256(adapter.spotSqrtPriceX96()) * 2);
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.SpotDeviationTooHigh.selector);
-    provider.rebalance(0, 0, 0, bad, block.timestamp, "");
+    provider.rebalance(0, 0, 0, bad, 0, block.timestamp, "");
 
     // Same state, target 0 → no price check → succeeds.
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
     assertLt(adapter.tickLower(), adapter.tickUpper(), "recentered with target 0");
   }
 
@@ -2583,7 +2765,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     uint160 bad = uint160(uint256(adapter.spotSqrtPriceX96()) * 2);
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, bad, block.timestamp, ""); // gate off → no revert
+    provider.rebalance(0, 0, 0, bad, 0, block.timestamp, ""); // gate off → no revert
     assertLt(adapter.tickLower(), adapter.tickUpper(), "gate disabled: bad target ignored");
   }
 
@@ -2596,7 +2778,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint160 bad = uint160(uint256(adapter.spotSqrtPriceX96()) / 2); // target ~1/4 price of actual → outside band
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.SpotDeviationTooHigh.selector);
-    provider.rebalance(0, 0, 0, bad, block.timestamp, "");
+    provider.rebalance(0, 0, 0, bad, 0, block.timestamp, "");
   }
 
   /// @dev A target just inside the ±band passes; the same call just outside it reverts.
@@ -2613,10 +2795,10 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.SpotDeviationTooHigh.selector);
-    provider.rebalance(0, 0, 0, outside, block.timestamp, "");
+    provider.rebalance(0, 0, 0, outside, 0, block.timestamp, "");
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, inside, block.timestamp, "");
+    provider.rebalance(0, 0, 0, inside, 0, block.timestamp, "");
     assertLt(adapter.tickLower(), adapter.tickUpper(), "inside-band target passes");
   }
 
@@ -2632,7 +2814,76 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.SpotDeviationTooHigh.selector);
-    provider.rebalance(0, 0, 0, fairTarget, block.timestamp, "");
+    provider.rebalance(0, 0, 0, fairTarget, 0, block.timestamp, "");
+  }
+
+  /* ─────────── rebalance: expectedCenterRate assertion ─────────── */
+
+  /// @dev Doc-faithful rebalance args (integration guide §4.1) — what the BOT backend actually passes:
+  ///      principal floors from amountsForLiquidity at spot, a live target price, a minLiquidity floor.
+  ///      Empty swapData = recenter-only (no inventory conversion).
+  function _rebalanceArgs() internal view returns (uint256 min0, uint256 min1, uint256 minLiquidity, uint160 target) {
+    target = adapter.spotSqrtPriceX96();
+    uint128 liq = adapter.totalLiquidity();
+    (uint256 p0, uint256 p1) = adapter.amountsForLiquidity(liq, target);
+    min0 = (p0 * 99) / 100;
+    min1 = (p1 * 99) / 100;
+    minLiquidity = (uint256(liq) * 90) / 100;
+  }
+
+  /// @dev With otherwise-valid slippage/target params, a stale expectedCenterRate still reverts — the
+  ///      guard fires before any burn/mint, so a fully-formed rebalance request is blocked.
+  function test_rebalance_revertsOnCenterRateMismatch() public {
+    _deposit(user, 10 ether, 10 ether);
+    vm.startPrank(manager);
+    adapter.setCenterRateThresholdBps(0);
+    adapter.setMaxCenterRateDeviationBps(100); // 1% band
+    vm.stopPrank();
+
+    (uint256 min0, uint256 min1, uint256 minLiq, uint160 target) = _rebalanceArgs();
+    uint256 rate = adapter.centerRate();
+    assertGt(rate, 0, "rate known");
+
+    vm.prank(bot); // 2% off → outside band
+    vm.expectRevert(V3DexAdapter.CenterRateDeviationTooHigh.selector);
+    provider.rebalance(min0, min1, minLiq, target, (rate * 102) / 100, block.timestamp, "");
+  }
+
+  /// @dev expectedCenterRate == centerRate() clears the guard; the full recenter (honoring the floors +
+  ///      target) completes, re-mints, and is value-neutral.
+  function test_rebalance_passesWithinCenterRateBand() public {
+    _deposit(user, 10 ether, 10 ether);
+    vm.startPrank(manager);
+    adapter.setCenterRateThresholdBps(0);
+    adapter.setMaxCenterRateDeviationBps(100);
+    vm.stopPrank();
+
+    (uint256 min0, uint256 min1, uint256 minLiq, uint160 target) = _rebalanceArgs();
+    uint256 rate = adapter.centerRate();
+    uint256 oldTokenId = adapter.tokenId();
+    uint256 peekBefore = providerOracle.peek(address(provider));
+
+    vm.prank(bot);
+    provider.rebalance(min0, min1, minLiq, target, rate, block.timestamp, "");
+
+    assertGt(adapter.tokenId(), oldTokenId, "recenter re-minted within band");
+    assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "recenter ~value-neutral");
+  }
+
+  /// @dev Default band 0 = guard off: a wrong expectedCenterRate is ignored while the real slippage /
+  ///      target guards still apply and the recenter runs (pre-upgrade behavior).
+  function test_rebalance_centerRateGuardOffByDefault() public {
+    _deposit(user, 10 ether, 10 ether);
+    vm.prank(manager);
+    adapter.setCenterRateThresholdBps(0);
+    assertEq(adapter.maxCenterRateDeviationBps(), 0, "off by default");
+
+    (uint256 min0, uint256 min1, uint256 minLiq, uint160 target) = _rebalanceArgs();
+    uint256 oldTokenId = adapter.tokenId();
+
+    vm.prank(bot); // wrong rate ignored
+    provider.rebalance(min0, min1, minLiq, target, type(uint256).max, block.timestamp, "");
+    assertGt(adapter.tokenId(), oldTokenId, "recenter ran, guard off");
   }
 
   /// @dev setHaircutBps is a no-op when the value is unchanged (no redundant write / misleading event).

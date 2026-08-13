@@ -36,9 +36,10 @@ contract WbETHV3Provider is V3Provider {
     uint256 minAmount1,
     uint256 minLiquidity,
     uint160 targetSqrtPriceX96,
+    uint256 expectedCenterRate,
     uint256 deadline,
     bytes calldata swapData
   ) external onlyRole(BOT) nonReentrant {
-    _guardedRebalance(minAmount0, minAmount1, minLiquidity, targetSqrtPriceX96, deadline, swapData);
+    _guardedRebalance(minAmount0, minAmount1, minLiquidity, targetSqrtPriceX96, expectedCenterRate, deadline, swapData);
   }
 }

@@ -8,8 +8,8 @@ import { V3ProviderOracle } from "./V3ProviderOracle.sol";
  * @author Lista DAO
  * @notice slisBNB/BNB specialization of {V3ProviderOracle}: identical pricing logic, with a
  *         constructor guard pinning the pair to slisBNB/WBNB. Retained as a distinct type so the
- *         audited slisBNB deployment and its tests stay byte-stable; can be collapsed into the
- *         generic V3ProviderOracle once the slisBNB audit PR has merged.
+ *         slisBNB deployment and its tests stay byte-stable; can be collapsed into the generic
+ *         V3ProviderOracle later.
  */
 contract SlisBNBV3ProviderOracle is V3ProviderOracle {
   /// @dev slisBNB/BNB-only pair (token0 < token1; slisBNB < WBNB).

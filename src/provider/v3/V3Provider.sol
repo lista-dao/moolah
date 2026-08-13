@@ -254,10 +254,10 @@ abstract contract V3Provider is
       IERC20(TOKEN1).safeTransferFrom(msg.sender, address(this), _amount1Desired);
     }
 
-    // Compound accrued fees first so existing holders capture them before new shares dilute. This also
-    // folds all outstanding fees into the position / idle, so the composition snapshot below is complete.
-    IV3DexAdapter(ADAPTER).collectAndCompound();
-
+    // No inline compound: positionAmountsAt(fair) below already includes pending fees (simulated from
+    // fee-growth deltas), so the composition snapshot is complete and existing holders keep their fees
+    // without deploying liquidity here. Fees are deployed only via the BOT-gated, slippage-bounded
+    // compound() / rebalance.
     uint256 supplyBefore = totalSupply();
     uint160 fairSqrtPriceX96 = IV3DexAdapter(ADAPTER).fairSqrtPriceX96();
 
@@ -270,7 +270,7 @@ abstract contract V3Provider is
       // The addLiquidity refund is deliberately NOT sent to the depositor here (refundTo = this vault):
       // a native-BNB refund before shares are minted would expose a window where adapter NAV already
       // includes the new liquidity but totalSupply() is stale, letting a malicious depositor reenter and
-      // read an inflated share price (C-1). The vault refunds the depositor only after _mint below.
+      // read an inflated share price. The vault refunds the depositor only after _mint below.
       if (_amount0Desired > 0) IERC20(TOKEN0).safeTransfer(ADAPTER, _amount0Desired);
       if (_amount1Desired > 0) IERC20(TOKEN1).safeTransfer(ADAPTER, _amount1Desired);
       uint128 liquidityAdded;
@@ -294,27 +294,11 @@ abstract contract V3Provider is
       // spot price never enters share issuance, so the mint-at-spot / value-at-fair gap that let a
       // depositor be over-credited (with idle present) is eliminated. Value-conserving: the depositor
       // adds exactly `frac` of each composition leg and receives `frac` of the supply.
-      (uint256 t0, uint256 t1) = IV3DexAdapter(ADAPTER).positionAmountsAt(fairSqrtPriceX96);
-      if (_amountsValueUsd(t0, t1) == 0) revert ZeroShares();
-
-      uint256 frac; // WAD-scaled fraction of the existing composition being added
-      if (t0 == 0) {
-        frac = (_amount1Desired * WAD) / t1;
-      } else if (t1 == 0) {
-        frac = (_amount0Desired * WAD) / t0;
-      } else {
-        uint256 f0 = (_amount0Desired * WAD) / t0;
-        uint256 f1 = (_amount1Desired * WAD) / t1;
-        frac = f0 < f1 ? f0 : f1;
-      }
-
-      amount0Used = (t0 * frac) / WAD;
-      amount1Used = (t1 * frac) / WAD;
+      // min(fair, spot) share credit + fair-pinned consumed amounts (see _quoteDeposit).
+      (shares, amount0Used, amount1Used) = _quoteDeposit(supplyBefore, _amount0Desired, _amount1Desired);
       // Repurposed slippage guard: amount0Min/amount1Min are now the minimum of each leg that must be
       // consumed (the rest is refunded), protecting the depositor from an unexpected composition ratio.
       if (amount0Used < amount0Min || amount1Used < amount1Min) revert InsufficientAmount();
-
-      shares = (supplyBefore * frac) / WAD;
 
       // Park the consumed tokens into the adapter's idle inventory (deployed later by compound()).
       if (amount0Used > 0) IERC20(TOKEN0).safeTransfer(ADAPTER, amount0Used);
@@ -324,9 +308,9 @@ abstract contract V3Provider is
 
     if (shares == 0) revert ZeroShares();
     // Caller-specified share-slippage floor. Protects a depositor from receiving fewer shares than their
-    // contribution warrants — e.g. a first-depositor inflation attack (H02 / Issue_04) that inflates the
-    // position via a direct NPM.increaseLiquidity donation, or the fair composition shifting between the
-    // off-chain preview and execution (M01). Pass 0 to disable.
+    // contribution warrants — e.g. a first-depositor inflation attack that inflates the position via a
+    // direct NPM.increaseLiquidity donation, or the fair composition shifting between the off-chain
+    // preview and execution. Pass 0 to disable.
     if (shares < minShares) revert InsufficientShares();
 
     _mint(address(this), shares);
@@ -354,9 +338,9 @@ abstract contract V3Provider is
     // NOTE: the subsequent-deposit path deliberately does NOT deploy the freshly-parked
     // idle into the pool here. Deposits enter as idle valued at the fair composition and are matched by
     // proportionally-minted shares, so the deposit is exactly value-conserving and never touches the pool
-    // spot price. The idle is deployed later by the permissionless compound() (keeper cadence) or the
-    // next deposit/withdraw's collectAndCompound, always spot-gated. Deploying it inline here would mint
-    // at spot and realize a small IL shared by all holders — a (tiny) dilution triggered by a new deposit.
+    // spot price. The idle is deployed later by the BOT-gated compound() (keeper cadence) or a rebalance,
+    // both slippage-bounded. Deploying it inline here would mint at spot and realize a small IL shared by
+    // all holders — a (tiny) dilution triggered by a new deposit.
   }
 
   /// @inheritdoc IV3Provider
@@ -373,10 +357,9 @@ abstract contract V3Provider is
     if (receiver == address(0)) revert ZeroAddress();
     if (!_isSenderAuthorized(onBehalf)) revert Unauthorized();
 
-    // Compound accrued fees BEFORE Moolah's health check so the position is valued with fees folded in
-    // (not under-valued mid-withdrawal).
-    IV3DexAdapter(ADAPTER).collectAndCompound();
-
+    // No inline compound — deploying liquidity is BOT-gated. The health check still counts pending fees:
+    // the oracle prices the share via positionAmountsAt(fair), which is fee-inclusive. removeLiquidity
+    // below still collects the withdrawer's pro-rata fees.
     MOOLAH.withdrawCollateral(marketParams, shares, onBehalf, address(this));
     _afterCollateralChange(marketParams.id(), onBehalf);
 
@@ -403,9 +386,8 @@ abstract contract V3Provider is
     if (receiver == address(0)) revert ZeroAddress();
     if (!_isSenderAuthorized(onBehalf)) revert Unauthorized();
 
-    // Compound accrued fees before Moolah's health check so it values the position with fees included.
-    IV3DexAdapter(ADAPTER).collectAndCompound();
-
+    // No inline compound — deploying liquidity is BOT-gated. The health check still counts pending fees:
+    // the oracle prices the share via positionAmountsAt(fair), which is fee-inclusive.
     MOOLAH.withdrawCollateral(marketParams, shares, onBehalf, address(this));
     _afterCollateralChange(marketParams.id(), onBehalf);
 
@@ -420,9 +402,8 @@ abstract contract V3Provider is
     if (onBehalf == address(0)) revert ZeroAddress();
     if (balanceOf(msg.sender) < shares) revert InsufficientShares();
 
-    // Compound accrued fees before supplying into Moolah so the position is valued with fees included.
-    IV3DexAdapter(ADAPTER).collectAndCompound();
-
+    // No inline compound — deploying liquidity is BOT-gated. The health check still counts pending fees:
+    // the oracle prices the share via positionAmountsAt(fair), which is fee-inclusive.
     _transfer(msg.sender, address(this), shares);
     _approve(address(this), address(MOOLAH), shares);
     MOOLAH.supplyCollateral(marketParams, shares, onBehalf, "");
@@ -433,7 +414,7 @@ abstract contract V3Provider is
 
   /// @inheritdoc IV3Provider
   /// @dev Liquidation-critical path: no protocol value floor — caller's minAmount0/1 is the only
-  ///      guard (a hard floor here would brick atomic liquidation; see finding C4).
+  ///      guard (a hard floor here would brick atomic liquidation).
   function redeemShares(
     uint256 shares,
     uint256 minAmount0,
@@ -444,8 +425,8 @@ abstract contract V3Provider is
     if (receiver == address(0)) revert ZeroAddress();
     if (balanceOf(msg.sender) < shares) revert InsufficientShares();
 
-    IV3DexAdapter(ADAPTER).collectAndCompound();
-
+    // No inline compound — fee re-deployment is BOT-gated (compound() / rebalance). removeLiquidity below
+    // still collects the caller's pro-rata fees.
     // CEI: burn the caller's shares before the adapter sends underlying to `receiver` (see withdraw).
     uint256 supply = totalSupply();
     _burn(msg.sender, shares);
@@ -507,15 +488,38 @@ abstract contract V3Provider is
       uint256 f1 = (amount1Desired * WAD) / t1;
       frac = f0 < f1 ? f0 : f1;
     }
-    amount0 = (t0 * frac) / WAD;
-    amount1 = (t1 * frac) / WAD;
+    // Round UP, matching _quoteDeposit: the preview must report exactly what deposit() will consume.
+    amount0 = (t0 * frac + WAD - 1) / WAD;
+    amount1 = (t1 * frac + WAD - 1) / WAD;
+  }
+
+  /// @notice Preview the shares a deposit would mint — the exact min(fair, spot) credit deposit() uses.
+  ///         Frontends size `minShares` off this (× a slippage tolerance). First deposit (supply == 0)
+  ///         previews the oracle-valued opening mint.
+  /// @param amount0Desired token0 offered by the depositor.
+  /// @param amount1Desired token1 offered by the depositor.
+  /// @return shares shares deposit() would mint for these amounts.
+  function previewDepositShares(uint256 amount0Desired, uint256 amount1Desired) external view returns (uint256 shares) {
+    uint256 supplyBefore = totalSupply();
+    if (supplyBefore > 0) {
+      (shares, , ) = _quoteDeposit(supplyBefore, amount0Desired, amount1Desired);
+      return shares;
+    }
+    (uint128 liquidity, , ) = IV3DexAdapter(ADAPTER).previewAddLiquidity(amount0Desired, amount1Desired);
+    (uint256 added0, uint256 added1) = IV3DexAdapter(ADAPTER).amountsForLiquidity(
+      liquidity,
+      IV3DexAdapter(ADAPTER).fairSqrtPriceX96()
+    );
+    uint256 assetPrice = IOracle(resilientOracle).peek(asset());
+    if (assetPrice > 0)
+      shares = (_amountsValueUsd(added0, added1) * (10 ** uint256(accountingAssetDecimals))) / assetPrice;
   }
 
   /// @notice Given a desired token0 amount, the token1 amount that pairs with it at the current fair
   ///         composition ratio, so a subsequent deposit consumes both legs fully (minimal refund).
-  /// @dev    amount1 = amount0 * T1 / T0, where (T0, T1) = getFairComposition(). Reverts if the fair
-  ///         composition has no token0 leg (in that one-sided case deposit token1 only). For the first
-  ///         deposit (no position yet) use previewDepositAmounts, which previews the spot mint instead.
+  /// @dev    amount1 = amount0 * T1 / T0, where (T0, T1) = getFairComposition(). Reverts once fair has
+  ///         drifted past tickUpper (no token0 leg); deposits are then closed in every shape until the
+  ///         BOT recenters. Symmetric below tickLower. First deposit: use previewDepositAmounts.
   function previewDepositForToken0(uint256 amount0) external view returns (uint256 amount1) {
     (uint256 t0, uint256 t1) = getFairComposition();
     if (t0 == 0) revert ZeroAmounts();
@@ -562,6 +566,57 @@ abstract contract V3Provider is
     // one leg (which would under-price the collateral and enable unfair liquidation / over-borrow).
     if (price0 == 0 || price1 == 0) revert OracleZero();
     return (amount0 * price0) / (10 ** DECIMALS0) + (amount1 * price1) / (10 ** DECIMALS1);
+  }
+
+  /// @dev WAD-fraction of a composition covered by given amounts, on the binding (smaller) leg:
+  ///      min(amount0/comp0, amount1/comp1) × WAD. Single-sided composition binds on the present leg;
+  ///      all-zero composition reverts (div-by-zero) — callers guard it.
+  /// @param amount0 token0 amount being priced.
+  /// @param amount1 token1 amount being priced.
+  /// @param comp0   token0 of the composition priced against.
+  /// @param comp1   token1 of the composition priced against.
+  /// @return WAD-scaled fraction (1e18 == the full composition).
+  function _compositionFractionWad(
+    uint256 amount0,
+    uint256 amount1,
+    uint256 comp0,
+    uint256 comp1
+  ) internal pure returns (uint256) {
+    if (comp0 == 0) return (amount1 * WAD) / comp1;
+    if (comp1 == 0) return (amount0 * WAD) / comp0;
+    uint256 frac0 = (amount0 * WAD) / comp0;
+    uint256 frac1 = (amount1 * WAD) / comp1;
+    return frac0 < frac1 ? frac0 : frac1;
+  }
+
+  /// @dev Quote a subsequent deposit (supplyBefore > 0): consumed amounts pinned to the FAIR composition
+  ///      (rounded up); shares = min(sharesFair, sharesSpot), the spot quote re-pricing the SAME consumed
+  ///      amounts. Withdraw settles at spot, so the min caps the credit at what a spot exit can back
+  ///      (closes the deposit-withdraw cycle). Shared with previewDepositShares — preview can't drift.
+  /// @param supplyBefore   share supply before this deposit.
+  /// @param amount0Desired token0 offered by the depositor.
+  /// @param amount1Desired token1 offered by the depositor.
+  /// @return shares      shares to mint = min(fair, spot).
+  /// @return amount0Used token0 consumed and parked to idle (rest refunded).
+  /// @return amount1Used token1 consumed and parked to idle (rest refunded).
+  function _quoteDeposit(
+    uint256 supplyBefore,
+    uint256 amount0Desired,
+    uint256 amount1Desired
+  ) internal view returns (uint256 shares, uint256 amount0Used, uint256 amount1Used) {
+    (uint256 t0, uint256 t1) = IV3DexAdapter(ADAPTER).positionAmountsAt(IV3DexAdapter(ADAPTER).fairSqrtPriceX96());
+    if (_amountsValueUsd(t0, t1) == 0) revert ZeroShares();
+
+    uint256 frac = _compositionFractionWad(amount0Desired, amount1Desired, t0, t1);
+    amount0Used = (t0 * frac + WAD - 1) / WAD;
+    amount1Used = (t1 * frac + WAD - 1) / WAD;
+
+    uint256 sharesFair = (supplyBefore * frac) / WAD;
+    (uint256 s0, uint256 s1) = IV3DexAdapter(ADAPTER).positionAmountsAt(IV3DexAdapter(ADAPTER).spotSqrtPriceX96());
+    uint256 sharesSpot = (s0 == 0 && s1 == 0)
+      ? type(uint256).max // degenerate spot composition: do not let it lower the credit
+      : (supplyBefore * _compositionFractionWad(amount0Used, amount1Used, s0, s1)) / WAD;
+    shares = sharesFair < sharesSpot ? sharesFair : sharesSpot;
   }
 
   /// @dev Single-asset ERC-4626 entry is disabled — this is a two-token LP vault. Use the two-token
@@ -612,14 +667,14 @@ abstract contract V3Provider is
     if (msg.sender != ADAPTER && msg.sender != WRAPPED_NATIVE) revert NotAdapter();
   }
 
-  /// @notice Permissionlessly collect and compound accrued swap fees back into the position.
-  /// @dev Lets keepers sweep fees on a regular cadence instead of only as a side effect of user actions,
-  ///      so fees never accumulate into a large amount that could be sandwiched, and so buy-and-hold
-  ///      vaults keep compounding. Safe to leave permissionless: the adapter's
-  ///      _collectAndCompound self-gates on the spot-vs-fair deviation and simply skips the re-add (holding
-  ///      fees as idle) when the pool spot is manipulated, so a caller cannot force a bad-price compound.
-  function compound() external nonReentrant {
-    IV3DexAdapter(ADAPTER).collectAndCompound();
+  /// @notice Collect accrued swap fees + idle and compound them back into the position.
+  /// @dev BOT-gated with a caller-supplied slippage floor (amount0Min/amount1Min forwarded to the
+  ///      adapter's increaseLiquidity). Adding CLAMM liquidity is the one operation that must not be
+  ///      permissionless: a manipulated pool spot lets a caller force a bad-price re-add and sandwich it.
+  ///      This is the sole liquidity-deploy path for accrued fees/idle (the other is BOT rebalance); no
+  ///      user hot-path triggers it. Keeper runs this on a cadence.
+  function compound(uint256 amount0Min, uint256 amount1Min) external onlyRole(BOT) nonReentrant {
+    IV3DexAdapter(ADAPTER).collectAndCompound(amount0Min, amount1Min);
   }
 
   /* ─────────────────── rebalance loss guard (NAV + daily caps) ──────────────── */
@@ -651,13 +706,22 @@ abstract contract V3Provider is
     uint256 minAmount1,
     uint256 minLiquidity,
     uint160 targetSqrtPriceX96,
+    uint256 expectedCenterRate,
     uint256 deadline,
     bytes calldata swapData
   ) internal {
     uint256 navBefore = _positionValueUsd();
     if (totalSupply() != 0 && navBefore == 0) revert OracleZero();
 
-    IV3DexAdapter(ADAPTER).rebalance(minAmount0, minAmount1, minLiquidity, targetSqrtPriceX96, deadline, swapData);
+    IV3DexAdapter(ADAPTER).rebalance(
+      minAmount0,
+      minAmount1,
+      minLiquidity,
+      targetSqrtPriceX96,
+      expectedCenterRate,
+      deadline,
+      swapData
+    );
 
     uint256 navAfter = _positionValueUsd();
 

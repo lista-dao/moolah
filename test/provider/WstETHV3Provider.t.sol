@@ -246,9 +246,9 @@ contract WstETHV3ProviderTest is Test {
     assertEq(adapter.FEE(), FEE);
     assertEq(adapter.POOL(), POOL);
     assertTrue(adapter.swapPairWhitelist(address(mockSwap)), "swap venue whitelisted in setUp");
-    assertEq(adapter.maxTwapDeviationBps(), 100, "TWAP clamp band defaults to range width");
+    assertEq(adapter.maxTwapDeviationBps(), 50, "TWAP clamp band defaults to range width");
     assertEq(adapter.lastCenterRate(), IWstETH(WSTETH).stEthPerToken(), "center rate from stEthPerToken");
-    assertEq(adapter.centerRateThresholdBps(), 100, "default threshold 1%");
+    assertEq(adapter.centerRateThresholdBps(), 1, "default threshold 1bp: minimal anti-churn floor");
     assertEq(adapter.provider(), address(provider));
     assertEq(provider.asset(), WETH, "accounting asset");
     assertEq(provider.WRAPPED_NATIVE(), WETH);
@@ -373,7 +373,7 @@ contract WstETHV3ProviderTest is Test {
     adapter.setCenterRateThresholdBps(0);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
 
     // No-op recenter (unchanged range, no swap / target / floors) short-circuits to an in-place compound
     // rather than burning and re-minting the identical position: same tokenId, value preserved.
@@ -403,7 +403,7 @@ contract WstETHV3ProviderTest is Test {
     bytes memory data = _swapData(address(mockSwap), true, amountIn, (fairOut * 99) / 100, inner);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
 
     assertGt(adapter.tokenId(), oldTokenId, "position re-minted after swap");
     assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "fair swap ~value-neutral");
@@ -435,7 +435,7 @@ contract WstETHV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3Provider.RebalanceLossTooHigh.selector);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
   }
 
   /// @notice Linchpin: the backend-supplied `amountOutMin` is enforced on the measured output. A venue
@@ -457,7 +457,7 @@ contract WstETHV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(SwapInventoryLib.InsufficientOutput.selector);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
   }
 
   /// @notice The adapter only allows whitelisted swap venues; a non-whitelisted target reverts before
@@ -474,7 +474,7 @@ contract WstETHV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.NotWhitelistedPair.selector);
-    provider.rebalance(0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
   }
 
   /* ─────────────────────── access control / config ─────────────────────── */
@@ -482,7 +482,7 @@ contract WstETHV3ProviderTest is Test {
   function test_rebalance_onlyBot() public {
     _deposit(10 ether, 10 ether);
     vm.expectRevert();
-    provider.rebalance(0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
   }
 
   function test_rebalance_revertsAfterDeadline() public {
@@ -491,7 +491,7 @@ contract WstETHV3ProviderTest is Test {
     adapter.setCenterRateThresholdBps(0);
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.DeadlineExpired.selector);
-    provider.rebalance(0, 0, 0, 0, block.timestamp - 1, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp - 1, "");
   }
 
   function test_setSwapPairWhitelist_onlyManager() public {
@@ -571,5 +571,84 @@ contract WstETHV3ProviderTest is Test {
     WstETHV3DexAdapter adapter2 = _freshAdapter(); // same pair ⇒ token check passes, share check fails
     vm.expectRevert(V3ProviderOracle.ShareAdapterMismatch.selector);
     new V3ProviderOracle(address(adapter2), address(provider), WSTETH, WETH);
+  }
+
+  /* ─────────── deposit crediting: min(fair, spot) shares (deposit-withdraw cycle) ─────────── */
+
+  /// @dev Deposit as `user`, returning the consumed amounts (unlike `_deposit`). Per-leg floors set to 0
+  ///      so a skewed spot cannot trip the slippage floor — we are measuring the share credit here.
+  function _depositRet(
+    uint256 amtWst,
+    uint256 amtWeth
+  ) internal returns (uint256 shares, uint256 used0, uint256 used1) {
+    deal(WSTETH, user, amtWst);
+    deal(WETH, user, amtWeth);
+    vm.startPrank(user);
+    IERC20(WSTETH).approve(address(provider), amtWst);
+    IERC20(WETH).approve(address(provider), amtWeth);
+    (shares, used0, used1) = provider.deposit(marketParams, amtWst, amtWeth, 0, 0, 0, user);
+    vm.stopPrank();
+  }
+
+  /// @dev 8-dec USD value of a (wstETH, WETH) amount pair through the mock resilient oracle.
+  function _valueUSD(uint256 amtWst, uint256 amtWeth) internal view returns (uint256) {
+    return (amtWst * oracle.peek(WSTETH)) / 1e18 + (amtWeth * oracle.peek(WETH)) / 1e18;
+  }
+
+  /// @dev At a spot skewed off the rate-anchored fair the SAME deposit is credited fewer shares: the spot
+  ///      quote (same consumed amounts re-priced at the manipulated slot0 composition) wins the min,
+  ///      capping the credit at what a spot exit can back. Pre-fix (fair-only issuance) the skew would
+  ///      not change the credited shares, so this fails pre-fix.
+  function test_deposit_skewedSpotCreditsFewerShares() public {
+    _deposit(50 ether, 50 ether); // seed
+
+    uint256 snap = vm.snapshotState();
+    (uint256 sharesFair, , ) = _depositRet(10 ether, 10 ether); // no skew → fair basis
+    vm.revertToState(snap);
+
+    _swapPoolUp(5000 ether); // instant slot0 skew; TWAP-clamped fair unmoved
+    (uint256 sharesSkew, , ) = _depositRet(10 ether, 10 ether);
+
+    assertLt(sharesSkew, sharesFair, "fewer shares at skewed spot");
+    assertGt(sharesSkew, 0, "mints > 0");
+  }
+
+  /// @dev previewDepositShares returns exactly what deposit() mints — unskewed AND at a skewed spot — so
+  ///      a frontend can size minShares off it without the mint drifting below its floor.
+  function test_previewDepositShares_matchesActualMint() public {
+    _deposit(50 ether, 50 ether); // seed
+
+    uint256 snap = vm.snapshotState();
+    uint256 preview1 = provider.previewDepositShares(10 ether, 10 ether);
+    (uint256 actual1, , ) = _depositRet(10 ether, 10 ether);
+    vm.revertToState(snap);
+    assertEq(preview1, actual1, "preview == mint (unskewed)");
+
+    _swapPoolUp(5000 ether);
+    uint256 preview2 = provider.previewDepositShares(10 ether, 10 ether);
+    (uint256 actual2, , ) = _depositRet(10 ether, 10 ether);
+    assertEq(preview2, actual2, "preview == mint (skewed)");
+    assertLt(preview2, preview1, "skew lowers preview");
+  }
+
+  /// @dev The deposit->withdraw cycle at a skewed spot is not profitable: the exiter cannot walk out with
+  ///      more fair (USD) value than it put in — the core deposit-withdraw leak, closed on this pair too.
+  function test_depositWithdraw_cycleNotProfitableAtSkewedSpot() public {
+    _deposit(50 ether, 50 ether); // seed
+    _swapPoolUp(5000 ether); // skew slot0 before the cycle
+
+    (uint256 shares, uint256 in0, uint256 in1) = _depositRet(10 ether, 10 ether);
+    (uint256 e0, uint256 e1) = provider.previewRedeemUnderlying(shares);
+    vm.prank(user);
+    (uint256 out0, uint256 out1) = provider.withdraw(
+      marketParams,
+      shares,
+      (e0 * 90) / 100,
+      (e1 * 90) / 100,
+      user,
+      user
+    );
+
+    assertLe(_valueUSD(out0, out1), _valueUSD(in0, in1), "cycle extracts no value");
   }
 }

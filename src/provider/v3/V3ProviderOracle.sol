@@ -20,11 +20,12 @@ import { IV3ProviderOracle } from "../interfaces/IV3ProviderOracle.sol";
  *         TWAP clamped to the rate (wstETH/wbETH), never raw pool spot — then values each leg via the
  *         resilient oracle and applies a conservative haircut. The resilient oracle prices the LST leg
  *         RATE-DERIVED (peek(LST) == peek(underlying) × exchangeRate / 1e18), so the leg valuation is
- *         consistent with the rate-anchored composition — see peek()'s AUDIT NOTE. Chain/pair-agnostic:
+ *         consistent with the rate-anchored composition — see the note in peek(). Chain/pair-agnostic:
  *         the pair is taken from the constructor and validated against the adapter.
  *
- * @dev finding D — when supply > 0, peek(share) reverts on a zero leg price or zero total value so
- *      Moolah never prices collateral off a broken feed; supply == 0 returns 0 (pre-market).
+ * @dev When supply > 0, peek(share) reverts on a zero leg price (fail-closed on a broken feed) but floors
+ *      a dust / zero-value position to a non-zero price rather than reverting (keeps liquidation live);
+ *      supply == 0 returns 0 (pre-market).
  */
 contract V3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IV3ProviderOracle {
   /* ─────────────────────────── immutables ─────────────────────────── */
@@ -126,7 +127,7 @@ contract V3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable
       IV3DexAdapter(ADAPTER).fairSqrtPriceX96()
     );
 
-    // AUDIT NOTE — leg prices are RATE-CONSISTENT with the composition above, NOT an independent
+    // NOTE: leg prices are RATE-CONSISTENT with the composition above, NOT an independent
     // second market price. By deployment invariant, the resilient oracle prices the LST leg (TOKEN0 =
     // slisBNB / wstETH / wbETH) rate-derived from the SAME on-chain exchange rate used for the
     // composition:

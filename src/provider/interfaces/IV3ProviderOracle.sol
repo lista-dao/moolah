@@ -10,10 +10,11 @@ import { IOracle } from "moolah/interfaces/IOracle.sol";
  *         the share by staticcalling the adapter's fair composition view (no double-hop through the
  *         vault), pricing each leg via the resilient oracle, then applying a conservative haircut.
  *         Separating the IOracle implementation from the vault isolates the estimation-bug radius from
- *         vault state and upgrades (Codex adv #5).
+ *         vault state and upgrades.
  *
- * @dev `peek(share)` reverts on a zero underlying price / zero total value when supply > 0 (finding D),
- *      so Moolah never prices collateral off a broken feed; `supply == 0` returns 0 (pre-market).
+ * @dev `peek(share)` reverts on a zero underlying price when supply > 0 (fail-closed on a broken feed),
+ *      and floors a dust / zero-value position to a non-zero price rather than reverting (keeps
+ *      liquidation live); `supply == 0` returns 0 (pre-market).
  *      `getTokenConfig(share)` self-registers this oracle for the share token; other tokens delegate to
  *      the resilient oracle.
  */

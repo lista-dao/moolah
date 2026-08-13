@@ -10,8 +10,8 @@ import { IV3Provider } from "../../src/provider/interfaces/IV3Provider.sol";
 import { SlisBNBV3ProviderTest } from "./SlisBNBV3Provider.t.sol";
 
 /**
- * @title V3Provider C-1 regression — deposit-refund reentrancy must NOT inflate the share oracle
- * @notice C-1 (Critical): V3Provider.deposit forwarded tokens to the adapter and called addLiquidity
+ * @title V3Provider deposit-refund reentrancy regression — must NOT inflate the share oracle
+ * @notice Regression: V3Provider.deposit forwarded tokens to the adapter and called addLiquidity
  *         — which refunded unused WBNB via a native-BNB call to the DEPOSITOR — BEFORE minting and
  *         supplying the new shares. During that refund callback:
  *           - adapter NAV already included the freshly-added liquidity, but
@@ -25,15 +25,15 @@ import { SlisBNBV3ProviderTest } from "./SlisBNBV3Provider.t.sol";
  *         totalSupply are inconsistent, so the oracle can never be transiently inflated.
  *
  *         This test still drives the full attack (deposit -> refund reentry -> borrow), but now asserts
- *         the attack is NEUTRALIZED: the price read during the refund callback equals the normal price,
- *         and the attacker's position stays healthy (no bad debt). It FAILS against the pre-fix code
- *         (26x inflation, insolvent attacker) and PASSES against the fixed code.
+ *         the attack is NEUTRALIZED: the price read during the refund callback equals the SETTLED price
+ *         (no transient inflation), and the attacker's position stays healthy (no bad debt). It FAILS
+ *         against the pre-fix code (26x inflation, insolvent attacker) and PASSES against the fixed code.
  */
 contract V3ProviderReentrancyPoC is SlisBNBV3ProviderTest {
   Attacker attacker;
   address constant victimB = address(0xB0B); // receives the big deposit's collateral (recoverable)
 
-  function test_C1_depositRefundReentrancy_neutralized() public {
+  function test_depositRefundReentrancy_neutralized() public {
     // 1) Bootstrap a small shared position so supply > 0.
     _deposit(user, 1 ether, 1 ether);
 
@@ -68,10 +68,14 @@ contract V3ProviderReentrancyPoC is SlisBNBV3ProviderTest {
     emit log_named_uint("peek after deposit settles", peekAfter);
 
     // ── Proofs the attack is neutralized ────────────────────────────────────
-    // (a) The refund callback fires AFTER mint+supply, so NAV and totalSupply are consistent: the
-    //     price observed mid-deposit must match the settled/normal price (no transient inflation).
-    assertApproxEqRel(peekDuring, peekNormal, 1e16, "peek during refund must equal normal price (<=1%)");
+    // (a) The refund callback fires AFTER mint+supply, so NAV and totalSupply are consistent: the price
+    //     observed mid-deposit equals the SETTLED price — no transient inflation. This is the core
+    //     regression guard: pre-fix the refund preceded mint, so peekDuring spiked ~26x vs peekAfter.
     assertApproxEqRel(peekDuring, peekAfter, 1e16, "peek during refund must equal settled price (<=1%)");
+    //     The settled price sits at/above the pre-deposit price: min(fair,spot) crediting caps a large
+    //     imbalanced deposit at its spot-exit value, so the surplus accrues to holders — a legitimate,
+    //     persistent rise, never a transient inflation to over-borrow against.
+    assertGe(peekDuring, peekNormal, "deposit may only raise peek (surplus to holders), never lower it");
 
     // (b) Because the price was never inflated, any reentrant borrow was fairly priced: the attacker's
     //     position is solvent — no bad debt is left to the protocol.
