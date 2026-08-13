@@ -64,8 +64,8 @@ contract WstETHV3DexAdapter is V3DexAdapter {
     __V3DexAdapter_init(_admin, _manager, initialTickLower, initialTickUpper);
 
     lastCenterRate = initialCenterRate;
-    centerRateThresholdBps = INITIAL_RANGE_BPS;
-    maxTwapDeviationBps = INITIAL_RANGE_BPS; // default valuation clamp band = ±range width (±1%)
+    centerRateThresholdBps = 1;
+    maxTwapDeviationBps = INITIAL_RANGE_BPS; // default valuation clamp band = ±range width (±0.5%)
     emit MaxTwapDeviationChanged(INITIAL_RANGE_BPS);
   }
 

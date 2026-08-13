@@ -177,8 +177,8 @@ contract WbETHV3ProviderTest is Test {
     assertEq(adapter.WRAPPED_NATIVE(), WETH);
     assertEq(adapter.FEE(), FEE);
     assertEq(adapter.POOL(), POOL);
-    assertEq(adapter.maxTwapDeviationBps(), 100, "TWAP clamp band defaults to range width");
-    assertEq(adapter.centerRateThresholdBps(), 100, "default threshold 1%");
+    assertEq(adapter.maxTwapDeviationBps(), 50, "TWAP clamp band defaults to range width");
+    assertEq(adapter.centerRateThresholdBps(), 1, "default threshold 1bp: minimal anti-churn floor");
     // rate wiring: the center rate is wbETH.exchangeRate(), not stEthPerToken or pool price.
     assertEq(adapter.lastCenterRate(), IWbETH(WBETH).exchangeRate(), "center rate from exchangeRate");
     assertEq(adapter.provider(), address(provider));
@@ -258,7 +258,6 @@ contract WbETHV3ProviderTest is Test {
   function _bootstrap() internal {
     vm.startPrank(manager);
     adapter.setMaxTwapDeviationBps(0); // pure-rate fair: no pool TWAP/observe dependency
-    adapter.setCenterRateThresholdBps(5000); // wide band so the seed mint isn't rejected on deviation
     vm.stopPrank();
     _depositRet(50 ether, 50 ether);
   }

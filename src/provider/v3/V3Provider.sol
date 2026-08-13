@@ -488,8 +488,9 @@ abstract contract V3Provider is
       uint256 f1 = (amount1Desired * WAD) / t1;
       frac = f0 < f1 ? f0 : f1;
     }
-    amount0 = (t0 * frac) / WAD;
-    amount1 = (t1 * frac) / WAD;
+    // Round UP, matching _quoteDeposit: the preview must report exactly what deposit() will consume.
+    amount0 = (t0 * frac + WAD - 1) / WAD;
+    amount1 = (t1 * frac + WAD - 1) / WAD;
   }
 
   /// @notice Preview the shares a deposit would mint — the exact min(fair, spot) credit deposit() uses.
@@ -516,9 +517,9 @@ abstract contract V3Provider is
 
   /// @notice Given a desired token0 amount, the token1 amount that pairs with it at the current fair
   ///         composition ratio, so a subsequent deposit consumes both legs fully (minimal refund).
-  /// @dev    amount1 = amount0 * T1 / T0, where (T0, T1) = getFairComposition(). Reverts if the fair
-  ///         composition has no token0 leg (in that one-sided case deposit token1 only). For the first
-  ///         deposit (no position yet) use previewDepositAmounts, which previews the spot mint instead.
+  /// @dev    amount1 = amount0 * T1 / T0, where (T0, T1) = getFairComposition(). Reverts once fair has
+  ///         drifted past tickUpper (no token0 leg); deposits are then closed in every shape until the
+  ///         BOT recenters. Symmetric below tickLower. First deposit: use previewDepositAmounts.
   function previewDepositForToken0(uint256 amount0) external view returns (uint256 amount1) {
     (uint256 t0, uint256 t1) = getFairComposition();
     if (t0 == 0) revert ZeroAmounts();

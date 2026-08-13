@@ -7,6 +7,7 @@ import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import { SlisBNBV3Provider } from "../../src/provider/v3/SlisBNBV3Provider.sol";
+import { V3Provider } from "../../src/provider/v3/V3Provider.sol";
 import { SlisBNBV3DexAdapter } from "../../src/provider/v3/SlisBNBV3DexAdapter.sol";
 import { V3DexAdapter } from "../../src/provider/v3/V3DexAdapter.sol";
 import { SlisBNBV3ProviderOracle } from "../../src/provider/v3/SlisBNBV3ProviderOracle.sol";
@@ -225,7 +226,7 @@ contract SlisBNBV3ProviderRateTest is Test {
     emit log_named_uint("gas_after_swapper", gasleft());
 
     assertEq(adapter.lastCenterRate(), rate, "lastCenterRate initialized from StakeManager");
-    assertEq(adapter.centerRateThresholdBps(), 100, "default center-rate threshold is 1%");
+    assertEq(adapter.centerRateThresholdBps(), 1, "default threshold 1bp: minimal anti-churn floor");
     assertEq(provider.asset(), WBNB, "accounting asset");
     assertEq(provider.accountingAssetDecimals(), 18, "accounting asset decimals");
 
@@ -248,10 +249,12 @@ contract SlisBNBV3ProviderRateTest is Test {
     deal(SLISBNB, user, amtSlis);
     deal(WBNB, user, amtWbnb);
     (, uint256 e0, uint256 e1) = provider.previewDepositAmounts(amtSlis, amtWbnb);
+    // minShares is the only guard against a bad entry price; mirror production and never pass 0.
+    uint256 minShares = (provider.previewDepositShares(amtSlis, amtWbnb) * 99) / 100;
     vm.startPrank(user);
     IERC20(SLISBNB).approve(address(provider), amtSlis);
     IERC20(WBNB).approve(address(provider), amtWbnb);
-    (shares, , ) = provider.deposit(marketParams, amtSlis, amtWbnb, (e0 * 99) / 100, (e1 * 99) / 100, 0, user);
+    (shares, , ) = provider.deposit(marketParams, amtSlis, amtWbnb, (e0 * 99) / 100, (e1 * 99) / 100, minShares, user);
     vm.stopPrank();
   }
 
@@ -379,6 +382,53 @@ contract SlisBNBV3ProviderRateTest is Test {
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.InsufficientLiquidityMinted.selector);
     provider.rebalance(0, 0, type(uint256).max, 0, 0, block.timestamp, "");
+  }
+
+  /* ────────── fair drifted past tickUpper: deposits closed until recenter ────────── */
+
+  /// @dev Once fair sits at/above tickUpper the fair composition has no token0 leg, so the pinned
+  ///      zero-token0 consumption prices to 0 on the spot leg and shares = min(fair, spot) = 0. Every
+  ///      deposit shape reverts, including the token1-only one, and a BOT recenter is the only exit.
+  ///      Pins the behaviour previewDepositForToken0's natspec documents.
+  function test_deposit_closedWhileFairAboveRange_untilRecenter() public {
+    _deposit(10 ether, 10 ether);
+
+    // Push the rate 1% up so fair clears the +0.5% range edge; spot stays inside the old range.
+    uint256 oldRate = IStakeManager(STAKE_MANAGER).convertSnBnbToBnb(1e18);
+    MockStakeManager bumped = new MockStakeManager((oldRate * 101) / 100, SLISBNB);
+    vm.etch(STAKE_MANAGER, address(bumped).code);
+
+    (uint256 t0, ) = provider.getFairComposition();
+    assertEq(t0, 0, "fair token0 leg gone");
+    assertEq(provider.previewDepositShares(10 ether, 10 ether), 0, "preview quotes 0");
+    vm.expectRevert(V3Provider.ZeroAmounts.selector);
+    provider.previewDepositForToken0(1 ether);
+
+    // Every shape reverts, including the token1-only one.
+    deal(SLISBNB, user, 10 ether);
+    deal(WBNB, user, 10 ether);
+    vm.startPrank(user);
+    IERC20(SLISBNB).approve(address(provider), type(uint256).max);
+    IERC20(WBNB).approve(address(provider), type(uint256).max);
+    vm.expectRevert(V3Provider.ZeroShares.selector);
+    provider.deposit(marketParams, 10 ether, 10 ether, 0, 0, 0, user);
+    vm.expectRevert(V3Provider.ZeroShares.selector);
+    provider.deposit(marketParams, 0, 10 ether, 0, 0, 0, user);
+    vm.expectRevert(V3Provider.ZeroShares.selector);
+    provider.deposit(marketParams, 10 ether, 0, 0, 0, 0, user);
+    vm.stopPrank();
+
+    // Withdraw still works, so the vault can only shrink while in this state.
+    assertGt(provider.balanceOf(user) + _collateralOf(user), 0, "holder still exits");
+
+    // A BOT recenter reopens deposits.
+    vm.prank(bot);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
+    assertGt(provider.previewDepositShares(10 ether, 10 ether), 0, "deposits reopen");
+  }
+
+  function _collateralOf(address who) internal view returns (uint256 col) {
+    (, , col) = moolah.position(marketParams.id(), who);
   }
 
   function _tick() internal view returns (int24 tick) {

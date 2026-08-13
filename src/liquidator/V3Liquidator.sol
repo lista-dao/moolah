@@ -36,6 +36,7 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
   error SwapFailed();
   error NotAuthorized();
   error InvalidFundSource();
+  error ReceiverNotSelf();
 
   /* ──────────────────────────── constants ─────────────────────────── */
 
@@ -225,6 +226,7 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
   ///      tokens are never pushed to the vault; they stay here to be redeemed via redeemV3Shares.
   function setReflowBlacklist(address token, bool status) external onlyRole(MANAGER) {
     require(token != address(0), "zero address");
+    require(reflowBlacklist[token] != status, WhitelistSameStatus());
     reflowBlacklist[token] = status;
     emit ReflowBlacklistChanged(token, status);
   }
@@ -421,6 +423,7 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
     address receiver
   ) external nonReentrant onlyRole(BOT) returns (uint256 amount0, uint256 amount1) {
     require(v3Providers[v3Provider], NotWhitelisted());
+    require(fundSource == address(0) || receiver == address(this), ReceiverNotSelf());
     (amount0, amount1) = IV3Provider(v3Provider).redeemShares(shares, minAmt0, minAmt1, receiver);
     // When redeemed into this contract, reflow the legs to the vault (no-op when fundSource == 0).
     if (receiver == address(this)) {
@@ -510,6 +513,7 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
       // Snapshot before redeeming/swapping so profitability is judged on THIS liquidation's
       // delta, not masked by loanToken balance already sitting idle from prior liquidations.
       uint256 before = d.loanToken.balanceOf(address(this));
+      if (d.loanToken == wrappedNative) before += address(this).balance;
 
       // Redeem V3 shares → TOKEN0 + TOKEN1; the wrapped-native leg arrives as the native coin.
       (uint256 amount0, uint256 amount1) = IV3Provider(d.v3Provider).redeemShares(

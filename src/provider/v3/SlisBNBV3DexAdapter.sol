@@ -53,7 +53,8 @@ contract SlisBNBV3DexAdapter is V3DexAdapter, ISlisBNBV3DexAdapter {
     (int24 initialTickLower, int24 initialTickUpper) = _initialTickRange(initialCenterRate);
     __V3DexAdapter_init(_admin, _manager, initialTickLower, initialTickUpper);
     lastCenterRate = initialCenterRate;
-    centerRateThresholdBps = INITIAL_RANGE_BPS;
+    // Minimal anti-churn floor only: 1 BPS
+    centerRateThresholdBps = 1;
   }
 
   /* ───────────────────────── hook overrides ───────────────────────── */

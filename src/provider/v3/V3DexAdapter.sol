@@ -69,8 +69,8 @@ abstract contract V3DexAdapter is
   uint256 internal constant BPS = 10_000;
   /// @dev Denominator for `maxSwapLossBp` — parts-per-million (ppm).
   uint256 internal constant LOSS_DENOM = 1e6;
-  /// @dev Half-width of the rate-centered range for rate-implied pairs (±1%).
-  uint256 internal constant INITIAL_RANGE_BPS = 100;
+  /// @dev Half-width of the rate-centered range for rate-implied pairs (±0.5%).
+  uint256 internal constant INITIAL_RANGE_BPS = 50;
   /// @dev Fallback half-range (ticks) around spot for non-rate (TWAP) pairs.
   int24 internal constant FALLBACK_HALF_RANGE_TICKS = 500;
   /// @dev Fixed-point 2^128, the denominator of Uniswap V3 fee-growth (feeGrowthInside/Global) values.
@@ -110,12 +110,11 @@ abstract contract V3DexAdapter is
   ///      this slippage on the converted leg. Default 50_000 = 5%.
   uint256 public maxSwapLossBp;
 
-  /// @dev Max allowed |pool spot − fair| price deviation (bps of price) for adding liquidity at the pool
-  ///      spot: the (BOT-gated) compound and the rebalance re-mint both call increaseLiquidity/mint at the
-  ///      pool spot, so a flash-loan that skews spot could make the vault add liquidity at a manipulated
-  ///      price and get sandwiched on the attacker's back-swap. fairSqrtPriceX96
-  ///      is rate-anchored (flash-loan-immune for the LST pairs), so gating spot against it neutralises
-  ///      that vector. 0 disables the gate. Default INITIAL_RANGE_BPS (1%).
+  /// @dev Max allowed |pool spot − fair| price deviation (bps) for adding liquidity at the pool spot.
+  ///      Gates the compound path: fairSqrtPriceX96 is rate-anchored, so a flash-loan skew cannot make
+  ///      compound add at a manipulated price and get sandwiched on the back-swap. The rebalance re-mint
+  ///      has no fair gate — only the BOT's targetSqrtPriceX96 assertion (same tolerance), skipped at
+  ///      target 0, so pass a non-zero target in production. 0 disables. Default INITIAL_RANGE_BPS (0.5%).
   uint256 public maxSpotDeviationBps;
 
   /// @dev Max |live center rate − BOT expectedCenterRate| deviation on rebalance (BPS; 0 = off). Guards
@@ -230,7 +229,7 @@ abstract contract V3DexAdapter is
     maxSwapLossBp = 50_000; // 5% (ppm) — per-swap rate-anchored loss cap
     emit MaxSwapLossBpChanged(maxSwapLossBp);
 
-    maxSpotDeviationBps = INITIAL_RANGE_BPS; // 1% — spot-vs-fair gate for adding liquidity at pool spot
+    maxSpotDeviationBps = INITIAL_RANGE_BPS; // 0.5% — spot-vs-fair gate for adding liquidity at pool spot
     emit MaxSpotDeviationBpsChanged(maxSpotDeviationBps);
   }
 
@@ -746,11 +745,10 @@ abstract contract V3DexAdapter is
       return;
     }
 
-    // One-sided inventory relative to the active range yields zero addable liquidity, which would
-    // revert inside pool.mint (require(amount > 0)). Hold everything as idle and skip this round
-    // instead of reverting, so a BOT compound / rebalance is never bricked by a single-sided balance.
-    // The idle is deployed on a later compound once the opposite leg arrives or a rebalance recenters
-    // the range.
+    // One-sided inventory yields zero addable liquidity, which would revert inside pool.mint
+    // (require(amount > 0)). Park it as idle instead; a later compound or rebalance deploys it.
+    // Compound only — the rebalance re-mint has no such guard, so an empty-swapData recenter on
+    // one-sided inventory reverts bare out of pool.mint; pass swapData or a non-zero minLiquidity.
     uint128 addable = LiquidityAmounts.getLiquidityForAmounts(
       spotSqrtPriceX96(),
       TickMath.getSqrtRatioAtTick(tickLower),

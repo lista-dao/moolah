@@ -246,9 +246,9 @@ contract WstETHV3ProviderTest is Test {
     assertEq(adapter.FEE(), FEE);
     assertEq(adapter.POOL(), POOL);
     assertTrue(adapter.swapPairWhitelist(address(mockSwap)), "swap venue whitelisted in setUp");
-    assertEq(adapter.maxTwapDeviationBps(), 100, "TWAP clamp band defaults to range width");
+    assertEq(adapter.maxTwapDeviationBps(), 50, "TWAP clamp band defaults to range width");
     assertEq(adapter.lastCenterRate(), IWstETH(WSTETH).stEthPerToken(), "center rate from stEthPerToken");
-    assertEq(adapter.centerRateThresholdBps(), 100, "default threshold 1%");
+    assertEq(adapter.centerRateThresholdBps(), 1, "default threshold 1bp: minimal anti-churn floor");
     assertEq(adapter.provider(), address(provider));
     assertEq(provider.asset(), WETH, "accounting asset");
     assertEq(provider.WRAPPED_NATIVE(), WETH);

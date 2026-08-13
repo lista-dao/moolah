@@ -638,6 +638,73 @@ contract V3LiquidatorTest is Test {
     liquidator.flashLiquidate(Id.unwrap(marketId), user, shares, params);
   }
 
+  /// @dev Native analogue of the pre-funded-reserves test. When loanToken IS the wrapped-native, the
+  ///      profit check wraps the WHOLE native balance, so stray native held beforehand (an earlier
+  ///      redemption's unsold surplus, an un-reflowed redeemV3Shares, or a donation via receive()) would
+  ///      read as fresh profit and let a real shortfall pass. The snapshot must count it.
+  function test_flashLiquidate_strayNativeNotCountedAsProfit() public {
+    // WBNB-loan market so the wrapped-native branch of the profit check is taken.
+    MarketParams memory wbnbMp = MarketParams({
+      loanToken: WBNB,
+      collateralToken: address(provider),
+      oracle: address(providerOracle),
+      irm: IRM,
+      lltv: LLTV
+    });
+    Id wbnbId = wbnbMp.id();
+    vm.prank(OPERATOR);
+    moolah.createMarket(wbnbMp);
+    vm.prank(MANAGER_ADDR);
+    moolah.setProvider(wbnbId, address(provider), true);
+    vm.prank(manager);
+    liquidator.setMarketWhitelist(Id.unwrap(wbnbId), true);
+    vm.prank(manager);
+    liquidator.setTokenWhitelist(WBNB, true);
+
+    // Lender liquidity.
+    address lender = makeAddr("wbnbLender");
+    deal(WBNB, lender, 1_000 ether);
+    vm.startPrank(lender);
+    IERC20(WBNB).approve(address(moolah), type(uint256).max);
+    moolah.supply(wbnbMp, 500 ether, 0, lender, "");
+    vm.stopPrank();
+
+    // Collateral + borrow, then make it liquidatable with repaidAssets > 0.
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    vm.prank(user);
+    provider.withdrawShares(marketParams, shares, user, user);
+    vm.prank(user);
+    provider.supplyShares(wbnbMp, shares, user);
+    (, , uint128 col) = moolah.position(wbnbId, user);
+    uint256 borrowed = (uint256(col) * providerOracle.peek(address(provider)) * 60) / (providerOracle.peek(WBNB) * 100);
+    vm.prank(user);
+    moolah.borrow(wbnbMp, borrowed, 0, user, user);
+    _makeUnhealthyPartial(5_000);
+
+    // Stray native from prior activity — on its own it would cover the repayment.
+    vm.deal(address(liquidator), 100 ether);
+
+    // Both legs yield zero WBNB: THIS liquidation produces nothing.
+    bytes memory swap0Data = abi.encodeWithSelector(mockSwap.swap.selector, SLISBNB, WBNB, uint256(0), uint256(0));
+
+    V3Liquidator.FlashLiquidateParams memory params = V3Liquidator.FlashLiquidateParams({
+      v3Provider: address(provider),
+      minToken0Amt: 0,
+      minToken1Amt: 0,
+      redeemShares: true,
+      token0Pair: address(mockSwap),
+      token0Spender: address(0),
+      token1Pair: address(0), // token1 IS the loan token (WBNB) — no swap
+      token1Spender: address(0),
+      swapToken0Data: swap0Data,
+      swapToken1Data: ""
+    });
+
+    vm.prank(bot);
+    vm.expectRevert(V3Liquidator.NoProfit.selector);
+    liquidator.flashLiquidate(Id.unwrap(wbnbId), user, shares, params);
+  }
+
   function test_flashLiquidate_revertsIfMarketNotWhitelisted() public {
     vm.prank(manager);
     liquidator.setMarketWhitelist(Id.unwrap(marketId), false);
@@ -714,6 +781,55 @@ contract V3LiquidatorTest is Test {
     vm.prank(bot);
     vm.expectRevert(V3Liquidator.NotWhitelisted.selector);
     liquidator.redeemV3Shares(address(provider), 1, 0, 0, address(liquidator));
+  }
+
+  /// @dev With a shared pool configured, an external receiver would bypass the reflow accounting, so it
+  ///      is rejected — vault-funded redemptions must land here and flow back through _reflow.
+  function test_redeemV3Shares_revertsOnExternalReceiverWithFundSource() public {
+    // Hold real seized shares, so without the guard this redeem would SUCCEED and pay the external
+    // address — the guard is what stops it, not a lack of balance.
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    _borrowAgainstCollateral(user);
+    _makeUnhealthy();
+    deal(LISUSD, address(liquidator), 1_000 ether);
+    vm.prank(bot);
+    liquidator.liquidate(Id.unwrap(marketId), user, shares, 0);
+    uint256 held = provider.balanceOf(address(liquidator));
+    assertGt(held, 0, "setup: liquidator holds shares");
+
+    LiquidationVault vault = _deployVault(true);
+    vm.prank(manager);
+    liquidator.setFundSource(address(vault));
+
+    vm.prank(bot);
+    vm.expectRevert(V3Liquidator.ReceiverNotSelf.selector);
+    liquidator.redeemV3Shares(address(provider), held, 0, 0, makeAddr("externalReceiver"));
+
+    // Same call into this contract still works.
+    vm.prank(bot);
+    liquidator.redeemV3Shares(address(provider), held, 0, 0, address(liquidator));
+    assertEq(provider.balanceOf(address(liquidator)), 0, "shares redeemed to self");
+  }
+
+  /// @dev Legacy (no shared pool): an external receiver stays allowed — the guard is scoped to fundSource.
+  function test_redeemV3Shares_externalReceiverAllowedWithoutFundSource() public {
+    assertEq(liquidator.fundSource(), address(0), "no fund source by default");
+
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    _borrowAgainstCollateral(user);
+    _makeUnhealthy();
+    deal(LISUSD, address(liquidator), 1_000 ether);
+    vm.prank(bot);
+    liquidator.liquidate(Id.unwrap(marketId), user, shares, 0);
+
+    uint256 held = provider.balanceOf(address(liquidator));
+    address receiver = makeAddr("externalReceiver");
+    uint256 before = IERC20(SLISBNB).balanceOf(receiver);
+
+    vm.prank(bot);
+    (uint256 out0, ) = liquidator.redeemV3Shares(address(provider), held, 0, 0, receiver);
+
+    assertEq(IERC20(SLISBNB).balanceOf(receiver) - before, out0, "external receiver paid");
   }
 
   /* ─────────────────── sell token ─────────────────────────────────── */

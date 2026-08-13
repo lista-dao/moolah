@@ -300,10 +300,13 @@ contract SlisBNBV3ProviderTest is Test {
     (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
     uint256 min0 = (exp0 * 999) / 1000;
     uint256 min1 = (exp1 * 999) / 1000;
+    // min0/min1 floor the CONSUMED amounts, not the entry price; minShares is the only guard against a
+    // bad price, so mirror production and never pass 0.
+    uint256 minShares = (provider.previewDepositShares(amount0, amount1) * 999) / 1000;
     vm.startPrank(_user);
     IERC20(SLISBNB).approve(address(provider), amount0);
     IERC20(WBNB).approve(address(provider), amount1);
-    (shares, used0, used1) = provider.deposit(marketParams, amount0, amount1, min0, min1, 0, _user);
+    (shares, used0, used1) = provider.deposit(marketParams, amount0, amount1, min0, min1, minShares, _user);
     vm.stopPrank();
   }
 
@@ -790,6 +793,19 @@ contract SlisBNBV3ProviderTest is Test {
 
     assertApproxEqAbs(used0, exp0, 1, "used0 should match preview within 1 wei");
     assertApproxEqAbs(used1, exp1, 1, "used1 should match preview within 1 wei");
+  }
+
+  /// @dev Subsequent-deposit branch (supply > 0): the preview must equal what deposit() consumes to the
+  ///      wei. Both round the fair composition UP, so a floor-rounded preview would under-report by 1 wei.
+  function test_previewDeposit_amountsMatchActual_subsequentDeposit() public {
+    _deposit(user, 100 ether, 100 ether); // seed so the frac branch is taken
+
+    (uint128 liquidity, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(10 ether, 10 ether);
+    assertEq(liquidity, 0, "subsequent deposit parks to idle, mints no liquidity");
+
+    (, uint256 used0, uint256 used1) = _depositWithMin(user2, 10 ether, 10 ether, 0, 0);
+    assertEq(used0, exp0, "used0 == preview exactly");
+    assertEq(used1, exp1, "used1 == preview exactly");
   }
 
   function test_previewDeposit_derivedMinAmounts_succeed() public {
@@ -2455,7 +2471,7 @@ contract SlisBNBV3ProviderTest is Test {
   /* ───────────── Spot-vs-fair gate when adding liquidity at pool spot ───────────── */
 
   function test_spotDeviationGate_defaults() public view {
-    assertEq(adapter.maxSpotDeviationBps(), 100, "default spot-deviation gate = 1%");
+    assertEq(adapter.maxSpotDeviationBps(), 50, "default spot-deviation gate = 0.5%");
   }
 
   function test_setMaxSpotDeviationBps_accessAndCaps() public {
