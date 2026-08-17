@@ -13,6 +13,7 @@ contract AlpahIrmMainnetTest is Test {
   address admin = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253; // timelock
   address manager = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
   address alphaIrm = 0x5F9f9173B405C6CEAfa7f98d09e4B8447e9797E6;
+  address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
 
   FixedRateIrm fixedRateIrm = FixedRateIrm(alphaIrm);
 
@@ -21,7 +22,7 @@ contract AlpahIrmMainnetTest is Test {
   function setUp() external {
     vm.createSelectFork("https://bsc-dataseed.bnbchain.org");
 
-    address impl = address(new FixedRateIrm());
+    address impl = address(new FixedRateIrm(moolah));
 
     vm.startPrank(admin);
     UUPSUpgradeable proxy = UUPSUpgradeable(alphaIrm);

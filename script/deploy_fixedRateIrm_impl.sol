@@ -9,6 +9,8 @@ import { FixedRateIrm } from "interest-rate-model/FixedRateIrm.sol";
 import { Moolah } from "moolah/Moolah.sol";
 
 contract FixedRateIrmDeploy is DeployBase {
+  address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
+
   function run() public {
     uint256 deployerPrivateKey = _deployerKey();
     address deployer = vm.addr(deployerPrivateKey);
@@ -16,7 +18,7 @@ contract FixedRateIrmDeploy is DeployBase {
     vm.startBroadcast(deployerPrivateKey);
 
     // Deploy InterestRateModel implementation
-    FixedRateIrm impl = new FixedRateIrm();
+    FixedRateIrm impl = new FixedRateIrm(moolah);
     console.log("FixedRateIrm implementation: ", address(impl));
 
     vm.stopBroadcast();
