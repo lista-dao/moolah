@@ -30,8 +30,9 @@ import { IMoolahVault } from "moolah-vault/interfaces/IMoolahVault.sol";
 ///         can already pull the entire principal back to itself through `withdrawPrincipal`. What no
 ///         MANAGER call can do is choose a destination — principal and the emergency exit pay
 ///         `principalOwner`, yield pays whitelisted recipients, and `setPrincipalOwner` is
-///         DEFAULT_ADMIN_ROLE-only. BOT's admin is MANAGER rather than DEFAULT_ADMIN_ROLE because
-///         rotating a leaked bot key must not wait on a 24h TimeLock proposal.
+///         DEFAULT_ADMIN_ROLE-only. BOT's and PAUSER's admin is MANAGER rather than
+///         DEFAULT_ADMIN_ROLE because rotating a leaked bot key — or revoking a pauser key that is
+///         holding the contract down — must not wait on a 24h TimeLock proposal.
 ///      4. `principal` is raised by MANAGER (`depositPrincipal`, `increasePrincipal`) and lowered
 ///         only against funds actually leaving (`withdrawPrincipal`, `emergencyWithdraw`), with one
 ///         exception: `emergencyWithdraw` resets it to 0, because it always empties the position and
@@ -119,7 +120,7 @@ contract MoolahVaultAccount is
   /// @dev initialize contract. Roles are granted to their FINAL holders; the deployer takes none.
   /// @dev permissionless by design — note 1 in the contract header.
   /// @param admin DEFAULT_ADMIN_ROLE — upgrades, setPrincipalOwner, role administration
-  /// @param manager MANAGER — principal movement, recipient whitelist, unpause
+  /// @param manager MANAGER — principal movement, recipient whitelist, unpause, BOT/PAUSER admin
   /// @param bot BOT — claimYield
   /// @param pauser PAUSER — pause
   /// @param _vault the MoolahVault whose shares this contract holds
@@ -153,8 +154,10 @@ contract MoolahVaultAccount is
     _grantRole(MANAGER, manager);
     _grantRole(BOT, bot);
     _grantRole(PAUSER, pauser);
-    // so MANAGER can rotate the bot key without a TimeLock proposal
+    // so MANAGER can rotate the bot key, or revoke a pauser key that is holding the contract down,
+    // without a TimeLock proposal
     _setRoleAdmin(BOT, MANAGER);
+    _setRoleAdmin(PAUSER, MANAGER);
 
     vault = IMoolahVault(_vault);
     asset = IERC20(IMoolahVault(_vault).asset());
@@ -202,10 +205,13 @@ contract MoolahVaultAccount is
   }
 
   /// @dev redeem principal to principalOwner. The caller cannot name a destination.
-  /// @dev deliberately NOT whenNotPaused — pause must not trap the owner's principal at exactly the
-  ///      moment someone wants it out.
+  /// @dev whenNotPaused: a halted contract must not let principal leave piecemeal. Pause is not only
+  ///      a bot kill-switch — it is also the state an incident puts this contract in, and while it
+  ///      holds, the only sanctioned exit is `emergencyWithdraw`, which takes the whole position back
+  ///      to principalOwner in one move and cannot be walked down amount by amount. MANAGER holds
+  ///      `unpause`, so this is a speed bump for MANAGER, not a trap.
   /// @dev checks-effects-interactions: principal is decremented before the vault call.
-  function withdrawPrincipal(uint256 assets) external onlyRole(MANAGER) nonReentrant {
+  function withdrawPrincipal(uint256 assets) external onlyRole(MANAGER) nonReentrant whenNotPaused {
     require(assets > 0, ZeroAmount());
     require(assets <= principal, ExceedsPrincipal());
 
@@ -217,24 +223,30 @@ contract MoolahVaultAccount is
 
   /// @dev raise the principal baseline without moving funds. Vault shares can be transferred in by a
   ///      plain ERC20 transfer, which bypasses depositPrincipal — that position would otherwise read
-  ///      as harvestable yield and be paid out as such. This is the correction for it, and the way a
-  ///      top-up is recorded when it arrives as shares instead of lisUSD.
+  ///      as harvestable yield and be paid out as such. This is how a top-up is recorded when it
+  ///      arrives as shares instead of lisUSD.
+  /// @dev NOT part of the launch. At launch the baseline comes from `initialize` and B0c6 only
+  ///      transfers its shares in — calling this on top of that would count the same corpus twice,
+  ///      and the baseline cannot be lowered again. There are exactly two sanctioned ways to move the
+  ///      baseline afterwards:
+  ///        1. `depositPrincipal` / `withdrawPrincipal` — lisUSD in or out, baseline follows the funds
+  ///           in the same call, nothing to pair up;
+  ///        2. a share transfer plus this call, in ONE transaction.
+  /// @dev for route 2 the pairing is mandatory: a Safe MultiSend batch, never two separate Safe
+  ///      transactions. Nothing on-chain can enforce it — a plain ERC20 share transfer has no hook to
+  ///      intercept. Split across two transactions, the whole transferred position reads as claimable
+  ///      yield in between, and a BOT harvest landing in that window pays the corpus out as yield to a
+  ///      whitelisted destination.
   /// @dev MANAGER-only and raise-only — notes 4 and 5 in the contract header. Raising the baseline
   ///      can only shrink claimableYield(), so it cannot widen what BOT may take, and it redirects
   ///      nothing: withdrawPrincipal still pays principalOwner only.
   /// @dev no nonReentrant and no whenNotPaused: no external call, no fund movement, and a correction
   ///      that only shrinks claimableYield() must stay available during an incident.
-  /// @param assets the COST BASIS of the position being recorded — the lisUSD that was paid for those
-  ///        shares — never their current `vault.convertToAssets(shares)` value. The two differ by
-  ///        exactly the yield already accrued on them: at launch 28,274,743 shares were worth
-  ///        28,492,314 but cost 28,300,000, and recording the market value would have swallowed the
-  ///        192,314 backlog into principal, out of BOT's reach forever. That is why the amount is a
-  ///        parameter and is not computed on-chain — the cost basis does not exist on-chain.
-  /// @dev the share transfer and this call MUST go in ONE transaction — a Safe MultiSend batch, never
-  ///      two separate Safe transactions. Nothing on-chain can enforce the pairing: a plain ERC20
-  ///      share transfer has no hook to intercept. Split across two transactions, the whole
-  ///      transferred position reads as claimable yield in between, and a BOT harvest landing in that
-  ///      window pays the corpus out as yield to a whitelisted destination.
+  /// @param assets the COST BASIS of the shares being recorded — the lisUSD that was paid for them —
+  ///        never their current `vault.convertToAssets(shares)` value. The two differ by exactly the
+  ///        yield already accrued on them, and recording the market value would swallow that backlog
+  ///        into principal, out of BOT's reach forever. That is why the amount is a parameter and is
+  ///        not computed on-chain — the cost basis does not exist on-chain.
   function increasePrincipal(uint256 assets) external onlyRole(MANAGER) {
     require(assets > 0, ZeroAmount());
 

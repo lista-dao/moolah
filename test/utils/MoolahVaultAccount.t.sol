@@ -110,6 +110,40 @@ contract MoolahVaultAccountTest is Test {
     assertTrue(manager.hasRole(BOT_ROLE, newBot));
   }
 
+  function test_initialize_setsPauserRoleAdminToManager() public {
+    assertEq(manager.getRoleAdmin(PAUSER_ROLE), MANAGER_ROLE);
+
+    // a pauser key holding the contract down must be revocable without a 24h TimeLock proposal
+    vm.prank(pauser);
+    manager.pause();
+
+    vm.prank(managerSafe);
+    manager.revokeRole(PAUSER_ROLE, pauser);
+    assertFalse(manager.hasRole(PAUSER_ROLE, pauser));
+
+    address newPauser = makeAddr("newPauser");
+    vm.prank(managerSafe);
+    manager.grantRole(PAUSER_ROLE, newPauser);
+    assertTrue(manager.hasRole(PAUSER_ROLE, newPauser));
+
+    vm.prank(managerSafe);
+    manager.unpause();
+
+    vm.prank(pauser);
+    vm.expectRevert(
+      abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, pauser, PAUSER_ROLE)
+    );
+    manager.pause();
+  }
+
+  /// @dev the implementation must refuse initialization because its initializer is burned, not
+  ///      because some argument happened to be unusable. deploy_moolahVaultAccount_impl.s.sol
+  ///      asserts this selector for the same reason.
+  function test_implementation_revertsWithInvalidInitialization() public {
+    vm.expectRevert(Initializable.InvalidInitialization.selector);
+    impl.initialize(admin, managerSafe, bot, pauser, address(vaultMock), managerSafe, PRINCIPAL, _twoRecipients());
+  }
+
   function test_initialize_revertsOnZeroAddress() public {
     address[] memory r = _twoRecipients();
     address[6] memory args = [admin, managerSafe, bot, pauser, address(vaultMock), managerSafe];
@@ -500,14 +534,25 @@ contract MoolahVaultAccountTest is Test {
     assertEq(manager.principal(), PRINCIPAL + 100 ether);
   }
 
-  /// @dev pause exists to stop the bot, not to trap the owner's principal.
-  function test_withdrawPrincipal_worksWhenPaused() public {
+  /// @dev a halted contract must not let principal leave piecemeal. The only exit while paused is
+  ///      emergencyWithdraw, which takes the whole position back to principalOwner in one move.
+  function test_withdrawPrincipal_revertsWhenPaused() public {
     vm.prank(pauser);
     manager.pause();
 
     vm.prank(managerSafe);
+    vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
     manager.withdrawPrincipal(100 ether);
-    assertEq(token.balanceOf(managerSafe), 100 ether);
+
+    // the emergency exit stays open
+    vm.prank(managerSafe);
+    manager.emergencyWithdraw();
+    assertEq(vaultMock.balanceOf(address(manager)), 0);
+    assertEq(manager.principal(), 0);
+
+    // and it works again once MANAGER lifts the pause
+    vm.prank(managerSafe);
+    manager.unpause();
   }
   // ------------------------------------------------------------------ claimYield
 

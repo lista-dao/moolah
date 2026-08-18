@@ -68,6 +68,9 @@ contract DeployMoolahVaultAccount is DeployBase {
     require(account.getRoleMemberCount(account.PAUSER()) == 1, "pauser count");
     require(!account.hasRole(account.DEFAULT_ADMIN_ROLE(), deployer), "deployer is admin");
     require(!account.hasRole(account.MANAGER(), deployer), "deployer is manager");
+    // MANAGER administers BOT and PAUSER so a leaked key can be rotated without a 24h proposal
+    require(account.getRoleAdmin(account.BOT()) == account.MANAGER(), "bot role admin");
+    require(account.getRoleAdmin(account.PAUSER()) == account.MANAGER(), "pauser role admin");
     require(address(account.vault()) == vault, "vault");
     require(account.principalOwner() == principalOwner, "principalOwner");
     require(account.principal() == principal, "principal");
