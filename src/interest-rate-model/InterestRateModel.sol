@@ -13,7 +13,7 @@ import { ExpLib } from "./libraries/ExpLib.sol";
 import { MathLib, WAD_INT as WAD } from "./libraries/MathLib.sol";
 import { ConstantsLib } from "./libraries/ConstantsLib.sol";
 import { MarketParamsLib } from "../moolah/libraries/MarketParamsLib.sol";
-import { Id, MarketParams, Market } from "moolah/interfaces/IMoolah.sol";
+import { IMoolah, Id, MarketParams, Market } from "moolah/interfaces/IMoolah.sol";
 import { MathLib as MoolahMathLib } from "moolah/libraries/MathLib.sol";
 
 /// @title InterestRateModel
@@ -204,6 +204,9 @@ contract InterestRateModel is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
     require(newRateCap >= minCap && newRateCap != oldCap, "invalid rate cap");
     require(rateFloor[id] <= newRateCap, "invalid new cap vs floor");
 
+    // settle interest accrued under the old cap before it changes
+    _accrueInterest(id);
+
     rateCap[id] = newRateCap;
 
     emit BorrowRateCapUpdate(id, oldCap, newRateCap);
@@ -219,9 +222,20 @@ contract InterestRateModel is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
     if (_cap < minCap) _cap = minCap;
     require(newRateFloor <= _cap, "invalid rate floor vs cap");
 
+    // settle interest accrued under the old floor before it changes
+    _accrueInterest(id);
+
     rateFloor[id] = newRateFloor;
 
     emit BorrowRateFloorUpdate(id, oldFloor, newRateFloor);
+  }
+
+  /// @dev Accrues interest on Moolah for `id` so pending interest is settled at the current rate bounds.
+  /// @dev No-op when the market does not exist yet, so bounds can still be pre-set before market creation.
+  function _accrueInterest(Id id) private {
+    if (IMoolah(MOOLAH).market(id).lastUpdate == 0) return;
+
+    IMoolah(MOOLAH).accrueInterest(IMoolah(MOOLAH).idToMarketParams(id));
   }
 
   /// @dev Updates the minimum borrow rate cap for all markets.

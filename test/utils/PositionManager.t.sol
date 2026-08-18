@@ -192,7 +192,7 @@ contract PositionManagerTest is Test {
     );
     irm = InterestRateModel(address(irmProxy));
 
-    FixedRateIrm fixedIrmImpl = new FixedRateIrm();
+    FixedRateIrm fixedIrmImpl = new FixedRateIrm(address(moolah));
     ERC1967Proxy fixedIrmProxy = new ERC1967Proxy(
       address(fixedIrmImpl),
       abi.encodeWithSelector(FixedRateIrm.initialize.selector, admin, manager)

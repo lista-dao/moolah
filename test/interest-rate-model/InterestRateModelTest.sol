@@ -380,6 +380,12 @@ contract InterestRateModelTest is Test {
     assertEq(irm.rateFloor(id), newFloor);
   }
 
+  /* MOOLAH STUB */
+
+  /// @dev This contract is deployed as the IRM's MOOLAH. `updateRateCap`/`updateRateFloor` probe the market
+  /// before accruing interest; returning an empty market (lastUpdate == 0) makes the accrual a no-op.
+  function market(Id) external pure returns (Market memory m) {}
+
   /* HANDLERS */
 
   function handleBorrowRate(uint256 totalSupplyAssets, uint256 totalBorrowAssets, uint256 elapsed) external {
