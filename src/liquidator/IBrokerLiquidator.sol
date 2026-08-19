@@ -80,6 +80,10 @@ interface IBrokerLiquidator {
 
   function reflowBlacklist(address token) external view returns (bool);
 
+  function batchSetSmartProviders(address[] calldata providers, bool status) external;
+
+  function smartProviders(address provider) external view returns (bool);
+
   function marketIdToBroker(bytes32 id) external view returns (address);
 
   function brokerToMarketId(address broker) external view returns (bytes32);
