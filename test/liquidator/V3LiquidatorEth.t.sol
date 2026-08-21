@@ -70,6 +70,9 @@ contract V3LiquidatorEthTest is Test {
   bytes32 constant MOOLAH_MANAGER = keccak256("MANAGER");
 
   uint32 constant TWAP_PERIOD = 1800;
+  uint256 constant RANGE_LOWER_BPS = 50;
+  uint256 constant RANGE_UPPER_BPS = 50;
+  uint256 constant TWAP_DEV_BPS = 25;
   uint256 constant LLTV = 86 * 1e16;
   uint256 constant ETH_USD = 3000e8; // 8-dec mock ETH/USD
 
@@ -107,7 +110,15 @@ contract V3LiquidatorEthTest is Test {
     // 1) DEX adapter.
     WstETHV3DexAdapter adapterImpl = new WstETHV3DexAdapter(NPM, WSTETH, WETH, FEE, TWAP_PERIOD);
     adapter = WstETHV3DexAdapter(
-      payable(new ERC1967Proxy(address(adapterImpl), abi.encodeCall(WstETHV3DexAdapter.initialize, (admin, manager))))
+      payable(
+        new ERC1967Proxy(
+          address(adapterImpl),
+          abi.encodeCall(
+            WstETHV3DexAdapter.initialize,
+            (admin, manager, RANGE_LOWER_BPS, RANGE_UPPER_BPS, TWAP_DEV_BPS)
+          )
+        )
+      )
     );
 
     // 2) Vault. accountingAsset = WETH.

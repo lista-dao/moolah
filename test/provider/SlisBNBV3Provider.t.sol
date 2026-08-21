@@ -159,7 +159,9 @@ contract SlisBNBV3ProviderTest is Test {
   address constant LISUSD = 0x0782b6d8c4551B9760e74c0545a9bCD90bdc41E5;
   address constant IRM = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
 
-  uint32 constant TWAP_PERIOD = 1800; // 30 minutes
+  uint32 constant TWAP_PERIOD = 1800;
+  uint256 constant RANGE_LOWER_BPS = 50;
+  uint256 constant RANGE_UPPER_BPS = 50; // 30 minutes
   uint256 constant LLTV = 70 * 1e16;
   uint256 constant LLTV_SECOND = 71 * 1e16;
   uint256 constant BNB_USD = 600e8; // mock BNB price, 8 decimals
@@ -215,7 +217,12 @@ contract SlisBNBV3ProviderTest is Test {
     // 1) DEX adapter (NFT custodian + all NPM/pool interaction).
     SlisBNBV3DexAdapter adapterImpl = new SlisBNBV3DexAdapter(NPM, SLISBNB, WBNB, FEE, TWAP_PERIOD);
     adapter = SlisBNBV3DexAdapter(
-      payable(new ERC1967Proxy(address(adapterImpl), abi.encodeCall(SlisBNBV3DexAdapter.initialize, (admin, manager))))
+      payable(
+        new ERC1967Proxy(
+          address(adapterImpl),
+          abi.encodeCall(SlisBNBV3DexAdapter.initialize, (admin, manager, RANGE_LOWER_BPS, RANGE_UPPER_BPS))
+        )
+      )
     );
 
     // 2) Provider / vault (ERC-4626 vLP shares + Moolah wiring). accountingAsset = WBNB.
@@ -2788,7 +2795,7 @@ contract SlisBNBV3ProviderTest is Test {
     adapter.setCenterRateThresholdBps(0);
     uint256 spot = uint256(adapter.spotSqrtPriceX96());
 
-    // maxSpotDeviationBps defaults to 100 (1% on price). sqrt·(1+0.2%) ⇒ price·~0.4% (inside);
+    // maxSpotDeviationBps defaults to 50 (0.5% on price). sqrt·(1+0.2%) ⇒ price·~0.4% (inside);
     // sqrt·(1+0.8%) ⇒ price·~1.6% (outside).
     uint160 inside = uint160((spot * 10020) / 10000);
     uint160 outside = uint160((spot * 10080) / 10000);

@@ -90,6 +90,9 @@ contract WstETHV3ProviderTest is Test {
   bytes32 constant MOOLAH_MANAGER = keccak256("MANAGER");
 
   uint32 constant TWAP_PERIOD = 1800;
+  uint256 constant RANGE_LOWER_BPS = 50;
+  uint256 constant RANGE_UPPER_BPS = 50;
+  uint256 constant TWAP_DEV_BPS = 25;
   uint256 constant LLTV = 86 * 1e16;
   uint256 constant ETH_USD = 3000e8; // mock ETH price, 8 decimals
 
@@ -129,7 +132,15 @@ contract WstETHV3ProviderTest is Test {
     // 1) DEX adapter (NFT custodian + rate/rebalance logic).
     WstETHV3DexAdapter adapterImpl = new WstETHV3DexAdapter(NPM, WSTETH, WETH, FEE, TWAP_PERIOD);
     adapter = WstETHV3DexAdapter(
-      payable(new ERC1967Proxy(address(adapterImpl), abi.encodeCall(WstETHV3DexAdapter.initialize, (admin, manager))))
+      payable(
+        new ERC1967Proxy(
+          address(adapterImpl),
+          abi.encodeCall(
+            WstETHV3DexAdapter.initialize,
+            (admin, manager, RANGE_LOWER_BPS, RANGE_UPPER_BPS, TWAP_DEV_BPS)
+          )
+        )
+      )
     );
 
     // 2) Vault (ERC-4626 shares + Moolah wiring). accountingAsset = WETH.
@@ -246,7 +257,7 @@ contract WstETHV3ProviderTest is Test {
     assertEq(adapter.FEE(), FEE);
     assertEq(adapter.POOL(), POOL);
     assertTrue(adapter.swapPairWhitelist(address(mockSwap)), "swap venue whitelisted in setUp");
-    assertEq(adapter.maxTwapDeviationBps(), 50, "TWAP clamp band defaults to range width");
+    assertEq(adapter.maxTwapDeviationBps(), 25, "TWAP clamp band defaults below the upper range margin");
     assertEq(adapter.lastCenterRate(), IWstETH(WSTETH).stEthPerToken(), "center rate from stEthPerToken");
     assertEq(adapter.centerRateThresholdBps(), 1, "default threshold 1bp: minimal anti-churn floor");
     assertEq(adapter.provider(), address(provider));
@@ -554,7 +565,15 @@ contract WstETHV3ProviderTest is Test {
     WstETHV3DexAdapter impl2 = new WstETHV3DexAdapter(NPM, WSTETH, WETH, FEE, TWAP_PERIOD);
     return
       WstETHV3DexAdapter(
-        payable(new ERC1967Proxy(address(impl2), abi.encodeCall(WstETHV3DexAdapter.initialize, (admin, manager))))
+        payable(
+          new ERC1967Proxy(
+            address(impl2),
+            abi.encodeCall(
+              WstETHV3DexAdapter.initialize,
+              (admin, manager, RANGE_LOWER_BPS, RANGE_UPPER_BPS, TWAP_DEV_BPS)
+            )
+          )
+        )
       );
   }
 

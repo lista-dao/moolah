@@ -48,11 +48,14 @@ contract SlisBNBV3DexAdapter is V3DexAdapter, ISlisBNBV3DexAdapter {
    * @param _admin   Default admin (upgrade / roles).
    * @param _manager Manager role (sets centerRateThresholdBps + the swap-pair whitelist).
    */
-  function initialize(address _admin, address _manager) external initializer {
-    uint256 initialCenterRate = _lstNativeRate();
-    (int24 initialTickLower, int24 initialTickUpper) = _initialTickRange(initialCenterRate);
-    __V3DexAdapter_init(_admin, _manager, initialTickLower, initialTickUpper);
-    lastCenterRate = initialCenterRate;
+  function initialize(
+    address _admin,
+    address _manager,
+    uint256 _rangeLowerBps,
+    uint256 _rangeUpperBps
+  ) external initializer {
+    __V3DexAdapter_init(_admin, _manager, _rangeLowerBps, _rangeUpperBps);
+    lastCenterRate = _lstNativeRate();
     // Minimal anti-churn floor only: 1 BPS
     centerRateThresholdBps = 1;
   }
