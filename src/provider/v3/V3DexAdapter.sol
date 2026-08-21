@@ -69,8 +69,6 @@ abstract contract V3DexAdapter is
   uint256 internal constant BPS = 10_000;
   /// @dev Denominator for `maxSwapLossBp` — parts-per-million (ppm).
   uint256 internal constant LOSS_DENOM = 1e6;
-  /// @dev Half-width of the rate-centered range for rate-implied pairs (±0.5%).
-  uint256 internal constant INITIAL_RANGE_BPS = 50;
   /// @dev Fallback half-range (ticks) around spot for non-rate (TWAP) pairs.
   int24 internal constant FALLBACK_HALF_RANGE_TICKS = 500;
   /// @dev Fixed-point 2^128, the denominator of Uniswap V3 fee-growth (feeGrowthInside/Global) values.
@@ -114,15 +112,22 @@ abstract contract V3DexAdapter is
   ///      Gates the compound path: fairSqrtPriceX96 is rate-anchored, so a flash-loan skew cannot make
   ///      compound add at a manipulated price and get sandwiched on the back-swap. The rebalance re-mint
   ///      has no fair gate — only the BOT's targetSqrtPriceX96 assertion (same tolerance), skipped at
-  ///      target 0, so pass a non-zero target in production. 0 disables. Default INITIAL_RANGE_BPS (0.5%).
+  ///      target 0, so pass a non-zero target in production. 0 disables. Sized off the measured
+  ///      spot-vs-rate discount, independent of the range width.
   uint256 public maxSpotDeviationBps;
 
   /// @dev Max |live center rate − BOT expectedCenterRate| deviation on rebalance (BPS; 0 = off). Guards
   ///      the range anchor against a build↔exec rate anomaly the fair-NAV loss caps can't see.
   uint256 public maxCenterRateDeviationBps;
 
+  /// @dev Range margins below / above the rate-derived center, in BPS; set at deploy. Split because the
+  ///      sides do different jobs: lower must cover the LST's structural discount; upper is the drift
+  ///      budget and bounds the min(fair,spot) deposit haircut, which grows as discount/(upper + discount).
+  uint256 public rangeLowerBps;
+  uint256 public rangeUpperBps;
+
   /// @dev Reserved storage for future base variables (keep subclass storage stable on upgrade).
-  uint256[44] private __gap;
+  uint256[42] private __gap;
 
   /* ───────────────────────────── events ───────────────────────────── */
 
@@ -136,6 +141,7 @@ abstract contract V3DexAdapter is
   event SwapPairWhitelistSet(address indexed swapPair, bool status);
   event MaxSwapLossBpChanged(uint256 maxSwapLossBp);
   event MaxSpotDeviationBpsChanged(uint256 maxSpotDeviationBps);
+  event RangeBpsChanged(uint256 rangeLowerBps, uint256 rangeUpperBps);
   event MaxCenterRateDeviationBpsChanged(uint256 maxCenterRateDeviationBps);
   event CompoundSkippedSpotDeviated(uint160 spotSqrtPriceX96, uint160 fairSqrtPriceX96);
   event CompoundSkippedNoLiquidity(uint256 idleToken0, uint256 idleToken1);
@@ -208,14 +214,17 @@ abstract contract V3DexAdapter is
 
   /* ─────────────────────────── initializer ────────────────────────── */
 
+  /// @dev Sets the range margins BEFORE deriving the opening tick range from them, so the range is never
+  ///      computed against unwritten storage.
   function __V3DexAdapter_init(
     address _admin,
     address _manager,
-    int24 _tickLower,
-    int24 _tickUpper
+    uint256 _rangeLowerBps,
+    uint256 _rangeUpperBps
   ) internal onlyInitializing {
     if (_admin == address(0) || _manager == address(0)) revert ZeroAddress();
-    if (_tickLower >= _tickUpper) revert InvalidTickRange();
+    if (_rangeLowerBps == 0 || _rangeLowerBps >= BPS) revert InvalidParam();
+    if (_rangeUpperBps == 0 || _rangeUpperBps >= BPS) revert InvalidParam();
 
     __AccessControl_init();
     __ReentrancyGuard_init();
@@ -223,13 +232,20 @@ abstract contract V3DexAdapter is
     _grantRole(DEFAULT_ADMIN_ROLE, _admin);
     _grantRole(MANAGER, _manager);
 
+    rangeLowerBps = _rangeLowerBps;
+    rangeUpperBps = _rangeUpperBps;
+    emit RangeBpsChanged(_rangeLowerBps, _rangeUpperBps);
+
+    (int24 _tickLower, int24 _tickUpper) = _initialTickRange(_lstNativeRate());
+    if (_tickLower >= _tickUpper) revert InvalidTickRange();
     tickLower = _tickLower;
     tickUpper = _tickUpper;
 
     maxSwapLossBp = 50_000; // 5% (ppm) — per-swap rate-anchored loss cap
     emit MaxSwapLossBpChanged(maxSwapLossBp);
 
-    maxSpotDeviationBps = INITIAL_RANGE_BPS; // 0.5% — spot-vs-fair gate for adding liquidity at pool spot
+    // Sized off the measured spot-vs-rate discount, not off the range width.
+    maxSpotDeviationBps = 50; // 0.5% — spot-vs-fair gate for adding liquidity at pool spot
     emit MaxSpotDeviationBpsChanged(maxSpotDeviationBps);
   }
 
@@ -386,6 +402,14 @@ abstract contract V3DexAdapter is
     if (_maxSpotDeviationBps > BPS) revert InvalidThreshold();
     maxSpotDeviationBps = _maxSpotDeviationBps;
     emit MaxSpotDeviationBpsChanged(_maxSpotDeviationBps);
+  }
+
+  /// @notice Set the range margins below / above the rate-derived center (BPS). onlyRole MANAGER.
+  function setRangeBps(uint256 _rangeLowerBps, uint256 _rangeUpperBps) external onlyRole(MANAGER) {
+    if (_rangeLowerBps > BPS || _rangeUpperBps > BPS) revert InvalidParam();
+    rangeLowerBps = _rangeLowerBps;
+    rangeUpperBps = _rangeUpperBps;
+    emit RangeBpsChanged(_rangeLowerBps, _rangeUpperBps);
   }
 
   /// @notice Max relative deviation (BPS) allowed between the live center rate and the BOT-supplied
@@ -822,7 +846,7 @@ abstract contract V3DexAdapter is
 
   /* ─────────────────── rate-centering math (shared) ────────────────── */
 
-  /// @dev Tick range for the position. Rate-implied (centerRate != 0): ±INITIAL_RANGE_BPS around the
+  /// @dev Tick range for the position. Rate-implied (centerRate != 0): rangeLowerBps/rangeUpperBps around the
   ///      rate-derived price. Pure-TWAP (centerRate == 0): ±FALLBACK_HALF_RANGE_TICKS around spot.
   function _initialTickRange(
     uint256 centerRate
@@ -854,8 +878,8 @@ abstract contract V3DexAdapter is
     uint256 centerRate,
     int24 tickSpacing
   ) internal view returns (int24 initialTickLower, int24 initialTickUpper) {
-    uint256 lowerRate = (centerRate * (BPS - INITIAL_RANGE_BPS)) / BPS;
-    uint256 upperRate = (centerRate * (BPS + INITIAL_RANGE_BPS)) / BPS;
+    uint256 lowerRate = (centerRate * (BPS - rangeLowerBps)) / BPS;
+    uint256 upperRate = (centerRate * (BPS + rangeUpperBps)) / BPS;
     initialTickLower = _floorTick(_tickAtSqrtRatio(_sqrtPriceX96FromRate(lowerRate)), tickSpacing);
     initialTickUpper = _ceilTick(_tickAtSqrtRatio(_sqrtPriceX96FromRate(upperRate)), tickSpacing);
   }

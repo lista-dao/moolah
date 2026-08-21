@@ -83,6 +83,9 @@ contract WbETHV3ProviderTest is Test {
   bytes32 constant MOOLAH_MANAGER = keccak256("MANAGER");
 
   uint32 constant TWAP_PERIOD = 1800;
+  uint256 constant RANGE_LOWER_BPS = 50;
+  uint256 constant RANGE_UPPER_BPS = 50;
+  uint256 constant TWAP_DEV_BPS = 25;
   uint256 constant LLTV = 86 * 1e16;
   uint256 constant ETH_USD = 3000e8; // mock ETH price, 8 decimals
 
@@ -119,7 +122,12 @@ contract WbETHV3ProviderTest is Test {
 
     WbETHV3DexAdapter adapterImpl = new WbETHV3DexAdapter(NPM, WBETH, WETH, FEE, TWAP_PERIOD);
     adapter = WbETHV3DexAdapter(
-      payable(new ERC1967Proxy(address(adapterImpl), abi.encodeCall(WbETHV3DexAdapter.initialize, (admin, manager))))
+      payable(
+        new ERC1967Proxy(
+          address(adapterImpl),
+          abi.encodeCall(WbETHV3DexAdapter.initialize, (admin, manager, RANGE_LOWER_BPS, RANGE_UPPER_BPS, TWAP_DEV_BPS))
+        )
+      )
     );
 
     WbETHV3Provider provImpl = new WbETHV3Provider(MOOLAH_PROXY, address(adapter));
@@ -177,7 +185,7 @@ contract WbETHV3ProviderTest is Test {
     assertEq(adapter.WRAPPED_NATIVE(), WETH);
     assertEq(adapter.FEE(), FEE);
     assertEq(adapter.POOL(), POOL);
-    assertEq(adapter.maxTwapDeviationBps(), 50, "TWAP clamp band defaults to range width");
+    assertEq(adapter.maxTwapDeviationBps(), 25, "TWAP clamp band defaults below the upper range margin");
     assertEq(adapter.centerRateThresholdBps(), 1, "default threshold 1bp: minimal anti-churn floor");
     // rate wiring: the center rate is wbETH.exchangeRate(), not stEthPerToken or pool price.
     assertEq(adapter.lastCenterRate(), IWbETH(WBETH).exchangeRate(), "center rate from exchangeRate");
