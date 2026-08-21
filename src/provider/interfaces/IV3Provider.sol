@@ -103,4 +103,12 @@ interface IV3Provider is IProvider {
     uint256 minAmount1,
     address receiver
   ) external returns (uint256 amount0, uint256 amount1);
+
+  function depositWhitelistEnabled() external view returns (bool);
+
+  function depositWhitelist(address account) external view returns (bool);
+
+  function setDepositWhitelistEnabled(bool enabled) external;
+
+  function setDepositWhitelist(address[] calldata accounts, bool allowed) external;
 }

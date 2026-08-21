@@ -317,6 +317,97 @@ contract SlisBNBV3ProviderTest is Test {
     vm.stopPrank();
   }
 
+  /* ─────────────────────── deposit whitelist ─────────────────────── */
+
+  function _allow(address who, bool ok) internal {
+    address[] memory a = new address[](1);
+    a[0] = who;
+    vm.prank(manager);
+    provider.setDepositWhitelist(a, ok);
+  }
+
+  function _enableWhitelist() internal {
+    vm.prank(manager);
+    provider.setDepositWhitelistEnabled(true);
+  }
+
+  function test_depositWhitelist_offByDefault() public {
+    assertFalse(provider.depositWhitelistEnabled(), "off by default");
+    _deposit(user, 1 ether, 1 ether); // unlisted user still gets in
+  }
+
+  function test_depositWhitelist_blocksUnlistedDepositor() public {
+    _enableWhitelist();
+    deal(SLISBNB, user, 1 ether);
+    deal(WBNB, user, 1 ether);
+    vm.startPrank(user);
+    IERC20(SLISBNB).approve(address(provider), 1 ether);
+    IERC20(WBNB).approve(address(provider), 1 ether);
+    vm.expectRevert(V3Provider.NotWhitelisted.selector);
+    provider.deposit(marketParams, 1 ether, 1 ether, 0, 0, 0, user);
+    vm.stopPrank();
+
+    _allow(user, true);
+    (uint256 shares, , ) = _deposit(user, 1 ether, 1 ether);
+    assertGt(shares, 0, "listed depositor gets in");
+  }
+
+  /// @dev Gating only msg.sender would let a listed caller open a position for an unlisted address.
+  function test_depositWhitelist_blocksUnlistedOnBehalf() public {
+    _enableWhitelist();
+    _allow(user, true);
+    deal(SLISBNB, user, 1 ether);
+    deal(WBNB, user, 1 ether);
+    vm.startPrank(user);
+    IERC20(SLISBNB).approve(address(provider), 1 ether);
+    IERC20(WBNB).approve(address(provider), 1 ether);
+    vm.expectRevert(V3Provider.NotWhitelisted.selector);
+    provider.deposit(marketParams, 1 ether, 1 ether, 0, 0, 0, user2);
+    vm.stopPrank();
+  }
+
+  /// @dev A delisted holder must never be trapped: exits stay open after the gate closes on them.
+  function test_depositWhitelist_neverBlocksExit() public {
+    (uint256 shares, , ) = _deposit(user, 5 ether, 5 ether);
+    _enableWhitelist(); // user is NOT listed
+
+    vm.prank(user);
+    provider.withdraw(marketParams, shares / 2, 0, 0, user, user);
+
+    vm.prank(user);
+    provider.withdrawShares(marketParams, shares / 4, user, user);
+    vm.prank(user);
+    provider.redeemShares(shares / 4, 0, 0, user);
+
+    // All three exit paths ran under the gate: collateral shrank and the shares pulled to the wallet
+    // were redeemed rather than stranded there.
+    assertEq(_collateral(user), shares - shares / 2 - shares / 4, "collateral drawn down while gated");
+    assertEq(provider.balanceOf(user), 0, "wallet shares redeemed while gated");
+  }
+
+  /// @dev Liquidation must keep working under the gate, or bad debt is socialised to lenders.
+  function test_depositWhitelist_neverBlocksLiquidation() public {
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    _borrowAgainstCollateral(user);
+    _enableWhitelist(); // nobody is listed
+    _makeUnhealthy();
+
+    uint256 seize = _collateral(user) / 2;
+    deal(LISUSD, address(this), 1_000_000 ether);
+    IERC20(LISUSD).approve(MOOLAH_PROXY, type(uint256).max);
+    moolah.liquidate(marketParams, user, seize, 0, "");
+    assertLt(_collateral(user), shares, "liquidation still seizes under the gate");
+  }
+
+  function test_setDepositWhitelist_onlyManager() public {
+    address[] memory a = new address[](1);
+    a[0] = user;
+    vm.expectRevert();
+    provider.setDepositWhitelist(a, true);
+    vm.expectRevert();
+    provider.setDepositWhitelistEnabled(true);
+  }
+
   function _collateral(address _user) internal view returns (uint256) {
     (, , uint256 col) = moolah.position(marketId, _user);
     return col;

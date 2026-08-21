@@ -90,8 +90,12 @@ abstract contract V3Provider is
   /// @dev Cumulative rebalance loss (8-decimal USD) recorded so far for `dailyLossDay`.
   uint256 public dailyLossAccum;
 
+  /// @dev Gate on the deposit entry point only. Disabled by default; flip on for a gated launch.
+  bool public depositWhitelistEnabled;
+  mapping(address => bool) public depositWhitelist;
+
   /// @dev Reserved storage for future base variables (keep subclass storage stable on upgrade).
-  uint256[46] private __gap;
+  uint256[44] private __gap;
 
   /* ───────────────────────────── events ───────────────────────────── */
 
@@ -115,6 +119,8 @@ abstract contract V3Provider is
   event SharesRedeemed(address indexed redeemer, uint256 shares, uint256 amount0, uint256 amount1, address receiver);
   event MaxRebalanceLossBpChanged(uint256 maxRebalanceLossBp);
   event MaxDailyLossUsdChanged(uint256 maxDailyLossUsd);
+  event DepositWhitelistEnabledChanged(bool enabled);
+  event DepositWhitelistChanged(address indexed account, bool allowed);
   event RebalanceDailyLossAccrued(uint256 indexed day, uint256 loss, uint256 accum);
 
   /* ───────────────────────────── errors ───────────────────────────── */
@@ -127,6 +133,7 @@ abstract contract V3Provider is
   error Unauthorized();
   error InsufficientShares();
   error OnlyMoolah();
+  error NotWhitelisted();
   error InvalidMarket();
   error StandardEntryDisabled();
   error BnbTransferFailed();
@@ -195,6 +202,23 @@ abstract contract V3Provider is
     emit MaxDailyLossUsdChanged(maxDailyLossUsd);
   }
 
+  /// @notice Turn the deposit whitelist on or off. onlyRole MANAGER.
+  function setDepositWhitelistEnabled(bool enabled) external onlyRole(MANAGER) {
+    depositWhitelistEnabled = enabled;
+    emit DepositWhitelistEnabledChanged(enabled);
+  }
+
+  /// @notice Allow or disallow accounts on the deposit whitelist. onlyRole MANAGER.
+  /// @dev    Removing an account only closes new deposits — it never blocks that account's withdraw,
+  ///         redeem or liquidation.
+  function setDepositWhitelist(address[] calldata accounts, bool allowed) external onlyRole(MANAGER) {
+    for (uint256 i; i < accounts.length; ++i) {
+      if (accounts[i] == address(0)) revert ZeroAddress();
+      depositWhitelist[accounts[i]] = allowed;
+      emit DepositWhitelistChanged(accounts[i], allowed);
+    }
+  }
+
   /* ──────────────────── ERC20 transfer restrictions ───────────────── */
 
   /// @dev Only Moolah may transfer shares (prevents orphaning the position by moving collateral out).
@@ -229,6 +253,9 @@ abstract contract V3Provider is
   ) external payable nonReentrant returns (uint256 shares, uint256 amount0Used, uint256 amount1Used) {
     if (marketParams.collateralToken != address(this)) revert InvalidCollateralToken();
     if (onBehalf == address(0)) revert ZeroAddress();
+    // Check both: gating only msg.sender would let a whitelisted caller open a position for anyone.
+    if (depositWhitelistEnabled && (!depositWhitelist[msg.sender] || !depositWhitelist[onBehalf]))
+      revert NotWhitelisted();
 
     uint256 _amount0Desired = amount0Desired;
     uint256 _amount1Desired = amount1Desired;
