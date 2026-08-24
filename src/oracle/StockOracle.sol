@@ -5,10 +5,7 @@ import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgr
 import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 import { IOracle, TokenConfig } from "../moolah/interfaces/IOracle.sol";
-
-interface IStockOracleSwitch {
-  function isEnabled(address token) external view returns (bool);
-}
+import { IStockOracleSwitch } from "./interfaces/IStockOracleSwitch.sol";
 
 /// @title StockOracle
 /// @notice Moolah {IOracle} for tokenized-stock (bStock) markets.
