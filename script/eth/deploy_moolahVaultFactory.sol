@@ -8,11 +8,10 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { MoolahVaultFactory } from "moolah-vault/MoolahVaultFactory.sol";
 
 /// @notice Deploys MoolahVaultFactory (implementation + ERC1967 proxy) on Ethereum mainnet.
-/// @dev PREREQUISITE: MoolahVaultFactory.MOOLAH_VAULT_IMPL_18 is a compile-time constant baked
-///      into bytecode. Before running this script it MUST be temp-edited to the ETH 18-dec
-///      MoolahVault impl (from deploy_moolahVault_impl.sol) and the project rebuilt, otherwise
-///      createMoolahVault reverts ERC1967InvalidImplementation on ETH. See
-///      docs/runbooks/eth-moolah-vault-factory-deploy.md.
+/// @dev FOLLOW-UP: MOOLAH_VAULT_IMPL_18 is storage, not a compile-time constant, so it is zero
+///      after deployment. The admin MUST call setMoolahVaultImpl with the ETH 18-dec MoolahVault
+///      impl (from deploy_moolahVault_impl.sol) before createMoolahVault will work; until then it
+///      reverts ZeroAddress. See docs/runbooks/eth-moolah-vault-factory-deploy.md.
 ///      The proxy is initialized with admin = deployer (transferred to the admin timelock in a
 ///      follow-up step) and vaultAdmin = ETH admin timelock.
 contract MoolahVaultFactoryDeploy is DeployBase {
