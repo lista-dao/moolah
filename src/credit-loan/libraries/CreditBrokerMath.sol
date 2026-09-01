@@ -80,28 +80,51 @@ library CreditBrokerMath {
   }
 
   /**
-   * @dev Ensure every position's principal either cleared or larger than Moolah.minLoan
-   * @param user The address of the user
+   * @dev Compute every amount `repayAll` needs: broker revenue (interest + penalty), the
+   *      principal of written-off positions, the principal owed to Moolah, and the grand total.
+   * @notice `debtAtMoolah` is derived from the user's borrow shares rather than from the broker's
+   *         own principal book, because the shares are what actually has to be cleared. Callers
+   *         must accrue Moolah interest before calling so the figure is exact for the same block.
+   *         Bad-debt positions carry no Moolah shares (liquidation zeroed them), so their
+   *         principal is settled through the relayer instead and is returned separately.
+   * @param onBehalf The user whose positions are being repaid
+   * @param positions The user's full fixed-position array
+   * @param graceConfig The grace period configuration
    * @param moolah The address of the Moolah contract
+   * @param marketId The broker's market id
+   * @return interestAndPenalty Sum of outstanding interest and delay penalty across all positions
+   * @return badDebtPrincipal Sum of remaining principal across bad-debt positions
+   * @return debtAtMoolah Assets required to clear every borrow share of `onBehalf`
+   * @return totalDebt interestAndPenalty + badDebtPrincipal + debtAtMoolah
    */
-  function checkPositionsMeetsMinLoan(address user, address moolah) public view returns (bool isValid) {
-    // get positions
-    ICreditBroker broker = ICreditBroker(address(this));
-    FixedLoanPosition[] memory fixedPositions = broker.userFixedPositions(user);
-    // assume valid first
-    isValid = true;
-    IMoolah _moolah = IMoolah(moolah);
-    uint256 minLoan = _moolah.minLoan(_moolah.idToMarketParams(ICreditBroker(address(this)).MARKET_ID()));
-    // ensure each position either zero or larger than minLoan
-    // check fixed positions
-    for (uint256 i = 0; i < fixedPositions.length; i++) {
-      FixedLoanPosition memory _fixedPos = fixedPositions[i];
-      uint256 fixedPosDebt = _fixedPos.principal - _fixedPos.principalRepaid;
-      if (fixedPosDebt > 0 && fixedPosDebt < minLoan) {
-        isValid = false;
-        break;
-      }
+  function previewRepayAllAmounts(
+    address onBehalf,
+    FixedLoanPosition[] memory positions,
+    GraceConfig memory graceConfig,
+    address moolah,
+    Id marketId
+  )
+    public
+    view
+    returns (uint256 interestAndPenalty, uint256 badDebtPrincipal, uint256 debtAtMoolah, uint256 totalDebt)
+  {
+    for (uint256 i = 0; i < positions.length; i++) {
+      FixedLoanPosition memory p = positions[i];
+      uint256 remainingPrincipal = p.principal - p.principalRepaid;
+      uint256 remainingInterest = getInterestForFixedPosition(p) - p.interestRepaid;
+      interestAndPenalty +=
+        remainingInterest +
+        getPenaltyForCreditPosition(remainingPrincipal, remainingInterest, p.end, graceConfig);
+      if (p.isBadDebt) badDebtPrincipal += remainingPrincipal;
     }
+
+    Market memory _market = IMoolah(moolah).market(marketId);
+    debtAtMoolah = uint256(IMoolah(moolah).position(marketId, onBehalf).borrowShares).toAssetsUp(
+      _market.totalBorrowAssets,
+      _market.totalBorrowShares
+    );
+
+    totalDebt = interestAndPenalty + badDebtPrincipal + debtAtMoolah;
   }
 
   /**
