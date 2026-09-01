@@ -22,6 +22,11 @@ via_ir = true
 force = false
 build_info = false
 extra_output = []
+# The InterestRateModel ping-every-minute tests walk 3 weeks / 45 days one minute at a time,
+# which lands within a hair of Foundry's 2**30 default (654M of 1.07G locally). The CI toolchain
+# meters slightly differently and tips them over into OutOfGas, so give them real headroom.
+# Kept bounded rather than maxed out so a genuine runaway loop still fails instead of hanging.
+gas_limit = 8589934592 # 2**33
 
 # Compiles the Certora harnesses (certora/helpers, certora/dispatch) against src/.
 # Usage: FOUNDRY_PROFILE=certora forge build
