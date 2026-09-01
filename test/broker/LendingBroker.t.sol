@@ -1713,6 +1713,22 @@ contract LendingBrokerTest is Test {
     broker.updateFixedTermAndRate(term3, false);
   }
 
+  function test_setFixedTerm_minApr_halfPercent() public {
+    // apr = 1.005 * RATE_SCALE = 0.5% APR, exactly MIN_FIXED_TERM_APR
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: 1, duration: 30 days, apr: 1005 * 1e24 });
+    vm.prank(BOT);
+    broker.updateFixedTermAndRate(term, false);
+    FixedTermAndRate[] memory terms = broker.getFixedTerms();
+    assertEq(terms.length, 1);
+    assertEq(terms[0].termId, 1);
+    assertEq(terms[0].apr, 1005 * 1e24);
+    // apr just below the 0.5% minimum -> revert
+    FixedTermAndRate memory belowMin = FixedTermAndRate({ termId: 2, duration: 30 days, apr: 1005 * 1e24 - 1 });
+    vm.expectRevert(LendingBroker.InvalidAPR.selector);
+    vm.prank(BOT);
+    broker.updateFixedTermAndRate(belowMin, false);
+  }
+
   function test_removeFixedTerm_success_and_notFound_revert() public {
     FixedTermAndRate memory term = FixedTermAndRate({ termId: 3, duration: 10 days, apr: 105 * 1e25 });
     vm.prank(BOT);
