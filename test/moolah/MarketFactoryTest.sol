@@ -23,6 +23,7 @@ import { BrokerLiquidator } from "../../src/liquidator/BrokerLiquidator.sol";
 import { LendingBroker } from "../../src/broker/LendingBroker.sol";
 import { LiquidationVault } from "../../src/liquidator/LiquidationVault.sol";
 import { StockOracleSwitch } from "../../src/oracle/StockOracleSwitch.sol";
+import { MockStockOracle } from "./mocks/MockStockOracle.sol";
 
 contract MarketFactoryTest is Test {
   using MarketParamsLib for MarketParams;
@@ -135,7 +136,20 @@ contract MarketFactoryTest is Test {
     );
     marketFactory = MarketFactory(address(marketFactoryProxy));
 
-    // Set storage-based variables via setter
+    // The wiring setters demand their preconditions up front: liquidators already pointing at this
+    // vault, and MANAGER already granted. Same order as the mainnet TimeLock batch.
+    liquidator.setFundSource(address(liquidationVault));
+    publicLiquidator.setFundSource(address(liquidationVault));
+    vm.startPrank(admin);
+    liquidationVault.grantRole(liquidationVault.MANAGER(), address(marketFactory));
+    stockOracleSwitch.grantRole(stockOracleSwitch.MANAGER(), address(marketFactory));
+    vm.stopPrank();
+    vm.startPrank(manager);
+    // the real BrokerLiquidator only accepts a fundSource that lists it
+    liquidationVault.setLiquidator(address(brokerLiquidator), true);
+    brokerLiquidator.setFundSource(address(liquidationVault));
+    vm.stopPrank();
+
     vm.startPrank(admin);
     marketFactory.setRateCalculator(address(rateCalculator));
     marketFactory.setBrokerLiquidator(address(brokerLiquidator));
@@ -153,8 +167,6 @@ contract MarketFactoryTest is Test {
     moolah.grantRole(moolah.MANAGER(), address(marketFactory));
     rateCalculator.grantRole(rateCalculator.MANAGER(), address(marketFactory));
     brokerLiquidator.grantRole(brokerLiquidator.MANAGER(), address(marketFactory));
-    liquidationVault.grantRole(liquidationVault.MANAGER(), address(marketFactory));
-    stockOracleSwitch.grantRole(stockOracleSwitch.MANAGER(), address(marketFactory));
     vm.stopPrank();
   }
 
@@ -546,8 +558,8 @@ contract MarketFactoryTest is Test {
     assertTrue(liquidationVault.tokenWhitelist(address(loanToken)), "loan token not whitelisted in vault");
     assertTrue(liquidationVault.tokenWhitelist(address(collateralToken)), "collateral token not whitelisted in vault");
     // a broker market is liquidated via BrokerLiquidator, but the token whitelist is kept uniform
-    assertSuiteWhitelisted(address(loanToken), true);
-    assertSuiteWhitelisted(address(collateralToken), true);
+    assertBrokerSuiteWhitelisted(address(loanToken), true);
+    assertBrokerSuiteWhitelisted(address(collateralToken), true);
   }
 
   function testCreateStockMarket() public {
@@ -734,18 +746,276 @@ contract MarketFactoryTest is Test {
     marketFactory.setStockOracleSwitch(address(stockOracleSwitch));
     vm.stopPrank();
 
-    vm.startPrank(admin);
-    vm.expectRevert("ZeroAddress");
-    marketFactory.setLiquidationVault(address(0));
+    // the switch still rejects address(0): an unset switch is the ETH default
+    vm.prank(admin);
     vm.expectRevert("ZeroAddress");
     marketFactory.setStockOracleSwitch(address(0));
+  }
+
+  // ───────────────────────── vault pointer cannot drift ─────────────────────────
+
+  /// @dev address(0) is now accepted so a disabled liquidator fundSource can be mirrored.
+  function testSetLiquidationVaultAcceptsZero() public {
+    vm.prank(admin);
+    marketFactory.setLiquidationVault(address(0));
+    assertEq(address(marketFactory.liquidationVault()), address(0), "vault not cleared");
+
+    // creation still works with the vault unwired
+    ERC20Mock loanToken = new ERC20Mock();
+    ERC20Mock collateralToken = new ERC20Mock();
+    oracle.setPrice(address(loanToken), 1e8);
+    oracle.setPrice(address(collateralToken), 1e8);
+    MarketParams memory p = MarketParams({
+      loanToken: address(loanToken),
+      collateralToken: address(collateralToken),
+      lltv: lltv80,
+      irm: address(irm),
+      oracle: address(oracle)
+    });
+    vm.prank(operator);
+    marketFactory.createMarket(p, new address[](0), new address[](0), true, false, false);
+    assertFalse(liquidationVault.tokenWhitelist(address(loanToken)), "vault should be untouched");
+  }
+
+  /// @dev A vault the liquidators do not reflow into is rejected.
+  function testSetLiquidationVaultRejectsFundSourceMismatch() public {
+    LiquidationVault otherImpl = new LiquidationVault();
+    ERC1967Proxy otherProxy = new ERC1967Proxy(
+      address(otherImpl),
+      abi.encodeWithSelector(otherImpl.initialize.selector, admin, manager, pauser, bot)
+    );
+    LiquidationVault other = LiquidationVault(payable(address(otherProxy)));
+    bytes32 otherManager = other.MANAGER();
+    vm.prank(admin);
+    other.grantRole(otherManager, address(marketFactory));
+
+    // liquidator.fundSource still points at the original vault
+    vm.prank(admin);
+    vm.expectRevert("vault != Liquidator fundSource");
+    marketFactory.setLiquidationVault(address(other));
+
+    // move the Liquidator across; now the BrokerLiquidator is out of step
+    liquidator.setFundSource(address(other));
+    vm.prank(admin);
+    vm.expectRevert("vault != BrokerLiquidator fundSource");
+    marketFactory.setLiquidationVault(address(other));
+  }
+
+  // ───────────────────────── setters verify the MANAGER grant ─────────────────────────
+
+  function testWiringRequiresManagerRole() public {
+    MarketFactory factory = newMarketFactory();
+    liquidator.setFundSource(address(liquidationVault));
+
+    vm.startPrank(admin);
+    vm.expectRevert("factory lacks MANAGER on the vault");
+    factory.setLiquidationVault(address(liquidationVault));
+    vm.expectRevert("factory lacks MANAGER on the switch");
+    factory.setStockOracleSwitch(address(stockOracleSwitch));
     vm.stopPrank();
+
+    // grant first, then wiring succeeds
+    vm.startPrank(admin);
+    liquidationVault.grantRole(liquidationVault.MANAGER(), address(factory));
+    stockOracleSwitch.grantRole(stockOracleSwitch.MANAGER(), address(factory));
+    factory.setLiquidationVault(address(liquidationVault));
+    factory.setStockOracleSwitch(address(stockOracleSwitch));
+    vm.stopPrank();
+    assertEq(address(factory.liquidationVault()), address(liquidationVault), "vault not wired");
+    assertEq(address(factory.stockOracleSwitch()), address(stockOracleSwitch), "switch not wired");
+  }
+
+  // ───────────────────────── the stock flag cannot be forgotten ─────────────────────────
+
+  /// @dev A market priced by a StockOracle on our switch must pass stockCollateral = true.
+  function testStockFlagRequiredWhenOracleIsStockOracle() public {
+    MockStockOracle stockOracle = new MockStockOracle(address(stockOracleSwitch));
+    ERC20Mock loanToken = new ERC20Mock();
+    ERC20Mock stockToken = new ERC20Mock();
+    stockOracle.setPrice(address(loanToken), 1e8);
+    stockOracle.setPrice(address(stockToken), 1e8);
+
+    MarketParams memory p = MarketParams({
+      loanToken: address(loanToken),
+      collateralToken: address(stockToken),
+      lltv: lltv80,
+      irm: address(irm),
+      oracle: address(stockOracle)
+    });
+
+    vm.prank(operator);
+    vm.expectRevert("stockCollateral required");
+    marketFactory.createMarket(p, new address[](0), new address[](0), true, false, false);
+
+    // with the flag set it goes through
+    vm.prank(operator);
+    marketFactory.createMarket(p, new address[](0), new address[](0), true, false, true);
+    assertTrue(stockOracleSwitch.registered(address(stockToken)), "stock not registered");
+  }
+
+  /// @dev A StockOracle on a different switch is not ours, so no flag is demanded.
+  function testStockFlagNotRequiredForForeignSwitch() public {
+    MockStockOracle foreign = new MockStockOracle(makeAddr("someOtherSwitch"));
+    ERC20Mock loanToken = new ERC20Mock();
+    ERC20Mock collateralToken = new ERC20Mock();
+    foreign.setPrice(address(loanToken), 1e8);
+    foreign.setPrice(address(collateralToken), 1e8);
+
+    MarketParams memory p = MarketParams({
+      loanToken: address(loanToken),
+      collateralToken: address(collateralToken),
+      lltv: lltv80,
+      irm: address(irm),
+      oracle: address(foreign)
+    });
+    vm.prank(operator);
+    marketFactory.createMarket(p, new address[](0), new address[](0), true, false, false);
+    assertFalse(stockOracleSwitch.registered(address(collateralToken)), "must not be registered");
+  }
+
+  /// @dev A plain oracle has no stockSwitch() at all; the staticcall must fail soft, not revert.
+  function testPlainOracleUnaffectedByStockDerivation() public {
+    ERC20Mock loanToken = new ERC20Mock();
+    ERC20Mock collateralToken = new ERC20Mock();
+    oracle.setPrice(address(loanToken), 1e8);
+    oracle.setPrice(address(collateralToken), 1e8);
+    MarketParams memory p = MarketParams({
+      loanToken: address(loanToken),
+      collateralToken: address(collateralToken),
+      lltv: lltv80,
+      irm: address(irm),
+      oracle: address(oracle)
+    });
+    vm.prank(operator);
+    marketFactory.createMarket(p, new address[](0), new address[](0), true, false, false);
+    (address createdLoanToken, , , , ) = moolah.idToMarketParams(p.id());
+    assertEq(createdLoanToken, address(loanToken), "market not created");
+  }
+
+  // ───────────────────────── the LP stays out of the vault ─────────────────────────
+
+  /// @dev Once the LP is reflow-blacklisted, no later market path may flip the vault whitelist on.
+  function testVaultDenyHoldsAcrossLaterMarkets() public {
+    (ERC20Mock lp, ) = _createSmartMarket();
+    assertTrue(liquidator.reflowBlacklist(address(lp)), "LP not reflow-blacklisted");
+    assertFalse(liquidationVault.tokenWhitelist(address(lp)), "LP leaked into vault");
+
+    // path 1: the LP as plain collateral of another market (liquidatorSmartProvider = false)
+    ERC20Mock loan2 = new ERC20Mock();
+    oracle.setPrice(address(loan2), 1e8);
+    oracle.setPrice(address(lp), 1e8);
+    MarketParams memory plain = MarketParams({
+      loanToken: address(loan2),
+      collateralToken: address(lp),
+      lltv: lltv80,
+      irm: address(irm),
+      oracle: address(oracle)
+    });
+    vm.prank(operator);
+    marketFactory.createMarket(plain, new address[](0), new address[](0), true, false, false);
+    assertFalse(liquidationVault.tokenWhitelist(address(lp)), "LP leaked via plain collateral");
+
+    // path 2: the LP as a LOAN token
+    ERC20Mock coll3 = new ERC20Mock();
+    oracle.setPrice(address(coll3), 1e8);
+    MarketParams memory asLoan = MarketParams({
+      loanToken: address(lp),
+      collateralToken: address(coll3),
+      lltv: lltv80,
+      irm: address(irm),
+      oracle: address(oracle)
+    });
+    vm.prank(operator);
+    marketFactory.createMarket(asLoan, new address[](0), new address[](0), true, false, false);
+    assertFalse(liquidationVault.tokenWhitelist(address(lp)), "LP leaked via loan token");
+
+    // path 3: a fixed-term market with the LP as collateral (always includeVault = true)
+    address relayer = makeAddr("relayer2");
+    LendingBroker broker = newLendingBroker(relayer);
+    bytes32 brokerManager = broker.MANAGER();
+    vm.prank(admin);
+    broker.grantRole(brokerManager, address(marketFactory));
+    MarketFactory.FixedTermMarketParams memory ft = MarketFactory.FixedTermMarketParams({
+      broker: address(broker),
+      loanToken: address(loan2),
+      collateralToken: address(lp),
+      irm: address(irm),
+      lltv: lltv80,
+      ratePerSecond: 1000000000195993755570992534,
+      maxRatePerSecond: 1000000008319516284844716199
+    });
+    vm.prank(operator);
+    marketFactory.createFixedTermMarket(ft);
+    assertFalse(liquidationVault.tokenWhitelist(address(lp)), "LP leaked via fixed-term market");
+  }
+
+  /// @dev Creating the smart market must repair an earlier leak, not merely stop adding to it.
+  function testVaultDenyRepairsExistingLeak() public {
+    ERC20Mock loanToken = new ERC20Mock();
+    ERC20Mock lp = new ERC20Mock();
+    ERC20Mock t0 = new ERC20Mock();
+    ERC20Mock t1 = new ERC20Mock();
+    MockSmartProvider provider = new MockSmartProvider(address(lp));
+    provider.setPrice(address(loanToken), 1e8);
+    provider.setPrice(address(lp), 1e8);
+    provider.addToken(address(t0));
+    provider.addToken(address(t1));
+
+    // an earlier market already leaked the LP into the vault
+    vm.prank(manager);
+    liquidationVault.setTokenWhitelist(address(lp), true);
+    assertTrue(liquidationVault.tokenWhitelist(address(lp)), "precondition");
+
+    MarketParams memory p = MarketParams({
+      loanToken: address(loanToken),
+      collateralToken: address(lp),
+      lltv: lltv80,
+      irm: address(irm),
+      oracle: address(provider)
+    });
+    vm.prank(operator);
+    marketFactory.createMarket(p, new address[](0), new address[](0), true, true, false);
+
+    assertTrue(liquidator.reflowBlacklist(address(lp)), "LP not reflow-blacklisted");
+    assertFalse(liquidationVault.tokenWhitelist(address(lp)), "existing leak not revoked");
+  }
+
+  /// @dev Creates one smart-collateral market and returns (LP collateral, provider).
+  function _createSmartMarket() private returns (ERC20Mock, MockSmartProvider) {
+    ERC20Mock loanToken = new ERC20Mock();
+    ERC20Mock lp = new ERC20Mock();
+    ERC20Mock t0 = new ERC20Mock();
+    ERC20Mock t1 = new ERC20Mock();
+    MockSmartProvider provider = new MockSmartProvider(address(lp));
+    provider.setPrice(address(loanToken), 1e8);
+    provider.setPrice(address(lp), 1e8);
+    provider.addToken(address(t0));
+    provider.addToken(address(t1));
+
+    MarketParams memory p = MarketParams({
+      loanToken: address(loanToken),
+      collateralToken: address(lp),
+      lltv: lltv80,
+      irm: address(irm),
+      oracle: address(provider)
+    });
+    vm.prank(operator);
+    marketFactory.createMarket(p, new address[](0), new address[](0), true, true, false);
+    return (lp, provider);
   }
 
   /// @dev `token` must be whitelisted on Liquidator + BrokerLiquidator, and on the vault iff `inVault`.
+  /// @dev A common market writes the Liquidator only; a BrokerLiquidator entry would be inert.
   function assertSuiteWhitelisted(address token, bool inVault) private view {
     assertTrue(liquidator.tokenWhitelist(token), "token not whitelisted on liquidator");
+    assertFalse(brokerLiquidator.tokenWhitelist(token), "common-market token must not reach brokerLiquidator");
+    assertEq(liquidationVault.tokenWhitelist(token), inVault, "vault whitelist state mismatch");
+  }
+
+  /// @dev A broker market writes the BrokerLiquidator only.
+  function assertBrokerSuiteWhitelisted(address token, bool inVault) private view {
     assertTrue(brokerLiquidator.tokenWhitelist(token), "token not whitelisted on brokerLiquidator");
+    assertFalse(liquidator.tokenWhitelist(token), "broker-market token must not reach liquidator");
     assertEq(liquidationVault.tokenWhitelist(token), inVault, "vault whitelist state mismatch");
   }
 
