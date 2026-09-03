@@ -6,6 +6,8 @@ import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgrade
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import { SafeERC20, IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
+import { IListaV2Factory } from "../dex/interfaces/IListaV2Factory.sol";
+import { IListaV2Pair } from "../dex/interfaces/IListaV2Pair.sol";
 import { IStableSwap } from "../dex/interfaces/IStableSwap.sol";
 import { ILiquidator } from "../liquidator/ILiquidator.sol";
 import { IMoolahVault } from "../moolah-vault/interfaces/IMoolahVault.sol";
@@ -24,6 +26,9 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   /// @dev Sets of liquidator contracts
   EnumerableSet.AddressSet private liquidators;
 
+  /// @dev The Lista V2 factory whose pairs are redeemable by this collector
+  address public v2Factory;
+
   /// @dev Manager role
   bytes32 public constant MANAGER = keccak256("MANAGER");
   /// @dev Bot role
@@ -34,12 +39,28 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   /// @dev Max length for batch operations
   uint256 public constant MAX_LENGTH = 30;
 
+  /// @dev A single V2 LP redemption: burn `lpToken`, requiring at least `minAmount0` / `minAmount1` out
+  struct V2LpRedemption {
+    address lpToken;
+    uint256 minAmount0;
+    uint256 minAmount1;
+  }
+
   event StableSwapPoolUpdated(address indexed pool, bool addPool);
   event LiquidatorUpdated(address indexed liquidator, bool addLiquidator);
   event StableSwapFeeCollected(address indexed pool);
   event LiquidationFeeCollected(address indexed liquidator, address indexed asset, uint256 amount);
   event EmergencyWithdraw(address indexed asset, uint256 amount, address indexed to);
   event VaultFeeAccrued(address indexed vault);
+  event V2FactoryUpdated(address indexed oldFactory, address indexed newFactory);
+  event V2LpRedeemed(
+    address indexed lpToken,
+    uint256 lpAmount,
+    address indexed token0,
+    uint256 amount0,
+    address indexed token1,
+    uint256 amount1
+  );
 
   constructor() {
     _disableInitializers();
@@ -181,6 +202,60 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     emit LiquidationFeeCollected(_liquidator, asset, amount);
   }
 
+  /**
+   * @dev Redeems the full balance of multiple Lista V2 LP tokens
+   * @param redemptions The list of redemptions to perform
+   */
+  function batchRedeemV2Lps(V2LpRedemption[] calldata redemptions) external onlyRole(BOT) {
+    require(redemptions.length > 0 && redemptions.length <= MAX_LENGTH, "invalid length");
+
+    for (uint256 i = 0; i < redemptions.length; i++) {
+      _redeemV2Lp(redemptions[i]);
+    }
+  }
+
+  /**
+   * @dev Redeems the full balance of a Lista V2 LP token into token0 / token1
+   * @param redemption The LP token to redeem and its minimum acceptable output
+   */
+  function redeemV2Lp(V2LpRedemption calldata redemption) external onlyRole(BOT) {
+    _redeemV2Lp(redemption);
+  }
+
+  /// @dev No-op on zero balance, so a batch never fails on an empty pair
+  function _redeemV2Lp(V2LpRedemption calldata redemption) internal {
+    require(v2Factory != address(0), "v2 factory not set");
+
+    address lpToken = redemption.lpToken;
+    (address token0, address token1) = _validateV2Lp(lpToken);
+
+    uint256 lpAmount = IERC20(lpToken).balanceOf(address(this));
+    if (lpAmount == 0) {
+      return;
+    }
+
+    // the pair burns the LP it holds, so send it there first
+    IERC20(lpToken).safeTransfer(lpToken, lpAmount);
+    (uint256 amount0, uint256 amount1) = IListaV2Pair(lpToken).burn(address(this));
+    require(amount0 >= redemption.minAmount0 && amount1 >= redemption.minAmount1, "insufficient output");
+
+    emit V2LpRedeemed(lpToken, lpAmount, token0, amount0, token1, amount1);
+  }
+
+  /**
+   * @dev Authorizes an LP token by provenance instead of a whitelist: the pair must be registered in
+   * `v2Factory`, and that factory must pay its protocol fee LP to this collector.
+   */
+  function _validateV2Lp(address lpToken) internal view returns (address token0, address token1) {
+    IListaV2Factory factory = IListaV2Factory(v2Factory);
+
+    token0 = IListaV2Pair(lpToken).token0();
+    token1 = IListaV2Pair(lpToken).token1();
+
+    require(factory.getPair(token0, token1) == lpToken, "invalid lp token");
+    require(factory.feeTo() == address(this), "not fee recipient");
+  }
+
   /// @dev To receive BNB
   receive() external payable {}
 
@@ -208,6 +283,14 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     }
 
     emit LiquidatorUpdated(liquidator, addLiquidator);
+  }
+
+  function setV2Factory(address factory) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    require(factory != address(0), "zero address");
+    require(factory != v2Factory, "already set");
+
+    emit V2FactoryUpdated(v2Factory, factory);
+    v2Factory = factory;
   }
 
   function emergencyWithdraw(address asset, uint256 amount, address to) external onlyRole(MANAGER) {
@@ -239,6 +322,30 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
 
   function getLiquidators() external view returns (address[] memory) {
     return liquidators.values();
+  }
+
+  /**
+   * @dev Previews `redeemV2Lp`. Amounts are estimated from current reserves and total supply,
+   * so they may drift if the pair mints fee LP on burn or reserves move beforehand.
+   * @param lpToken The address of the Lista V2 LP token (the V2 pair)
+   */
+  function previewRedeemV2Lp(
+    address lpToken
+  ) external view returns (uint256 lpAmount, address token0, uint256 amount0, address token1, uint256 amount1) {
+    require(v2Factory != address(0), "v2 factory not set");
+
+    (token0, token1) = _validateV2Lp(lpToken);
+    lpAmount = IERC20(lpToken).balanceOf(address(this));
+
+    IListaV2Pair pair = IListaV2Pair(lpToken);
+    uint256 totalSupply = pair.totalSupply();
+    if (lpAmount == 0 || totalSupply == 0) {
+      return (lpAmount, token0, 0, token1, 0);
+    }
+
+    (uint112 reserve0, uint112 reserve1, ) = pair.getReserves();
+    amount0 = (lpAmount * reserve0) / totalSupply;
+    amount1 = (lpAmount * reserve1) / totalSupply;
   }
 
   /**
