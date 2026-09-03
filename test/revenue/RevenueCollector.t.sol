@@ -222,6 +222,259 @@ contract RevenueCollectorTest is Test {
     revenueCollector.batchAccrueVaultFees(tooMany);
   }
 
+  function _redemption(
+    address lpToken,
+    uint256 minAmount0,
+    uint256 minAmount1
+  ) internal pure returns (RevenueCollector.V2LpRedemption memory) {
+    return RevenueCollector.V2LpRedemption({ lpToken: lpToken, minAmount0: minAmount0, minAmount1: minAmount1 });
+  }
+
+  function test_redeemV2Lp() public {
+    MockListaV2Factory factory = new MockListaV2Factory(address(revenueCollector));
+    vm.prank(admin);
+    revenueCollector.setV2Factory(address(factory));
+    MockListaV2Pair pair = factory.createPair(address(token0), address(token1));
+    // pair holds 100 token0 / 400 token1 backing 200 LP; the collector owns half of the supply
+    pair.setReserves(100 ether, 400 ether);
+    pair.setTotalSupply(200 ether);
+    pair.setBalance(address(revenueCollector), 100 ether);
+
+    (uint256 lpAmount, address t0, uint256 preview0, address t1, uint256 preview1) = revenueCollector.previewRedeemV2Lp(
+      address(pair)
+    );
+    assertEq(lpAmount, 100 ether);
+    assertEq(t0, address(token0));
+    assertEq(t1, address(token1));
+    assertEq(preview0, 50 ether);
+    assertEq(preview1, 200 ether);
+
+    // only BOT can redeem
+    vm.expectRevert(); // AccessControlUnauthorizedAccount
+    revenueCollector.redeemV2Lp(_redemption(address(pair), 0, 0));
+
+    vm.expectEmit(true, true, true, true);
+    emit RevenueCollector.V2LpRedeemed(address(pair), 100 ether, address(token0), 50 ether, address(token1), 200 ether);
+    vm.prank(bot);
+    revenueCollector.redeemV2Lp(_redemption(address(pair), 0, 0));
+
+    // LP burned, underlying assets received
+    assertEq(pair.balanceOf(address(revenueCollector)), 0);
+    assertEq(pair.totalSupply(), 100 ether);
+    assertEq(token0.balanceOf(address(revenueCollector)), 50 ether);
+    assertEq(token1.balanceOf(address(revenueCollector)), 200 ether);
+  }
+
+  function test_redeemV2Lp_zeroBalance() public {
+    MockListaV2Factory factory = new MockListaV2Factory(address(revenueCollector));
+    vm.prank(admin);
+    revenueCollector.setV2Factory(address(factory));
+    MockListaV2Pair pair = factory.createPair(address(token0), address(token1));
+    pair.setReserves(100 ether, 400 ether);
+    pair.setTotalSupply(200 ether);
+
+    (uint256 lpAmount, , uint256 preview0, , uint256 preview1) = revenueCollector.previewRedeemV2Lp(address(pair));
+    assertEq(lpAmount, 0);
+    assertEq(preview0, 0);
+    assertEq(preview1, 0);
+
+    // no-op instead of a revert
+    vm.prank(bot);
+    revenueCollector.redeemV2Lp(_redemption(address(pair), 0, 0));
+
+    assertEq(pair.burnCalls(), 0);
+    assertEq(token0.balanceOf(address(revenueCollector)), 0);
+    assertEq(token1.balanceOf(address(revenueCollector)), 0);
+  }
+
+  /// @dev The factory pays its protocol fee LP elsewhere, so the collector has no claim on it.
+  function test_redeemV2Lp_feeToNotCollector() public {
+    MockListaV2Factory factory = new MockListaV2Factory(makeAddr("otherFeeTo"));
+    vm.prank(admin);
+    revenueCollector.setV2Factory(address(factory));
+    MockListaV2Pair pair = factory.createPair(address(token0), address(token1));
+    pair.setReserves(100 ether, 400 ether);
+    pair.setTotalSupply(200 ether);
+    pair.setBalance(address(revenueCollector), 100 ether);
+
+    vm.prank(bot);
+    vm.expectRevert("not fee recipient");
+    revenueCollector.redeemV2Lp(_redemption(address(pair), 0, 0));
+
+    vm.expectRevert("not fee recipient");
+    revenueCollector.previewRedeemV2Lp(address(pair));
+
+    // enabling feeTo on the factory makes the same LP redeemable
+    factory.setFeeTo(address(revenueCollector));
+    vm.prank(bot);
+    revenueCollector.redeemV2Lp(_redemption(address(pair), 0, 0));
+    assertEq(token0.balanceOf(address(revenueCollector)), 50 ether);
+  }
+
+  function test_setV2Factory() public {
+    MockListaV2Factory factory = new MockListaV2Factory(address(revenueCollector));
+    assertEq(revenueCollector.v2Factory(), address(0));
+
+    // only DEFAULT_ADMIN_ROLE can pin the factory
+    vm.prank(manager);
+    vm.expectRevert(); // AccessControlUnauthorizedAccount
+    revenueCollector.setV2Factory(address(factory));
+
+    vm.startPrank(admin);
+    vm.expectRevert("zero address");
+    revenueCollector.setV2Factory(address(0));
+
+    vm.expectEmit(true, true, true, true);
+    emit RevenueCollector.V2FactoryUpdated(address(0), address(factory));
+    revenueCollector.setV2Factory(address(factory));
+    assertEq(revenueCollector.v2Factory(), address(factory));
+
+    vm.expectRevert("already set");
+    revenueCollector.setV2Factory(address(factory));
+
+    MockListaV2Factory factory2 = new MockListaV2Factory(address(revenueCollector));
+    revenueCollector.setV2Factory(address(factory2));
+    vm.stopPrank();
+
+    assertEq(revenueCollector.v2Factory(), address(factory2));
+  }
+
+  function test_redeemV2Lp_factoryNotSet() public {
+    MockListaV2Factory factory = new MockListaV2Factory(address(revenueCollector));
+    MockListaV2Pair pair = factory.createPair(address(token0), address(token1));
+    pair.setBalance(address(revenueCollector), 100 ether);
+
+    vm.prank(bot);
+    vm.expectRevert("v2 factory not set");
+    revenueCollector.redeemV2Lp(_redemption(address(pair), 0, 0));
+
+    vm.expectRevert("v2 factory not set");
+    revenueCollector.previewRedeemV2Lp(address(pair));
+  }
+
+  /// @dev A real pair, but from a factory other than the pinned one.
+  function test_redeemV2Lp_foreignFactory() public {
+    MockListaV2Factory pinned = new MockListaV2Factory(address(revenueCollector));
+    vm.prank(admin);
+    revenueCollector.setV2Factory(address(pinned));
+
+    MockListaV2Factory foreign = new MockListaV2Factory(address(revenueCollector));
+    MockListaV2Pair pair = foreign.createPair(address(token0), address(token1));
+    pair.setReserves(100 ether, 400 ether);
+    pair.setTotalSupply(200 ether);
+    pair.setBalance(address(revenueCollector), 100 ether);
+
+    vm.prank(bot);
+    vm.expectRevert("invalid lp token");
+    revenueCollector.redeemV2Lp(_redemption(address(pair), 0, 0));
+  }
+
+  /// @dev A pair-shaped contract the pinned factory does not know about is rejected.
+  function test_redeemV2Lp_notRegisteredInFactory() public {
+    MockListaV2Factory factory = new MockListaV2Factory(address(revenueCollector));
+    vm.prank(admin);
+    revenueCollector.setV2Factory(address(factory));
+    MockListaV2Pair rogue = new MockListaV2Pair(address(token0), address(token1));
+    rogue.setReserves(100 ether, 400 ether);
+    rogue.setTotalSupply(200 ether);
+    rogue.setBalance(address(revenueCollector), 100 ether);
+
+    vm.prank(bot);
+    vm.expectRevert("invalid lp token");
+    revenueCollector.redeemV2Lp(_redemption(address(rogue), 0, 0));
+
+    vm.expectRevert("invalid lp token");
+    revenueCollector.previewRedeemV2Lp(address(rogue));
+  }
+
+  function test_batchRedeemV2Lps() public {
+    MockListaV2Factory factory = new MockListaV2Factory(address(revenueCollector));
+    vm.prank(admin);
+    revenueCollector.setV2Factory(address(factory));
+
+    MockListaV2Pair pair1 = factory.createPair(address(token0), address(token1));
+    pair1.setReserves(100 ether, 400 ether);
+    pair1.setTotalSupply(200 ether);
+    pair1.setBalance(address(revenueCollector), 100 ether);
+
+    // pair2 shares token0 with pair1 and holds no LP balance for the collector
+    MockListaV2Pair pair2 = factory.createPair(address(token0), address(token4));
+    pair2.setReserves(10 ether, 20 ether);
+    pair2.setTotalSupply(100 ether);
+
+    MockListaV2Pair pair3 = factory.createPair(address(token4), address(token1));
+    pair3.setReserves(30 ether, 60 ether);
+    pair3.setTotalSupply(300 ether);
+    pair3.setBalance(address(revenueCollector), 150 ether);
+
+    address[] memory lpTokens = new address[](3);
+    lpTokens[0] = address(pair1);
+    lpTokens[1] = address(pair2);
+    lpTokens[2] = address(pair3);
+
+    RevenueCollector.V2LpRedemption[] memory redemptions = new RevenueCollector.V2LpRedemption[](3);
+    redemptions[0] = _redemption(lpTokens[0], 50 ether, 200 ether);
+    redemptions[1] = _redemption(lpTokens[1], 0, 0);
+    redemptions[2] = _redemption(lpTokens[2], 15 ether, 30 ether);
+
+    vm.expectRevert(); // AccessControlUnauthorizedAccount
+    revenueCollector.batchRedeemV2Lps(redemptions);
+
+    vm.prank(bot);
+    revenueCollector.batchRedeemV2Lps(redemptions);
+
+    assertEq(pair1.burnCalls(), 1);
+    assertEq(pair2.burnCalls(), 0); // skipped: zero balance
+    assertEq(pair3.burnCalls(), 1);
+
+    assertEq(token0.balanceOf(address(revenueCollector)), 50 ether);
+    assertEq(token1.balanceOf(address(revenueCollector)), 230 ether); // 200 from pair1 + 30 from pair3
+    assertEq(token4.balanceOf(address(revenueCollector)), 15 ether);
+  }
+
+  function test_batchRedeemV2Lps_invalidLength() public {
+    MockListaV2Factory factory = new MockListaV2Factory(address(revenueCollector));
+    vm.prank(admin);
+    revenueCollector.setV2Factory(address(factory));
+
+    vm.prank(bot);
+    vm.expectRevert("invalid length");
+    revenueCollector.batchRedeemV2Lps(new RevenueCollector.V2LpRedemption[](0));
+
+    RevenueCollector.V2LpRedemption[] memory tooMany = new RevenueCollector.V2LpRedemption[](31);
+    for (uint256 i = 0; i < 31; i++) {
+      tooMany[i] = _redemption(address(factory.createPair(address(uint160(i + 1000)), address(token1))), 0, 0);
+    }
+    vm.prank(bot);
+    vm.expectRevert("invalid length");
+    revenueCollector.batchRedeemV2Lps(tooMany);
+  }
+
+  function test_redeemV2Lp_slippage() public {
+    MockListaV2Factory factory = new MockListaV2Factory(address(revenueCollector));
+    vm.prank(admin);
+    revenueCollector.setV2Factory(address(factory));
+    MockListaV2Pair pair = factory.createPair(address(token0), address(token1));
+    pair.setReserves(100 ether, 400 ether);
+    pair.setTotalSupply(200 ether);
+    pair.setBalance(address(revenueCollector), 100 ether);
+
+    // redeeming half the supply yields 50 token0 / 200 token1
+    vm.prank(bot);
+    vm.expectRevert("insufficient output");
+    revenueCollector.redeemV2Lp(_redemption(address(pair), 50 ether + 1, 0));
+
+    vm.prank(bot);
+    vm.expectRevert("insufficient output");
+    revenueCollector.redeemV2Lp(_redemption(address(pair), 0, 200 ether + 1));
+
+    // exact expected amounts pass
+    vm.prank(bot);
+    revenueCollector.redeemV2Lp(_redemption(address(pair), 50 ether, 200 ether));
+    assertEq(token0.balanceOf(address(revenueCollector)), 50 ether);
+    assertEq(token1.balanceOf(address(revenueCollector)), 200 ether);
+  }
+
   function test_emergencyWithdraw() public {
     // fund revenue collector
     token0.setBalance(address(revenueCollector), 50 ether);
@@ -288,5 +541,87 @@ contract MockMoolahVault {
     lastAssets = assets;
     lastReceiver = receiver;
     return 0;
+  }
+}
+
+contract MockListaV2Factory {
+  address public feeTo;
+
+  mapping(address => mapping(address => address)) public getPair;
+
+  constructor(address _feeTo) {
+    feeTo = _feeTo;
+  }
+
+  function setFeeTo(address _feeTo) external {
+    feeTo = _feeTo;
+  }
+
+  function createPair(address tokenA, address tokenB) external returns (MockListaV2Pair pair) {
+    pair = new MockListaV2Pair(tokenA, tokenB);
+    getPair[tokenA][tokenB] = address(pair);
+    getPair[tokenB][tokenA] = address(pair);
+  }
+}
+
+contract MockListaV2Pair {
+  address public token0;
+  address public token1;
+
+  uint112 private reserve0;
+  uint112 private reserve1;
+  uint256 public totalSupply;
+  uint256 public burnCalls;
+
+  mapping(address => uint256) public balanceOf;
+
+  constructor(address _token0, address _token1) {
+    token0 = _token0;
+    token1 = _token1;
+  }
+
+  function setReserves(uint112 _reserve0, uint112 _reserve1) external {
+    reserve0 = _reserve0;
+    reserve1 = _reserve1;
+  }
+
+  function setTotalSupply(uint256 _totalSupply) external {
+    totalSupply = _totalSupply;
+  }
+
+  function setBalance(address account, uint256 amount) external {
+    balanceOf[account] = amount;
+  }
+
+  function getReserves() external view returns (uint112, uint112, uint32) {
+    return (reserve0, reserve1, 0);
+  }
+
+  function transfer(address to, uint256 amount) external returns (bool) {
+    require(balanceOf[msg.sender] >= amount, "insufficient balance");
+    balanceOf[msg.sender] -= amount;
+    balanceOf[to] += amount;
+    return true;
+  }
+
+  /// @dev Mirrors Uniswap V2: burns the LP held by the pair and pays out a pro-rata share of reserves.
+  function burn(address to) external returns (uint256 amount0, uint256 amount1) {
+    burnCalls += 1;
+
+    uint256 liquidity = balanceOf[address(this)];
+    require(liquidity > 0, "INSUFFICIENT_LIQUIDITY_BURNED");
+
+    amount0 = (liquidity * reserve0) / totalSupply;
+    amount1 = (liquidity * reserve1) / totalSupply;
+
+    balanceOf[address(this)] = 0;
+    totalSupply -= liquidity;
+    reserve0 -= uint112(amount0);
+    reserve1 -= uint112(amount1);
+
+    ERC20Mock(token0).setBalance(address(this), amount0);
+    ERC20Mock(token0).transfer(to, amount0);
+    ERC20Mock(token1).setBalance(address(this), amount1);
+    ERC20Mock(token1).transfer(to, amount1);
   }
 }
