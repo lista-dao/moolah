@@ -229,6 +229,91 @@ contract YieldAccountForkTest is Test {
     }
   }
 
+  /// @dev the delegatee is set at init, not left to a later call — slisBNBx starts accruing with
+  ///      the first deposit
+  function test_initialize_delegateeIsMandatory() public {
+    address minter = PROVIDER.slisBNBxMinter();
+    assertTrue(minter != address(0));
+    assertEq(ISlisBNBxMinter(minter).delegation(address(account)), owner);
+
+    // slisBNBx actually lands on the delegatee once collateral is in
+    _depositSlis(1000 ether);
+    (uint256 userPart, ) = ISlisBNBxMinter(minter).userModuleBalance(address(account), address(PROVIDER));
+    assertGt(userPart, 0);
+
+    // a zero delegatee is rejected at init
+    address[] memory r = new address[](1);
+    r[0] = owner;
+    YieldAccount impl = new YieldAccount(address(MOOLAH), address(PROVIDER), owner);
+    vm.expectRevert(IYieldAccount.ZeroAddress.selector);
+    new ERC1967Proxy(
+      address(impl),
+      abi.encodeCall(YieldAccount.initialize, (TIMELOCK, manager, pauser, params, treasury, 0.001 ether, address(0), r))
+    );
+  }
+
+  /* ----------------------------- donations ----------------------------- */
+
+  /// @dev a third party cannot reach the collateral side of Moolah directly: with a provider
+  ///      registered, Moolah only accepts supplyCollateral from that provider
+  function test_donation_moolahSupplyCollateralIsBlocked() public {
+    deal(address(SLISBNB), donor, 10 ether);
+    vm.startPrank(donor);
+    SLISBNB.approve(address(MOOLAH), 10 ether);
+    vm.expectRevert(bytes(ErrorsLib.NOT_PROVIDER));
+    MOOLAH.supplyCollateral(params, 10 ether, address(account), "");
+    vm.stopPrank();
+  }
+
+  /// @dev a donation through the provider is protocol yield, and `sync` is not what handles it —
+  ///      `sync` only clamps principal when collateral UNITS drop. The skim collects it.
+  function test_donation_viaProvider_syncChangesNothing() public {
+    _depositSlis(1000 ether);
+    uint256 principal = account.principalBnb();
+
+    _donate(50 ether);
+    uint256 claimable = account.claimableYield();
+    assertGt(claimable, 0);
+
+    // sync is a no-op here: nothing was seized
+    account.sync();
+    assertEq(account.principalBnb(), principal);
+    assertEq(account.claimableYield(), claimable);
+
+    // the skim is what moves it, and it goes to the treasury
+    vm.prank(keeper);
+    uint256 skimmed = account.skim();
+    assertApproxEqAbs(skimmed, 50 ether, 2);
+    assertEq(SLISBNB.balanceOf(treasury), skimmed);
+    assertEq(account.principalBnb(), principal);
+  }
+
+  /// @dev MOOLAH.supply is the LEND side: it hands the account supplyShares in lisUSD, which is not
+  ///      part of the account's accounting at all. `sync` cannot see it and the account cannot
+  ///      withdraw it — a stray supply position is stuck until an upgrade.
+  function test_donation_moolahSupplyIsInvisibleAndStuck() public {
+    _depositSlis(1000 ether);
+    uint256 principal = account.principalBnb();
+    uint256 coll = account.collateral();
+    uint256 claimable = account.claimableYield();
+
+    deal(address(LISUSD), donor, 1000 ether);
+    vm.startPrank(donor);
+    LISUSD.approve(address(MOOLAH), 1000 ether);
+    MOOLAH.supply(params, 1000 ether, 0, address(account), "");
+    vm.stopPrank();
+
+    // the account now holds a lending position
+    assertGt(MOOLAH.position(id, address(account)).supplyShares, 0);
+
+    // none of the account's accounting moved, and sync does not change that
+    account.sync();
+    assertEq(account.principalBnb(), principal);
+    assertEq(account.collateral(), coll);
+    assertEq(account.trackedCollateral(), coll);
+    assertEq(account.claimableYield(), claimable);
+  }
+
   /* ----------------------------- deposits ----------------------------- */
 
   function test_depositSlisBnb() public {
@@ -493,6 +578,35 @@ contract YieldAccountForkTest is Test {
     assertEq(account.debt(), 0);
     assertEq(MOOLAH.position(id, address(account)).borrowShares, 0);
     assertEq(LISUSD.balanceOf(address(account)), 0);
+  }
+
+  /// @dev anyone can repay this account's debt straight through Moolah, without touching the
+  ///      account: Moolah gates repay only when the market has a broker, and this one has none
+  function test_repay_byThirdParty_directlyOnMoolah() public {
+    _depositSlis(1000 ether);
+    uint256 borrowAmount = account.borrowable() / 2;
+    vm.prank(owner);
+    account.borrow(borrowAmount, owner);
+
+    uint256 debtBefore = account.debt();
+    uint256 principalBefore = account.principalBnb();
+    uint256 collBefore = account.collateral();
+    uint256 quoteBefore = account.borrowable();
+
+    uint256 amount = debtBefore / 4;
+    deal(address(LISUSD), stranger, amount);
+    vm.startPrank(stranger);
+    LISUSD.approve(address(MOOLAH), amount);
+    MOOLAH.repay(params, amount, 0, address(account), "");
+    vm.stopPrank();
+
+    assertApproxEqAbs(account.debt(), debtBefore - amount, 1e6);
+    // the account's own accounting does not track debt, so nothing drifts
+    assertEq(account.principalBnb(), principalBefore);
+    assertEq(account.collateral(), collBefore);
+    assertEq(account.trackedCollateral(), collBefore);
+    // the freed room shows up in the quote
+    assertGt(account.borrowable(), quoteBefore);
   }
 
   /* ----------------------------- liquidation / sync ----------------------------- */

@@ -9,6 +9,8 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { YieldAccount } from "../../src/utils/YieldAccount.sol";
+import { ISlisBnbProvider } from "../../src/provider/interfaces/IProvider.sol";
+import { ISlisBNBxMinter } from "../../src/utils/interfaces/ISlisBNBx.sol";
 
 /// @dev Single instance on purpose — no factory. A second owner or market means a second proxy
 ///      from this same implementation.
@@ -24,9 +26,13 @@ contract DeployYieldAccount is DeployBase {
   address moolah = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
   address provider = 0x33f7A980a246f9B8FEA2254E3065576E127D4D5f; // lending SlisBNBProvider
 
-  // holds OWNER, receives borrowed assets and withdrawn principal, and is the slisBNBx delegatee
-  // (97% user share; the module's 3% feeRate goes to the minter's MPC wallets)
+  // holds OWNER, receives borrowed assets and withdrawn principal
   address owner = 0x0966602E47F6a3CA5692529F1D54EcD1d9B09175;
+
+  // slisBNBx delegatee — receives the module's 97% user share (the 3% feeRate goes to the minter's
+  // own MPC wallets). Typically an MPC wallet rather than the owner, matching how this account's
+  // clisBNB is held in the CDP today. CONFIRM THIS ADDRESS before running.
+  address delegatee = 0xD57E5321e67607Fab38347D96394e0E58509C506;
 
   // skim destination for collateral value above principal. MANAGER-settable afterwards.
   address treasury = 0x8d388136d578dCD791D081c6042284CED6d9B0c6; // B0c6
@@ -73,7 +79,10 @@ contract DeployYieldAccount is DeployBase {
     // initialize rides in the proxy constructor: no block where this proxy is uninitialized
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
-      abi.encodeCall(YieldAccount.initialize, (admin, manager, pauser, params, treasury, minSkimBnb, owner, receivers))
+      abi.encodeCall(
+        YieldAccount.initialize,
+        (admin, manager, pauser, params, treasury, minSkimBnb, delegatee, receivers)
+      )
     );
     console.log("YieldAccount proxy: ", address(proxy));
 
@@ -91,6 +100,8 @@ contract DeployYieldAccount is DeployBase {
     require(account.principalBnb() == 0, "principal");
     require(account.isReceiver(owner), "receiver");
     require(account.migrator() == address(0), "migrator preset");
+    address minter = ISlisBnbProvider(provider).slisBNBxMinter();
+    require(ISlisBNBxMinter(minter).delegation(address(account)) == delegatee, "delegatee");
 
     require(account.hasRole(account.DEFAULT_ADMIN_ROLE(), admin), "admin");
     require(account.hasRole(account.MANAGER(), manager), "manager");

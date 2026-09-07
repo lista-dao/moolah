@@ -42,6 +42,7 @@ interface IYieldAccount {
   error ReceiverNotFound();
   error NoReceiver();
   error WithdrawShortfall();
+  error MinterNotSet();
 
   /* ----------------------------- immutables ----------------------------- */
 

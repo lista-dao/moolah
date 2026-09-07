@@ -117,7 +117,7 @@ contract YieldAccount is
   /// @param _marketParams the slisBNB market this account operates on
   /// @param _treasury skim destination
   /// @param _minSkimBnb minimum skim size in BNB value
-  /// @param delegatee initial slisBNBx delegatee (typically the owner); 0 to skip
+  /// @param delegatee slisBNBx delegatee, set at init (typically an MPC wallet); must be non-zero
   /// @param _receivers initial borrow/withdraw destinations, must be non-empty
   function initialize(
     address admin,
@@ -133,6 +133,7 @@ contract YieldAccount is
     require(manager != address(0), ZeroAddress());
     require(pauser != address(0), ZeroAddress());
     require(_treasury != address(0), ZeroAddress());
+    require(delegatee != address(0), ZeroAddress());
     require(_marketParams.collateralToken == TOKEN, InvalidMarket());
     // an empty list deploys a contract whose borrow and withdraw revert on every call
     require(_receivers.length > 0, NoReceiver());
@@ -161,13 +162,14 @@ contract YieldAccount is
       _addReceiver(_receivers[i]);
     }
 
-    if (delegatee != address(0)) {
-      address minter = PROVIDER.slisBNBxMinter();
-      if (minter != address(0)) {
-        ISlisBNBxMinter(minter).delegateAllTo(delegatee);
-        emit SetDelegatee(delegatee);
-      }
-    }
+    // delegate at init rather than leaving it to a later call: slisBNBx starts accruing with the
+    // first deposit, and an unset delegatee would mint it to this contract, where only
+    // `delegateSlisBNBx` could move it out
+    address minter = PROVIDER.slisBNBxMinter();
+    require(minter != address(0), MinterNotSet());
+    ISlisBNBxMinter(minter).delegateAllTo(delegatee);
+
+    emit SetDelegatee(delegatee);
   }
 
   modifier onlyOwner() {
