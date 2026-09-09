@@ -124,6 +124,7 @@ interface ICreditBroker is ICreditBrokerBase, IProvider {
     uint256 listaPrice
   );
   event PositionLiquidate(address indexed user, uint256 posId);
+  event AllPositionsRepaid(address indexed user, uint256 totalRepaid);
 
   /// ------------------------------
   ///        View functions
@@ -144,6 +145,10 @@ interface ICreditBroker is ICreditBrokerBase, IProvider {
 
   /// @dev get the grace config for credit broker
   function getGraceConfig() external view returns (GraceConfig memory);
+
+  /// @dev preview the loan token amount `repayAll(user)` will pull from the caller
+  /// @param user The address of the user whose positions would be cleared
+  function previewRepayAll(address user) external view returns (uint256 totalDebt);
 
   /// ------------------------------
   ///      External functions
@@ -181,6 +186,12 @@ interface ICreditBroker is ICreditBrokerBase, IProvider {
   /// @param posIdx The index of the fixed position to repay
   /// @param onBehalf The address of the user whose position to repay
   function repay(uint256 amount, uint256 posIdx, address onBehalf) external;
+
+  /// @dev clear every outstanding fixed loan position of a user in one call
+  /// @notice the only exit for a position stranded below Moolah's minimum loan, which can no
+  ///         longer be repaid partially; use `previewRepayAll` to size the approval
+  /// @param onBehalf The address of the user whose positions to repay
+  function repayAll(address onBehalf) external;
 
   /// @dev withdraw collateral(credit token) from the broker
   /// @param amount The amount of collateral to withdraw

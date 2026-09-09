@@ -12,15 +12,13 @@ import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 import { ICreditBroker, FixedLoanPosition, FixedTermAndRate, GraceConfig, FixedTermType } from "./interfaces/ICreditBroker.sol";
 import { CreditBrokerMath, RATE_SCALE } from "./libraries/CreditBrokerMath.sol";
-import { ICreditBrokerInterestRelayer } from "./interfaces/ICreditBrokerInterestRelayer.sol";
 
 import { MarketParamsLib } from "../moolah/libraries/MarketParamsLib.sol";
-import { SharesMathLib } from "../moolah/libraries/SharesMathLib.sol";
 import { Id, IMoolah, MarketParams, Market, Position } from "../moolah/interfaces/IMoolah.sol";
 import { IOracle } from "../moolah/interfaces/IOracle.sol";
-import { UtilsLib } from "../moolah/libraries/UtilsLib.sol";
 import { MoolahOperateLib } from "./libraries/MoolahOperateLib.sol";
 import { CreditBrokerLib } from "./libraries/CreditBrokerLib.sol";
+import { CreditBrokerOperatorLib } from "./libraries/CreditBrokerOperatorLib.sol";
 
 import { ICreditToken } from "./interfaces/ICreditToken.sol";
 
@@ -40,8 +38,6 @@ contract CreditBroker is
 {
   using SafeERC20 for IERC20;
   using MarketParamsLib for MarketParams;
-  using SharesMathLib for uint256;
-  using UtilsLib for uint256;
   using EnumerableSet for EnumerableSet.AddressSet;
 
   // ------- Roles -------
@@ -288,7 +284,8 @@ contract CreditBroker is
     bytes32[] calldata proof
   ) external override marketIdSet whenNotPaused nonReentrant syncCreditScore(msg.sender, score, proof) {
     require(collateralAmount > 0 || repayAmount > 0, "zero amount");
-    if (repayAmount > 0) _repay(repayAmount, posId, msg.sender, 0);
+    if (repayAmount > 0)
+      CreditBrokerOperatorLib.repay(fixedLoanPositions, _operatorCtx(), repayAmount, posId, msg.sender, 0);
     if (collateralAmount > 0) _withdrawCollateral(collateralAmount, score, proof);
   }
 
@@ -304,7 +301,20 @@ contract CreditBroker is
     uint256 posId,
     address onBehalf
   ) external override marketIdSet whenNotPaused nonReentrant {
-    _repay(amount, posId, onBehalf, 0);
+    CreditBrokerOperatorLib.repay(fixedLoanPositions, _operatorCtx(), amount, posId, onBehalf, 0);
+  }
+
+  /**
+   * @dev Clear every outstanding fixed loan position of `onBehalf` in one call
+   * @notice Charges all outstanding interest plus any delay penalty, exactly as `repay` does.
+   *         This is the only exit for a position stranded below Moolah's minimum loan — one
+   *         left in the `(0, minLoan)` band by a loan-token price move or a `minLoanValue`
+   *         change — since such a position can no longer be repaid partially. The caller must
+   *         have approved the full outstanding debt, which `previewRepayAll` reports.
+   * @param onBehalf The address of the user whose positions to repay
+   */
+  function repayAll(address onBehalf) external override marketIdSet whenNotPaused nonReentrant {
+    CreditBrokerOperatorLib.repayAll(fixedLoanPositions, _operatorCtx(), onBehalf);
   }
 
   /**
@@ -320,33 +330,29 @@ contract CreditBroker is
     uint256 posId,
     address onBehalf
   ) external override marketIdSet whenNotPaused nonReentrant {
-    require(listaAmount > 0, "zero amount");
-    require(IERC20Metadata(LOAN_TOKEN).decimals() == 18, "decimal mismatch");
-    uint256 listaPrice = IOracle(ORACLE).peek(LISTA);
-    uint256 maxListaAmount = CreditBrokerMath.getMaxListaForInterestRepay(
-      _getFixedPositionByPosId(onBehalf, posId),
-      listaPrice,
-      listaDiscountRate
+    CreditBrokerOperatorLib.repayInterestWithLista(
+      fixedLoanPositions,
+      _operatorCtx(),
+      loanTokenAmount,
+      listaAmount,
+      posId,
+      onBehalf
     );
+  }
 
-    if (listaAmount > maxListaAmount) {
-      listaAmount = maxListaAmount;
-    }
-
-    // transfer LISTA from msg.sender to Relayer
-    IERC20(LISTA).safeTransferFrom(msg.sender, RELAYER, listaAmount);
-
-    uint256 interestAmount = CreditBrokerMath.getInterestAmountFromLista(listaAmount, listaPrice, listaDiscountRate);
-
-    // transfer interest amount from Relayer to address(this)
-    ICreditBrokerInterestRelayer(RELAYER).transferLoan(interestAmount);
-
-    // add interest amount to total repay amount
-    loanTokenAmount += interestAmount;
-
-    _repay(loanTokenAmount, posId, onBehalf, interestAmount);
-
-    emit RepayInterestWithLista(onBehalf, posId, interestAmount, listaAmount, listaPrice);
+  /// @dev Build the operator-library context. Internal helper, inlined.
+  function _operatorCtx() private view returns (CreditBrokerOperatorLib.OperatorContext memory) {
+    return
+      CreditBrokerOperatorLib.OperatorContext({
+        moolah: MOOLAH,
+        loanToken: LOAN_TOKEN,
+        relayer: RELAYER,
+        lista: LISTA,
+        oracle: address(ORACLE),
+        marketId: MARKET_ID,
+        listaDiscountRate: listaDiscountRate,
+        graceConfig: graceConfig
+      });
   }
 
   ///////////////////////////////////////
@@ -463,6 +469,23 @@ contract CreditBroker is
     return graceConfig;
   }
 
+  /**
+   * @dev Preview the loan token amount `repayAll(user)` will pull from the caller
+   * @notice Interest keeps accruing, so quote and send in the same transaction, or approve a
+   *         margin above the quote — `repayAll` only pulls what it needs.
+   * @param user The address of the user whose positions would be cleared
+   * @return totalDebt The total loan token amount required to clear every position
+   */
+  function previewRepayAll(address user) external view override returns (uint256 totalDebt) {
+    (, , , totalDebt) = CreditBrokerMath.previewRepayAllAmounts(
+      user,
+      fixedLoanPositions[user],
+      graceConfig,
+      address(MOOLAH),
+      MARKET_ID
+    );
+  }
+
   ///////////////////////////////////////
   /////      Internal functions     /////
   ///////////////////////////////////////
@@ -543,127 +566,10 @@ contract CreditBroker is
     userPositions[userPositions.length - 1].borrowedShares = borrowedShares;
     // transfer loan token to user
     IERC20(LOAN_TOKEN).safeTransfer(user, amount);
-    // validate positions
-    _validatePositions(user);
+    // validate only the position just created
+    require(amount >= MOOLAH.minLoan(_getMarketParams(MARKET_ID)), "below min loan");
     // emit event
     emit FixedLoanPositionCreated(user, fixedPosUuid, amount, start, end, term.apr, termId);
-  }
-
-  function _repay(uint256 amount, uint256 posId, address onBehalf, uint256 receivedInterest) internal {
-    require(amount > 0, "zero amount");
-    require(onBehalf != address(0), "zero address");
-    address user = msg.sender;
-
-    // fetch position (will revert if not found)
-    FixedLoanPosition memory position = _getFixedPositionByPosId(onBehalf, posId);
-
-    // check if position is penalized; if so, must pay in full
-    if (_isPositionPenalized(position)) {
-      uint256 totalRepayNeeded = CreditBrokerMath.getTotalRepayNeeded(position, graceConfig);
-      require(amount >= totalRepayNeeded, "penalized position must fully repaid");
-    }
-
-    // remaining principal before repayment
-    uint256 remainingPrincipal = position.principal - position.principalRepaid;
-    uint256 remainingInterest = CreditBrokerMath.getInterestForFixedPosition(position) - position.interestRepaid;
-
-    // initialize repay amounts
-    uint256 repayInterestAmt = amount < remainingInterest ? amount : remainingInterest;
-    uint256 repayPrincipalAmt = amount - repayInterestAmt;
-
-    // repay interest first, it might be zero if user just repaid before
-    if (repayInterestAmt > 0) {
-      if (repayInterestAmt > receivedInterest) {
-        IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), repayInterestAmt - receivedInterest);
-      }
-
-      // update repaid interest amount
-      position.interestRepaid += repayInterestAmt;
-      // supply interest into vault as revenue
-      MoolahOperateLib.supplyToMoolahVault(LOAN_TOKEN, RELAYER, repayInterestAmt);
-    }
-
-    uint256 penalty = 0;
-    uint256 principalRepaid = 0;
-    // then repay principal if there is any amount left
-    if (repayPrincipalAmt > 0) {
-      // ----- delay penalty
-      // check delay penalty if user is repaying after grace period ends
-      // penalty = 15% * debt
-      penalty = CreditBrokerMath.getPenaltyForCreditPosition(
-        remainingPrincipal,
-        remainingInterest,
-        position.end,
-        graceConfig
-      );
-
-      // supply penalty into vault as revenue
-      if (penalty > 0) {
-        IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), penalty);
-        repayPrincipalAmt -= penalty;
-        MoolahOperateLib.supplyToMoolahVault(LOAN_TOKEN, RELAYER, penalty);
-      }
-
-      // the rest will be used to repay partially
-      uint256 repayablePrincipal = UtilsLib.min(repayPrincipalAmt, remainingPrincipal);
-      if (repayablePrincipal > 0) {
-        if (position.isBadDebt) {
-          IERC20(LOAN_TOKEN).safeTransferFrom(user, address(this), repayablePrincipal);
-          MoolahOperateLib.supplyToMoolahVault(LOAN_TOKEN, RELAYER, repayablePrincipal);
-          position.principalRepaid += repayablePrincipal;
-        } else {
-          uint256 repaidShares;
-          (principalRepaid, repaidShares) = MoolahOperateLib.repayToMoolah(
-            LOAN_TOKEN,
-            address(MOOLAH),
-            MARKET_ID,
-            user,
-            onBehalf,
-            repayablePrincipal
-          );
-          position.principalRepaid += principalRepaid;
-          position.borrowedShares -= repaidShares;
-        }
-        if (position.termType == FixedTermType.ACCRUE_INTEREST) {
-          // reset repaid interest to zero (all accrued interest has been cleared)
-          position.interestRepaid = 0;
-        }
-        // reset last repay time to now
-        position.lastRepaidTime = block.timestamp;
-      }
-    }
-
-    // post repayment
-    if (position.principalRepaid >= position.principal) {
-      // removes it from user's fixed positions
-      _removeFixedPositionByPosId(onBehalf, posId);
-      // log paid off penalized position
-      if (penalty > 0) {
-        emit PaidOffPenalizedPosition(onBehalf, posId, block.timestamp);
-      }
-    } else {
-      // update position
-      _updateFixedPosition(onBehalf, position);
-    }
-
-    // validate positions
-    _validatePositions(onBehalf);
-
-    // emit event
-    emit RepaidFixedLoanPosition(
-      onBehalf,
-      posId,
-      position.principal,
-      position.start,
-      position.end,
-      position.apr,
-      position.principalRepaid,
-      principalRepaid,
-      repayInterestAmt,
-      penalty,
-      position.interestRepaid,
-      position.isBadDebt
-    );
   }
 
   function _tryWithdrawAndBurnDebt(address user, uint256 score, bytes32[] calldata proof) internal {
@@ -698,27 +604,6 @@ contract CreditBroker is
   }
 
   /**
-   * @dev removes a user's fixed-loan position at a specific index
-   * @param user The address of the user
-   * @param posId The ID of the position to remove
-   */
-  function _removeFixedPositionByPosId(address user, uint256 posId) internal {
-    // get user's fixed positions
-    FixedLoanPosition[] storage positions = fixedLoanPositions[user];
-    // loop through user's positions
-    for (uint256 i = 0; i < positions.length; i++) {
-      if (positions[i].posId == posId) {
-        // remove position
-        positions[i] = positions[positions.length - 1];
-        positions.pop();
-        emit FixedLoanPositionRemoved(user, posId);
-        return;
-      }
-    }
-    revert("position not found");
-  }
-
-  /**
    * @dev Get a fixed loan position by PosId
    * @param user The address of the user
    * @param posId The ID of the position to get
@@ -731,44 +616,6 @@ contract CreditBroker is
       }
     }
     revert("position not found");
-  }
-
-  /**
-   * @dev Update a fixed loan position
-   * @param user The address of the user
-   * @param position The fixed loan position to update
-   */
-  function _updateFixedPosition(address user, FixedLoanPosition memory position) internal {
-    FixedLoanPosition[] storage positions = fixedLoanPositions[user];
-    for (uint256 i = 0; i < positions.length; i++) {
-      if (positions[i].posId == position.posId) {
-        positions[i] = position;
-        return;
-      }
-    }
-    revert("position not found");
-  }
-
-  /**
-   * @dev Validate that the user's positions meet the minimum loan requirement
-   * @param user The address of the user
-   */
-  function _validatePositions(address user) internal view {
-    FixedLoanPosition[] memory fixedPositions = fixedLoanPositions[user];
-    // assume valid first
-    bool isValid = true;
-    uint256 minLoan = MOOLAH.minLoan(MOOLAH.idToMarketParams(MARKET_ID));
-
-    // check fixed positions
-    for (uint256 i = 0; i < fixedPositions.length; i++) {
-      FixedLoanPosition memory _fixedPos = fixedPositions[i];
-      uint256 fixedPosDebt = _fixedPos.principal - _fixedPos.principalRepaid;
-      if (fixedPosDebt > 0 && fixedPosDebt < minLoan) {
-        isValid = false;
-      }
-    }
-
-    require(isValid, "below min loan");
   }
 
   /**

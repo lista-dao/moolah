@@ -73,6 +73,45 @@ library MoolahOperateLib {
   }
 
   /**
+   * @dev Repay an exact number of borrow shares on behalf of a user to Moolah
+   * @notice Share-based repayment is the only way to drive `borrowShares` to exactly zero. An
+   *         asset-based repay rounds down to shares, so it leaves residual shares behind
+   *         whenever `totalBorrowAssets : totalBorrowShares` has drifted off its clean ratio,
+   *         and those residuals are worth far less than `minLoan` — enough to make every later
+   *         Moolah operation on the user revert with `remain borrow too low`. Broker markets
+   *         run a zero-rate IRM, which pins that ratio, so this is a guarantee by construction
+   *         rather than a fix for drift that is reachable today.
+   * @param loanToken The address of the loan token
+   * @param moolah The address of the Moolah contract
+   * @param marketId The market id to repay
+   * @param payer The address of the user who pays for the repayment
+   * @param onBehalf The address of the user to repay on behalf of
+   * @param shares The exact borrow shares to repay
+   * @param maxAmount The maximum assets the payer is willing to pay for `shares`
+   */
+  function repayToMoolahByShares(
+    address loanToken,
+    address moolah,
+    Id marketId,
+    address payer,
+    address onBehalf,
+    uint256 shares,
+    uint256 maxAmount
+  ) public returns (uint256 assetsRepaid) {
+    IERC20(loanToken).safeTransferFrom(payer, address(this), maxAmount);
+    IERC20(loanToken).safeIncreaseAllowance(moolah, maxAmount);
+
+    (assetsRepaid, ) = IMoolah(moolah).repay(_getMarketParams(moolah, marketId), 0, shares, onBehalf, "");
+    require(assetsRepaid <= maxAmount, "repay exceeds max");
+
+    // drop any leftover allowance and refund the unused amount to the payer
+    if (maxAmount > assetsRepaid) {
+      IERC20(loanToken).forceApprove(moolah, 0);
+      IERC20(loanToken).safeTransfer(payer, maxAmount - assetsRepaid);
+    }
+  }
+
+  /**
    * @dev Supply an amount of interest to Moolah
    * @notice There is a known MEV issue here where supplied interest can be front-run by vault suppliers;
    * @notice The impact is limited by applying a conservative cap in credit markets.
