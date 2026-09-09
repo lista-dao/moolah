@@ -580,6 +580,43 @@ contract YieldAccountForkTest is Test {
     assertEq(LISUSD.balanceOf(address(account)), 0);
   }
 
+  /// @dev loan tokens sent here by mistake must stay put. `repay` refunds only the unused part of
+  ///      what the caller pulled in, so a 1 wei repay cannot walk off with someone else's tokens.
+  function test_repay_doesNotSweepStrayLoanToken() public {
+    _depositSlis(1000 ether);
+    vm.prank(owner);
+    account.borrow(50_000 ether, owner);
+
+    // someone transfers loan tokens straight to the account instead of calling repay
+    uint256 stray = 1000 ether;
+    deal(address(LISUSD), donor, stray);
+    vm.prank(donor);
+    LISUSD.transfer(address(account), stray);
+    assertEq(LISUSD.balanceOf(address(account)), stray);
+
+    // the assets path: an attacker triggers the smallest repay there is
+    address attacker = makeAddr("attacker");
+    deal(address(LISUSD), attacker, 1);
+    vm.startPrank(attacker);
+    LISUSD.approve(address(account), 1);
+    account.repay(1);
+    vm.stopPrank();
+
+    assertEq(LISUSD.balanceOf(attacker), 0, "attacker drained the stray balance");
+    assertEq(LISUSD.balanceOf(address(account)), stray, "stray balance moved");
+
+    // the shares path, which is the one that actually has rounding to refund
+    deal(address(LISUSD), owner, 60_000 ether);
+    vm.startPrank(owner);
+    LISUSD.approve(address(account), 60_000 ether);
+    account.repay(type(uint256).max);
+    vm.stopPrank();
+
+    assertEq(account.debt(), 0);
+    assertEq(MOOLAH.position(id, address(account)).borrowShares, 0);
+    assertEq(LISUSD.balanceOf(address(account)), stray, "max repay swept the stray balance");
+  }
+
   /// @dev anyone can repay this account's debt straight through Moolah, without touching the
   ///      account: Moolah gates repay only when the market has a broker, and this one has none
   function test_repay_byThirdParty_directlyOnMoolah() public {

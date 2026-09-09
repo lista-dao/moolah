@@ -257,27 +257,29 @@ contract YieldAccount is
     MarketParams memory params = marketParams;
     IERC20 loanToken = IERC20(params.loanToken);
 
+    uint256 pulled;
     if (assets == type(uint256).max) {
       MOOLAH.accrueInterest(params);
       Position memory pos = MOOLAH.position(marketId, address(this));
       require(pos.borrowShares > 0, ZeroAmount());
       Market memory m = MOOLAH.market(marketId);
-      uint256 owed = uint256(pos.borrowShares).toAssetsUp(m.totalBorrowAssets, m.totalBorrowShares);
+      pulled = uint256(pos.borrowShares).toAssetsUp(m.totalBorrowAssets, m.totalBorrowShares);
 
-      loanToken.safeTransferFrom(msg.sender, address(this), owed);
-      loanToken.forceApprove(address(MOOLAH), owed);
+      loanToken.safeTransferFrom(msg.sender, address(this), pulled);
+      loanToken.forceApprove(address(MOOLAH), pulled);
       (repaidAssets, repaidShares) = MOOLAH.repay(params, 0, pos.borrowShares, address(this), "");
     } else {
       require(assets > 0, ZeroAmount());
-      loanToken.safeTransferFrom(msg.sender, address(this), assets);
-      loanToken.forceApprove(address(MOOLAH), assets);
+      pulled = assets;
+      loanToken.safeTransferFrom(msg.sender, address(this), pulled);
+      loanToken.forceApprove(address(MOOLAH), pulled);
       (repaidAssets, repaidShares) = MOOLAH.repay(params, assets, 0, address(this), "");
     }
     loanToken.forceApprove(address(MOOLAH), 0);
 
-    // the shares path rounds in the market's favor by at most 1 wei; return anything left
-    uint256 leftover = loanToken.balanceOf(address(this));
-    if (leftover > 0) loanToken.safeTransfer(msg.sender, leftover);
+    // refund only what this call pulled and the market did not take (the shares path rounds in the
+    // market's favor by at most 1 wei); sweeping the balance would pay out loan tokens sent by mistake
+    if (pulled > repaidAssets) loanToken.safeTransfer(msg.sender, pulled - repaidAssets);
 
     emit Repaid(msg.sender, repaidAssets, repaidShares);
   }

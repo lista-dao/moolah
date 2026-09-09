@@ -348,6 +348,123 @@ contract PositionMigratorYieldAccountTest is Test {
     migrator.setMigrationDeadline(block.timestamp);
   }
 
+  /* ----------------------------- routing target ----------------------------- */
+
+  /// @dev the routed account must be owned by YIELD_ACCOUNT_OWNER. Without this, admin could point
+  ///      the routing at an account a stranger owns -- same market, so every other check passes --
+  ///      and the whole migrated position would land somewhere the owner cannot touch.
+  function test_setYieldAccount_rejectsForeignOwner() public {
+    address stranger = makeAddr("stranger");
+    address[] memory receivers = new address[](1);
+    receivers[0] = stranger;
+    YieldAccount foreignImpl = new YieldAccount(address(MOOLAH), address(PROVIDER), stranger);
+    YieldAccount foreign = YieldAccount(
+      address(
+        new ERC1967Proxy(
+          address(foreignImpl),
+          abi.encodeCall(
+            YieldAccount.initialize,
+            (TIMELOCK, manager, pauser, params, treasury, 0.005 ether, stranger, receivers)
+          )
+        )
+      )
+    );
+    // only the owner differs; the market matches, so the pre-existing checks would all pass
+    assertEq(foreign.OWNER(), stranger);
+    assertEq(Id.unwrap(foreign.marketId()), Id.unwrap(id));
+
+    vm.prank(TIMELOCK);
+    vm.expectRevert("account owner mismatch");
+    migrator.setYieldAccount(address(foreign), Id.unwrap(id));
+
+    assertEq(migrator.yieldAccount(), address(account), "routing changed");
+  }
+
+  /// @dev the two admin setters read nothing from each other, so neither ordering deadlocks and a
+  ///      single TimeLock batch can carry both
+  function test_routingSetters_haveNoCircularDependency() public {
+    address[] memory receivers = new address[](1);
+    receivers[0] = YIELD_ACCOUNT_OWNER;
+    YieldAccount freshImpl = new YieldAccount(address(MOOLAH), address(PROVIDER), YIELD_ACCOUNT_OWNER);
+    YieldAccount fresh = YieldAccount(
+      address(
+        new ERC1967Proxy(
+          address(freshImpl),
+          abi.encodeCall(
+            YieldAccount.initialize,
+            (TIMELOCK, manager, pauser, params, treasury, 0.005 ether, YIELD_ACCOUNT_OWNER, receivers)
+          )
+        )
+      )
+    );
+    assertEq(fresh.migrator(), address(0), "fresh account has no migrator yet");
+
+    // routing can be pointed at an account that has never heard of this migrator
+    vm.prank(TIMELOCK);
+    migrator.setYieldAccount(address(fresh), Id.unwrap(id));
+
+    // the only gate left is the authorization, i.e. the chain is linear, not circular
+    vm.prank(YIELD_ACCOUNT_OWNER);
+    vm.expectRevert("account not authorized");
+    migrator.migratePosition(params, true, 0);
+
+    vm.prank(TIMELOCK);
+    fresh.setMigrator(address(migrator));
+    vm.prank(YIELD_ACCOUNT_OWNER);
+    fresh.setMigratorAuthorization(address(migrator), true);
+    assertTrue(MOOLAH.isAuthorized(address(fresh), address(migrator)));
+  }
+
+  /* ----------------------------- deadline bounds ----------------------------- */
+
+  /// @dev a deadline in the past arms `forceMigrate` in the same block, skipping the window the
+  ///      setter exists to grant
+  function test_setMigrationDeadline_rejectsPast() public {
+    vm.startPrank(TIMELOCK);
+    vm.expectRevert("deadline in the past");
+    migrator.setMigrationDeadline(block.timestamp - 365 days);
+
+    vm.expectRevert("deadline in the past");
+    migrator.setMigrationDeadline(block.timestamp);
+    vm.stopPrank();
+
+    assertEq(migrator.migrationDeadline(), 0);
+  }
+
+  /// @dev zero must stay reachable: it is the switch that turns `forceMigrate` back off
+  function test_setMigrationDeadline_zeroStillDisablesForce() public {
+    vm.prank(TIMELOCK);
+    migrator.setMigrationDeadline(block.timestamp + 30 days);
+
+    vm.prank(TIMELOCK);
+    migrator.setMigrationDeadline(0);
+    assertEq(migrator.migrationDeadline(), 0);
+
+    vm.prank(bot);
+    vm.expectRevert("deadline not set");
+    migrator.forceMigrate(params, 0);
+  }
+
+  /// @dev an extension has to reopen the window; nudging an already-passed deadline forward only
+  ///      looks like a reprieve while `forceMigrate` stays live
+  function test_extendMigrationDeadline_rejectsPast() public {
+    vm.prank(TIMELOCK);
+    migrator.setMigrationDeadline(block.timestamp + 1);
+    uint256 old = migrator.migrationDeadline();
+    vm.warp(block.timestamp + 10 days);
+
+    vm.prank(manager);
+    vm.expectRevert("deadline in the past");
+    migrator.extendMigrationDeadline(old + 1 days);
+
+    // a real reprieve still works, and closes the forced window again
+    vm.prank(manager);
+    migrator.extendMigrationDeadline(block.timestamp + 5 days);
+    vm.prank(bot);
+    vm.expectRevert("migration window open");
+    migrator.forceMigrate(params, 0);
+  }
+
   function _otherMarket() internal view returns (MarketParams memory) {
     MarketParams memory other = params;
     other.lltv = 86 * 1e16;

@@ -278,6 +278,7 @@ contract PositionMigrator is
       require(marketId == bytes32(0), "market must be zero");
     } else {
       require(marketId != bytes32(0), "zero market");
+      require(IYieldAccount(account).OWNER() == YIELD_ACCOUNT_OWNER, "account owner mismatch");
       require(Id.unwrap(IYieldAccount(account).marketId()) == marketId, "account market mismatch");
       require(MOOLAH.market(Id.wrap(marketId)).lastUpdate != 0, "market not created");
     }
@@ -295,6 +296,8 @@ contract PositionMigrator is
   function setMigrationDeadline(uint256 deadline) external onlyRole(DEFAULT_ADMIN_ROLE) {
     uint256 old = migrationDeadline;
     require(deadline != old, "same deadline");
+    // a past deadline would open `forceMigrate` in the same block, skipping the window entirely
+    require(deadline == 0 || deadline > block.timestamp, "deadline in the past");
     migrationDeadline = deadline;
 
     emit MigrationDeadlineChanged(old, deadline);
@@ -305,6 +308,8 @@ contract PositionMigrator is
     uint256 old = migrationDeadline;
     require(old != 0, "deadline not set");
     require(deadline > old, "not an extension");
+    // an extension has to reopen the window, not just move an already-passed deadline forward
+    require(deadline > block.timestamp, "deadline in the past");
     migrationDeadline = deadline;
 
     emit MigrationDeadlineChanged(old, deadline);
@@ -316,7 +321,8 @@ contract PositionMigrator is
     bytes32 market = yieldAccountMarket;
     require(account != address(0), "yield account not set");
     require(Id.unwrap(marketParams.id()) == market, "wrong market");
-    // re-checked at call time: the account is upgradeable and could have moved market since it was set
+    // re-checked at call time: the account is upgradeable, so its owner and market could have moved
+    require(IYieldAccount(account).OWNER() == YIELD_ACCOUNT_OWNER, "account owner mismatch");
     require(Id.unwrap(IYieldAccount(account).marketId()) == market, "account market mismatch");
     // the borrow lands on the account, so it must have authorized this contract
     require(MOOLAH.isAuthorized(account, address(this)), "account not authorized");
