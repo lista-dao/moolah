@@ -80,6 +80,10 @@ interface IBrokerLiquidator {
 
   function reflowBlacklist(address token) external view returns (bool);
 
+  /// @notice The LiquidationVault this liquidator reflows into and may pull funds from.
+  ///          address(0) means reflow/pull is disabled.
+  function fundSource() external view returns (address);
+
   function batchSetSmartProviders(address[] calldata providers, bool status) external;
 
   function smartProviders(address provider) external view returns (bool);
