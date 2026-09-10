@@ -1,0 +1,672 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.34;
+
+import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
+import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
+import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
+
+import { IV3Provider } from "../provider/interfaces/IV3Provider.sol";
+import { IWBNB } from "../provider/interfaces/IWBNB.sol";
+import { ILiquidationVault } from "./ILiquidationVault.sol";
+import "./Interface.sol";
+
+/**
+ * @title V3Liquidator
+ * @notice Liquidator for Moolah markets whose collateral is a V3Provider LP share token.
+ *
+ *   Liquidation flows:
+ *   1. liquidate()          — pre-funded: caller holds loanToken, receives V3 shares.
+ *   2. flashLiquidate()     — callback-based: in onMoolahLiquidate, optionally redeem
+ *                             V3 shares → TOKEN0 / TOKEN1, swap to loanToken, repay.
+ *   3. redeemV3Shares()     — standalone: redeem shares held by this contract.
+ *   4. sellToken/sellBNB()  — swap any token/BNB held by this contract (e.g. post-redeem).
+ */
+contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessControlEnumerableUpgradeable {
+  using SafeTransferLib for address;
+
+  /* ──────────────────────────── errors ────────────────────────────── */
+
+  error NoProfit();
+  error OnlyMoolah();
+  error ExceedAmount();
+  error WhitelistSameStatus();
+  error NotWhitelisted();
+  error SwapFailed();
+  error NotAuthorized();
+  error InvalidFundSource();
+  error ReceiverNotSelf();
+
+  /* ──────────────────────────── constants ─────────────────────────── */
+
+  bytes32 public constant MANAGER = keccak256("MANAGER");
+  bytes32 public constant BOT = keccak256("BOT");
+
+  /// @dev Virtual address used to represent the native coin in token whitelists.
+  address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+
+  /* ──────────────────────────── immutables ─────────────────────────── */
+
+  address public immutable MOOLAH;
+
+  /* ──────────────────────────── storage ───────────────────────────── */
+
+  mapping(address => bool) public tokenWhitelist;
+  mapping(bytes32 => bool) public marketWhitelist;
+  mapping(address => bool) public pairWhitelist;
+  /// @dev Whitelisted V3Provider contracts (collateral token = the provider itself).
+  mapping(address => bool) public v3Providers;
+
+  /// @dev Pass-back of the leg amounts redeemed inside onMoolahLiquidate, so flashLiquidate can report
+  ///      the actual redeemed amount0 / amount1 in its V3Liquidation event rather than 0. Appended at
+  ///      the end of the storage layout (upgrade-safe). flashLiquidate zeroes them before each liquidate
+  ///      so a non-redeeming flash liquidation — or a stale value from an earlier call — reports 0.
+  uint256 private _redeemedAmount0;
+  uint256 private _redeemedAmount1;
+
+  /// @dev Shared liquidation fund pool (LiquidationVault). 0 => legacy behavior (no pull/reflow).
+  ///      Appended for the UUPS upgrade; no existing slot moves.
+  address public fundSource;
+  /// @dev Tokens never pushed to the vault on reflow (e.g. the transfer-restricted V3 share collateral,
+  ///      which the vault cannot hold or sell). Appended.
+  mapping(address => bool) public reflowBlacklist;
+
+  /* ──────────────────────────── events ────────────────────────────── */
+
+  event TokenWhitelistChanged(address indexed token, bool status);
+  event MarketWhitelistChanged(bytes32 indexed id, bool status);
+  event PairWhitelistChanged(address indexed pair, bool status);
+  event V3ProviderWhitelistChanged(address indexed provider, bool status);
+  event FundSourceChanged(address indexed oldFundSource, address indexed newFundSource);
+  event FundReflowed(address indexed token, uint256 amount);
+  event ReflowBlacklistChanged(address indexed token, bool blacklisted);
+  event SellToken(
+    address indexed pair,
+    address spender,
+    address tokenIn,
+    address tokenOut,
+    uint256 amountIn,
+    uint256 actualAmountOut
+  );
+  event V3Liquidation(
+    bytes32 indexed id,
+    address indexed v3Provider,
+    address indexed borrower,
+    uint256 seized,
+    uint256 repaid,
+    uint256 amount0,
+    uint256 amount1
+  );
+
+  /* ──────────────────────── callback struct ───────────────────────── */
+
+  /**
+   * @dev Passed through Moolah's liquidate callback mechanism.
+   * @param v3Provider      V3Provider that issued the seized shares.
+   * @param loanToken       Loan token to repay to Moolah.
+   * @param seized          Number of V3 shares seized by Moolah.
+   * @param redeemShares    If true, redeem V3 shares in callback; else hold as ERC-20.
+   * @param minToken0Amt    Slippage guard passed to V3Provider.redeemShares.
+   * @param minToken1Amt    Slippage guard passed to V3Provider.redeemShares.
+   * @param swapToken0      Swap TOKEN0 → loanToken after redemption.
+   * @param swapToken1      Swap TOKEN1 / native coin → loanToken after redemption.
+   * @param token0Pair      DEX router / pair for TOKEN0 swap.
+   * @param token0Spender   Token0 approval target (set to token0Pair if same).
+   * @param token1Pair      DEX router / pair for TOKEN1 / native coin swap.
+   * @param token1Spender   Token1 approval target (set to token1Pair if same).
+   * @param swapToken0Data  Calldata for TOKEN0 swap (e.g. from 1inch aggregator).
+   * @param swapToken1Data  Calldata for TOKEN1 / native coin swap.
+   */
+  struct V3LiquidateData {
+    address v3Provider;
+    address loanToken;
+    uint256 seized;
+    bool redeemShares;
+    uint256 minToken0Amt;
+    uint256 minToken1Amt;
+    bool swapToken0;
+    bool swapToken1;
+    address token0Pair;
+    address token0Spender;
+    address token1Pair;
+    address token1Spender;
+    bytes swapToken0Data;
+    bytes swapToken1Data;
+  }
+
+  /* ──────────────────── flashLiquidate params ─────────────────────── */
+
+  /**
+   * @dev Parameters for flashLiquidate, bundled into a struct to avoid stack-too-deep.
+   * @param v3Provider      Whitelisted V3Provider contract.
+   * @param minToken0Amt    Min TOKEN0 from redeemShares.
+   * @param minToken1Amt    Min TOKEN1 from redeemShares.
+   * @param redeemShares    Redeem V3 shares in callback? If false, contract holds shares.
+   * @param token0Pair      DEX pair for TOKEN0 → loanToken swap. address(0) = no swap.
+   * @param token0Spender   Approval target for TOKEN0; if address(0), uses token0Pair.
+   * @param token1Pair      DEX pair for TOKEN1 / native coin → loanToken swap. address(0) = no swap.
+   * @param token1Spender   Approval target for TOKEN1; if address(0), uses token1Pair.
+   * @param swapToken0Data  Aggregator calldata for TOKEN0 swap.
+   * @param swapToken1Data  Aggregator calldata for TOKEN1 / native coin swap.
+   */
+  struct FlashLiquidateParams {
+    address v3Provider;
+    uint256 minToken0Amt;
+    uint256 minToken1Amt;
+    bool redeemShares;
+    address token0Pair;
+    address token0Spender;
+    address token1Pair;
+    address token1Spender;
+    bytes swapToken0Data;
+    bytes swapToken1Data;
+  }
+
+  /* ────────────────────── constructor / init ──────────────────────── */
+
+  /// @custom:oz-upgrades-unsafe-allow constructor
+  constructor(address moolah) {
+    require(moolah != address(0), "zero address");
+    MOOLAH = moolah;
+    _disableInitializers();
+  }
+
+  function initialize(address admin, address manager, address bot, address _fundSource) external initializer {
+    require(admin != address(0) && manager != address(0) && bot != address(0), "zero address");
+    __AccessControl_init();
+    __ReentrancyGuard_init();
+    _grantRole(DEFAULT_ADMIN_ROLE, admin);
+    _grantRole(MANAGER, manager);
+    _grantRole(BOT, bot);
+
+    // Optional fund pool at deploy time (0 = legacy pre-funded behavior). The setFundSource registration
+    // check can't run here — the vault registers this liquidator only after the proxy exists — so only
+    // reject an obvious non-contract; wire registration in the vault right after deployment.
+    if (_fundSource != address(0)) {
+      require(_fundSource.code.length > 0, InvalidFundSource());
+      fundSource = _fundSource;
+      emit FundSourceChanged(address(0), _fundSource);
+    }
+  }
+
+  receive() external payable {}
+
+  /* ─────────────────────── withdrawals ────────────────────────────── */
+
+  /// @dev Gate relaxed for the shared fund pool: MANAGER or fundSource (the vault's collect* call).
+  ///      Transfer target stays msg.sender, so the vault collects into itself.
+  function withdrawERC20(address token, uint256 amount) external {
+    require(hasRole(MANAGER, msg.sender) || msg.sender == fundSource, NotAuthorized());
+    token.safeTransfer(msg.sender, amount);
+  }
+
+  function withdrawETH(uint256 amount) external {
+    require(hasRole(MANAGER, msg.sender) || msg.sender == fundSource, NotAuthorized());
+    msg.sender.safeTransferETH(amount);
+  }
+
+  /* ─────────────────────── fund pool ──────────────────────────────── */
+
+  /// @dev Sets the shared liquidation fund pool. Allows 0 (rollback to legacy pre-funded behavior). A
+  ///      non-zero fundSource gains withdraw* pull rights, so it must be a contract that has already
+  ///      registered this liquidator (guards against a mis-set address draining assets).
+  function setFundSource(address _fundSource) external onlyRole(MANAGER) {
+    if (_fundSource != address(0)) {
+      require(
+        _fundSource.code.length > 0 && ILiquidationVault(_fundSource).liquidators(address(this)),
+        InvalidFundSource()
+      );
+    }
+    emit FundSourceChanged(fundSource, _fundSource);
+    fundSource = _fundSource;
+  }
+
+  /// @dev Blacklist tokens from reflow (e.g. the transfer-restricted V3 share collateral). Blacklisted
+  ///      tokens are never pushed to the vault; they stay here to be redeemed via redeemV3Shares.
+  function setReflowBlacklist(address token, bool status) external onlyRole(MANAGER) {
+    require(token != address(0), "zero address");
+    require(reflowBlacklist[token] != status, WhitelistSameStatus());
+    reflowBlacklist[token] = status;
+    emit ReflowBlacklistChanged(token, status);
+  }
+
+  /* ─────────────────────── whitelists ─────────────────────────────── */
+
+  function setTokenWhitelist(address token, bool status) external onlyRole(MANAGER) {
+    require(tokenWhitelist[token] != status, WhitelistSameStatus());
+    tokenWhitelist[token] = status;
+    emit TokenWhitelistChanged(token, status);
+  }
+
+  function setMarketWhitelist(bytes32 id, bool status) external onlyRole(MANAGER) {
+    _setMarketWhitelist(id, status);
+  }
+
+  function batchSetMarketWhitelist(bytes32[] calldata ids, bool status) external onlyRole(MANAGER) {
+    for (uint256 i = 0; i < ids.length; i++) {
+      _setMarketWhitelist(ids[i], status);
+    }
+  }
+
+  function setPairWhitelist(address pair, bool status) external onlyRole(MANAGER) {
+    require(pair != address(0), "zero address");
+    require(pairWhitelist[pair] != status, WhitelistSameStatus());
+    pairWhitelist[pair] = status;
+    emit PairWhitelistChanged(pair, status);
+  }
+
+  function setV3ProviderWhitelist(address provider, bool status) external onlyRole(MANAGER) {
+    require(provider != address(0), "zero address");
+    require(v3Providers[provider] != status, WhitelistSameStatus());
+    v3Providers[provider] = status;
+    emit V3ProviderWhitelistChanged(provider, status);
+  }
+
+  function batchSetV3Providers(address[] calldata providers, bool status) external onlyRole(MANAGER) {
+    for (uint256 i = 0; i < providers.length; i++) {
+      require(providers[i] != address(0), "zero address");
+      v3Providers[providers[i]] = status;
+      emit V3ProviderWhitelistChanged(providers[i], status);
+    }
+  }
+
+  function _setMarketWhitelist(bytes32 id, bool status) internal {
+    require(IMoolah(MOOLAH).idToMarketParams(id).loanToken != address(0), "Invalid market");
+    require(marketWhitelist[id] != status, WhitelistSameStatus());
+    marketWhitelist[id] = status;
+    emit MarketWhitelistChanged(id, status);
+  }
+
+  /* ───────────────────── core liquidation ─────────────────────────── */
+
+  /**
+   * @notice Basic liquidation. This contract must hold enough loanToken to cover repayment.
+   *         Seized V3 shares are held by this contract; bot may later call redeemV3Shares.
+   * @param id           Market id.
+   * @param borrower     Position to liquidate.
+   * @param seizedAssets Collateral shares to seize (pass 0 to use repaidShares instead).
+   * @param repaidShares Debt shares to repay (pass 0 to use seizedAssets instead).
+   */
+  function liquidate(
+    bytes32 id,
+    address borrower,
+    uint256 seizedAssets,
+    uint256 repaidShares
+  ) external nonReentrant onlyRole(BOT) {
+    require(marketWhitelist[id], NotWhitelisted());
+    IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
+
+    // Non-redeeming callback: lets the shared pool (if set) fund the repayment; the callback approves
+    // the exact repaidAssets. With fundSource == 0 this is the legacy pre-funded path — the contract
+    // must already hold the loanToken.
+    (uint256 _seized, uint256 _repaid) = IMoolah(MOOLAH).liquidate(
+      params,
+      borrower,
+      seizedAssets,
+      repaidShares,
+      abi.encode(
+        V3LiquidateData({
+          v3Provider: params.collateralToken,
+          loanToken: params.loanToken,
+          seized: seizedAssets,
+          redeemShares: false,
+          minToken0Amt: 0,
+          minToken1Amt: 0,
+          swapToken0: false,
+          swapToken1: false,
+          token0Pair: address(0),
+          token0Spender: address(0),
+          token1Pair: address(0),
+          token1Spender: address(0),
+          swapToken0Data: "",
+          swapToken1Data: ""
+        })
+      )
+    );
+
+    // Reflow the loanToken residue to the vault (no-op when fundSource == 0). The seized V3 shares stay
+    // here (transfer-restricted collateral) to be redeemed later via redeemV3Shares — never reflowed.
+    _reflow(params.loanToken);
+
+    // No redemption on this path, so the redeemed legs are 0. Emit for parity with flashLiquidate.
+    emit V3Liquidation(id, params.collateralToken, borrower, _seized, _repaid, 0, 0);
+  }
+
+  /**
+   * @notice Flash liquidation: Moolah delivers seized V3 shares to this contract inside
+   *         the onMoolahLiquidate callback.  The callback optionally:
+   *           1. Redeems V3 shares → TOKEN0 + TOKEN1 (the wrapped-native leg arrives as the native coin).
+   *           2. Swaps TOKEN0 → loanToken.
+   *           3. Swaps TOKEN1 → loanToken.
+   *           4. Approves loanToken to Moolah to satisfy repayment.
+   *
+   *         If `params.redeemShares == false`, shares are held as ERC-20 and the contract
+   *         must already hold enough loanToken to cover repayment.
+   * @param id           Market id.
+   * @param borrower     Position to liquidate.
+   * @param seizedAssets Collateral shares to seize (exactlyOneZero with repaidShares).
+   * @param params       Flash liquidation parameters (see FlashLiquidateParams).
+   */
+  function flashLiquidate(
+    bytes32 id,
+    address borrower,
+    uint256 seizedAssets,
+    FlashLiquidateParams calldata params
+  ) external nonReentrant onlyRole(BOT) {
+    require(marketWhitelist[id], NotWhitelisted());
+    require(v3Providers[params.v3Provider], NotWhitelisted());
+    _requirePairWhitelisted(params.token0Pair, params.token0Spender);
+    _requirePairWhitelisted(params.token1Pair, params.token1Spender);
+
+    IMoolah.MarketParams memory mp = IMoolah(MOOLAH).idToMarketParams(id);
+    require(mp.collateralToken == params.v3Provider, "provider/market mismatch");
+
+    address effectiveToken0Spender = params.token0Spender == address(0) ? params.token0Pair : params.token0Spender;
+    address effectiveToken1Spender = params.token1Spender == address(0) ? params.token1Pair : params.token1Spender;
+
+    // Clear any stale pass-back (e.g. from an earlier flashLiquidate in the same tx). The callback
+    // fills these in only when it redeems; a non-redeeming flash liquidation reports 0 / 0.
+    _redeemedAmount0 = 0;
+    _redeemedAmount1 = 0;
+
+    (uint256 _seized, uint256 _repaid) = IMoolah(MOOLAH).liquidate(
+      mp,
+      borrower,
+      seizedAssets,
+      0,
+      abi.encode(
+        V3LiquidateData({
+          v3Provider: params.v3Provider,
+          loanToken: mp.loanToken,
+          seized: seizedAssets,
+          redeemShares: params.redeemShares,
+          minToken0Amt: params.minToken0Amt,
+          minToken1Amt: params.minToken1Amt,
+          swapToken0: params.token0Pair != address(0) && params.swapToken0Data.length > 0,
+          swapToken1: params.token1Pair != address(0) && params.swapToken1Data.length > 0,
+          token0Pair: params.token0Pair,
+          token0Spender: effectiveToken0Spender,
+          token1Pair: params.token1Pair,
+          token1Spender: effectiveToken1Spender,
+          swapToken0Data: params.swapToken0Data,
+          swapToken1Data: params.swapToken1Data
+        })
+      )
+    );
+
+    emit V3Liquidation(id, params.v3Provider, borrower, _seized, _repaid, _redeemedAmount0, _redeemedAmount1);
+
+    // Reflow the arb residue to the vault (no-op when fundSource == 0): the loanToken plus any redeemed
+    // TOKEN0/TOKEN1 leftover and unswapped native. The V3 shares are fully redeemed on the redeem path,
+    // so none are held; on the hold-shares path they stay here (never reflowed — collateral).
+    _reflow(mp.loanToken);
+    _reflow(IV3Provider(params.v3Provider).TOKEN0());
+    _reflow(IV3Provider(params.v3Provider).TOKEN1());
+    _reflow(BNB_ADDRESS);
+  }
+
+  /**
+   * @notice Redeem V3 shares held by this contract.
+   *         The wrapped-native leg arrives as the native coin (the provider unwraps it on exit).
+   * @param v3Provider V3Provider whose shares to redeem.
+   * @param shares     Number of shares to redeem.
+   * @param minAmt0    Min TOKEN0 to receive (slippage guard).
+   * @param minAmt1    Min TOKEN1 to receive (slippage guard).
+   * @param receiver   Recipient of TOKEN0 and TOKEN1 (native coin for the wrapped-native leg).
+   */
+  function redeemV3Shares(
+    address v3Provider,
+    uint256 shares,
+    uint256 minAmt0,
+    uint256 minAmt1,
+    address receiver
+  ) external nonReentrant onlyRole(BOT) returns (uint256 amount0, uint256 amount1) {
+    require(v3Providers[v3Provider], NotWhitelisted());
+    require(fundSource == address(0) || receiver == address(this), ReceiverNotSelf());
+    (amount0, amount1) = IV3Provider(v3Provider).redeemShares(shares, minAmt0, minAmt1, receiver);
+    // When redeemed into this contract, reflow the legs to the vault (no-op when fundSource == 0).
+    if (receiver == address(this)) {
+      _reflow(IV3Provider(v3Provider).TOKEN0());
+      _reflow(IV3Provider(v3Provider).TOKEN1());
+      _reflow(BNB_ADDRESS);
+    }
+  }
+
+  /* ─────────────────────── sell tokens ────────────────────────────── */
+
+  /// @notice Sell an ERC-20 token (pair == spender).
+  function sellToken(
+    address pair,
+    address tokenIn,
+    address tokenOut,
+    uint256 amountIn,
+    uint256 amountOutMin,
+    bytes calldata swapData
+  ) external nonReentrant onlyRole(BOT) {
+    _sellToken(pair, pair, tokenIn, tokenOut, amountIn, amountOutMin, swapData);
+  }
+
+  /// @notice Sell an ERC-20 token with separate pair and spender (e.g. DEX aggregator).
+  function sellToken(
+    address pair,
+    address spender,
+    address tokenIn,
+    address tokenOut,
+    uint256 amountIn,
+    uint256 amountOutMin,
+    bytes calldata swapData
+  ) external nonReentrant onlyRole(BOT) {
+    require(pair != spender, "pair and spender cannot be same address");
+    require(pairWhitelist[spender], NotWhitelisted());
+    _sellToken(pair, spender, tokenIn, tokenOut, amountIn, amountOutMin, swapData);
+  }
+
+  /// @notice Sell native BNB held by this contract.
+  function sellBNB(
+    address pair,
+    address tokenOut,
+    uint256 amountIn,
+    uint256 amountOutMin,
+    bytes calldata swapData
+  ) external nonReentrant onlyRole(BOT) {
+    require(tokenWhitelist[BNB_ADDRESS], NotWhitelisted());
+    require(tokenWhitelist[tokenOut], NotWhitelisted());
+    require(pairWhitelist[pair], NotWhitelisted());
+    require(amountIn > 0, "amountIn zero");
+    require(address(this).balance >= amountIn, ExceedAmount());
+
+    uint256 beforeIn = address(this).balance;
+    uint256 beforeOut = tokenOut.balanceOf(address(this));
+
+    (bool success, ) = pair.call{ value: amountIn }(swapData);
+    require(success, SwapFailed());
+
+    uint256 actualIn = beforeIn - address(this).balance;
+    uint256 actualOut = tokenOut.balanceOf(address(this)) - beforeOut;
+
+    require(actualIn <= amountIn, ExceedAmount());
+    require(actualOut >= amountOutMin, NoProfit());
+
+    emit SellToken(pair, pair, BNB_ADDRESS, tokenOut, actualIn, actualOut);
+  }
+
+  /* ──────────────────── Moolah callback ───────────────────────────── */
+
+  /**
+   * @dev Called by Moolah immediately before it pulls repaidAssets of loanToken from
+   *      this contract.  At this point Moolah has already transferred the seized V3
+   *      shares to address(this).
+   */
+  function onMoolahLiquidate(uint256 repaidAssets, bytes calldata data) external {
+    require(msg.sender == MOOLAH, OnlyMoolah());
+    V3LiquidateData memory d = abi.decode(data, (V3LiquidateData));
+
+    if (d.redeemShares) {
+      address token0 = IV3Provider(d.v3Provider).TOKEN0();
+      address token1 = IV3Provider(d.v3Provider).TOKEN1();
+      // The provider unwraps whichever leg equals its wrapped-native token to the native coin on exit
+      // (WBNB→BNB on BSC, WETH→ETH on Ethereum), so that leg must be sold via call{value}; every other
+      // leg is an ERC-20 sold via approve + call. Read it from the provider — never hardcode a chain.
+      address wrappedNative = IV3Provider(d.v3Provider).WRAPPED_NATIVE();
+
+      // Snapshot before redeeming/swapping so profitability is judged on THIS liquidation's
+      // delta, not masked by loanToken balance already sitting idle from prior liquidations.
+      uint256 before = d.loanToken.balanceOf(address(this));
+      if (d.loanToken == wrappedNative) before += address(this).balance;
+
+      // Redeem V3 shares → TOKEN0 + TOKEN1; the wrapped-native leg arrives as the native coin.
+      (uint256 amount0, uint256 amount1) = IV3Provider(d.v3Provider).redeemShares(
+        d.seized,
+        d.minToken0Amt,
+        d.minToken1Amt,
+        address(this)
+      );
+
+      // Pass the actual redeemed amounts back to flashLiquidate for the V3Liquidation event.
+      _redeemedAmount0 = amount0;
+      _redeemedAmount1 = amount1;
+
+      // Swap TOKEN0 → loanToken (skip if already loanToken or no swap requested). For the native leg,
+      // minToken0Amt is the msg.value the bot's swapData was built against.
+      if (d.swapToken0 && amount0 > 0 && token0 != d.loanToken) {
+        _swapRedeemedLeg(
+          token0 == wrappedNative,
+          d.token0Pair,
+          d.token0Spender,
+          token0,
+          amount0,
+          d.minToken0Amt,
+          d.swapToken0Data
+        );
+      }
+
+      // Swap TOKEN1 → loanToken.
+      if (d.swapToken1 && amount1 > 0 && token1 != d.loanToken) {
+        _swapRedeemedLeg(
+          token1 == wrappedNative,
+          d.token1Pair,
+          d.token1Spender,
+          token1,
+          amount1,
+          d.minToken1Amt,
+          d.swapToken1Data
+        );
+      }
+
+      // If the loan token IS the wrapped-native, its leg was redeemed as the native coin and its swap
+      // was skipped (loanToken→loanToken is a no-op). Wrap the native balance back so the ERC-20
+      // repayment check below — and Moolah's subsequent transferFrom — see the loanToken balance.
+      if (d.loanToken == wrappedNative) {
+        uint256 nativeBalance = address(this).balance;
+        if (nativeBalance > 0) IWBNB(wrappedNative).deposit{ value: nativeBalance }();
+      }
+
+      uint256 out = d.loanToken.balanceOf(address(this)) - before;
+      if (out < repaidAssets) revert NoProfit();
+    } else if (fundSource != address(0)) {
+      // Pre-funded path with a shared pool: pull the exact shortfall from the vault. Local balance is
+      // consumed first, so the vault only tops up the difference (repaidAssets is exact here — Moolah
+      // computed it before this callback and before its own transferFrom).
+      uint256 bal = d.loanToken.balanceOf(address(this));
+      if (bal < repaidAssets) {
+        ILiquidationVault(fundSource).provideFund(d.loanToken, repaidAssets - bal);
+      }
+    }
+
+    // Approve Moolah to pull the repayment (always done, flash or pre-funded).
+    d.loanToken.safeApprove(MOOLAH, repaidAssets);
+  }
+
+  /* ─────────────────────────── internals ──────────────────────────── */
+
+  /// @dev Reflow (push) the full balance of `token` to the vault. No-op when fundSource is unset, the
+  ///      token is blacklisted, or the balance is zero. `token == BNB_ADDRESS` reflows native BNB.
+  function _reflow(address token) private {
+    address _fundSource = fundSource;
+    if (_fundSource == address(0) || reflowBlacklist[token]) return;
+    if (token == BNB_ADDRESS) {
+      uint256 bal = address(this).balance;
+      if (bal > 0) {
+        _fundSource.safeTransferETH(bal);
+        emit FundReflowed(token, bal);
+      }
+    } else {
+      uint256 bal = token.balanceOf(address(this));
+      if (bal > 0) {
+        token.safeTransfer(_fundSource, bal);
+        emit FundReflowed(token, bal);
+      }
+    }
+  }
+
+  /// @dev Sell a redeemed collateral leg into loanToken inside the liquidation callback. The wrapped-
+  ///      native leg arrives as the native coin (the provider unwraps it on exit), so it is sold via
+  ///      call{value}; every other leg is an ERC-20 sold via approve + call. `isNativeLeg` is decided
+  ///      by the provider's WRAPPED_NATIVE(), so this works on any chain and for either token position.
+  function _swapRedeemedLeg(
+    bool isNativeLeg,
+    address pair,
+    address spender,
+    address token,
+    uint256 amount,
+    uint256 nativeValue,
+    bytes memory swapData
+  ) private {
+    if (isNativeLeg) {
+      // msg.value must equal the input amount encoded in swapData (1inch native swaps). The bot builds
+      // swapData for the pre-agreed min; redeemShares guarantees actual >= min so the balance covers
+      // `nativeValue`, and the leftover stays to be wrapped/reflowed. Sending the variable actual amount
+      // would mismatch the encoded amount and revert, failing the whole liquidation.
+      (bool ok, ) = pair.call{ value: nativeValue }(swapData);
+      require(ok, SwapFailed());
+    } else {
+      token.safeApprove(spender, amount);
+      (bool ok, ) = pair.call(swapData);
+      require(ok, SwapFailed());
+      token.safeApprove(spender, 0);
+    }
+  }
+
+  function _sellToken(
+    address pair,
+    address spender,
+    address tokenIn,
+    address tokenOut,
+    uint256 amountIn,
+    uint256 amountOutMin,
+    bytes calldata swapData
+  ) private {
+    require(tokenWhitelist[tokenIn], NotWhitelisted());
+    require(tokenWhitelist[tokenOut], NotWhitelisted());
+    require(pairWhitelist[pair], NotWhitelisted());
+    require(amountIn > 0, "amountIn zero");
+    require(tokenIn.balanceOf(address(this)) >= amountIn, ExceedAmount());
+
+    uint256 beforeIn = tokenIn.balanceOf(address(this));
+    uint256 beforeOut = tokenOut.balanceOf(address(this));
+
+    tokenIn.safeApprove(spender, amountIn);
+    (bool success, ) = pair.call(swapData);
+    require(success, SwapFailed());
+
+    uint256 actualIn = beforeIn - tokenIn.balanceOf(address(this));
+    uint256 actualOut = tokenOut.balanceOf(address(this)) - beforeOut;
+
+    require(actualIn <= amountIn, ExceedAmount());
+    require(actualOut >= amountOutMin, NoProfit());
+
+    tokenIn.safeApprove(spender, 0);
+
+    emit SellToken(pair, spender, tokenIn, tokenOut, actualIn, actualOut);
+  }
+
+  /// @dev Validates that both pair and spender (when non-zero) are in the pair whitelist.
+  function _requirePairWhitelisted(address pair, address spender) internal view {
+    if (pair == address(0)) return;
+    require(pairWhitelist[pair], NotWhitelisted());
+    if (spender != address(0) && spender != pair) require(pairWhitelist[spender], NotWhitelisted());
+  }
+
+  function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+}

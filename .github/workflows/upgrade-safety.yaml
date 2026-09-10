@@ -38,11 +38,11 @@ jobs:
       - name: Install upgrade-guard
         run: |
           cargo install --git https://github.com/razww/upgrade-guard \
-            --tag v0.1.1 upgrade-guard --locked
+            --tag v0.1.2 upgrade-guard --locked
 
       # Faster alternative: skip the Rust build, download the prebuilt binary.
       #   - run: |
-      #       gh release download v0.1.1 --repo razww/upgrade-guard \
+      #       gh release download v0.1.2 --repo razww/upgrade-guard \
       #         --pattern 'upgrade-guard-x86_64-linux*' --dir /tmp/ug
       #       ( cd /tmp/ug && sha256sum -c upgrade-guard-x86_64-linux.sha256 )
       #       install -m0755 /tmp/ug/upgrade-guard-x86_64-linux /usr/local/bin/upgrade-guard
