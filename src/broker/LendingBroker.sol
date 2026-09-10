@@ -69,6 +69,7 @@ contract LendingBroker is
   error MarketNotSet();
   error BorrowIsPaused();
   error InvalidRepaidShares();
+  error InconsistentInput();
 
   // ------- Roles -------
   bytes32 public constant MANAGER = keccak256("MANAGER");
@@ -119,6 +120,10 @@ contract LendingBroker is
   // --- V2 storage (appended to preserve layout) ---
   address public RELAYER;
   IOracle public ORACLE;
+
+  // --- V3 storage (appended to preserve layout) ---
+  /// @dev termId => index into `fixedTerms` PLUS ONE (0 means "not present")
+  mapping(uint256 => uint256) public termIndexPlusOne;
 
   // ------- Modifiers -------
   modifier onlyMoolah() {
@@ -384,7 +389,7 @@ contract LendingBroker is
     Id id = marketParams.id();
     if (!_checkLiquidationWhiteList(msg.sender)) revert NotLiquidationWhitelist();
     if (Id.unwrap(id) != Id.unwrap(MARKET_ID)) revert InvalidMarketId();
-    if (!UtilsLib.exactlyOneZero(seizedAssets, repaidShares)) revert InvalidMarketId();
+    if (!UtilsLib.exactlyOneZero(seizedAssets, repaidShares)) revert InconsistentInput();
     if (repaidShares > 0 && repaidShares % SharesMathLib.VIRTUAL_SHARES != 0) revert InvalidRepaidShares();
     if (borrower == address(0)) revert InvalidUser();
 
@@ -578,11 +583,7 @@ contract LendingBroker is
    * @return An array of addresses in the liquidation whitelist
    */
   function getLiquidationWhitelist() external view returns (address[] memory) {
-    address[] memory whitelist = new address[](liquidationWhitelist.length());
-    for (uint256 i = 0; i < liquidationWhitelist.length(); i++) {
-      whitelist[i] = liquidationWhitelist.at(i);
-    }
-    return whitelist;
+    return liquidationWhitelist.values();
   }
 
   ///////////////////////////////////////
@@ -680,12 +681,9 @@ contract LendingBroker is
    * @return The fixed term and rate scheme
    */
   function _getTermById(uint256 termId) internal view returns (FixedTermAndRate memory) {
-    for (uint256 i = 0; i < fixedTerms.length; i++) {
-      if (fixedTerms[i].termId == termId) {
-        return fixedTerms[i];
-      }
-    }
-    revert TermNotFound();
+    uint256 id = termIndexPlusOne[termId];
+    if (id == 0) revert TermNotFound();
+    return fixedTerms[id - 1];
   }
 
   /**
@@ -724,11 +722,10 @@ contract LendingBroker is
   function _removeFixedPositionByPosId(address user, uint256 posId) internal {
     // get user's fixed positions
     FixedLoanPosition[] storage positions = fixedLoanPositions[user];
-    // loop through user's positions
-    for (uint256 i = 0; i < positions.length; i++) {
+    uint256 len = positions.length;
+    for (uint256 i = 0; i < len; i++) {
       if (positions[i].posId == posId) {
-        // remove position
-        positions[i] = positions[positions.length - 1];
+        positions[i] = positions[len - 1];
         positions.pop();
         emit FixedLoanPositionRemoved(user, posId);
         return;
@@ -743,11 +740,10 @@ contract LendingBroker is
    * @param posId The ID of the position to get
    */
   function _getFixedPositionByPosId(address user, uint256 posId) internal view returns (FixedLoanPosition memory) {
-    FixedLoanPosition[] memory positions = fixedLoanPositions[user];
-    for (uint256 i = 0; i < positions.length; i++) {
-      if (positions[i].posId == posId) {
-        return positions[i];
-      }
+    FixedLoanPosition[] storage positions = fixedLoanPositions[user];
+    uint256 len = positions.length;
+    for (uint256 i = 0; i < len; i++) {
+      if (positions[i].posId == posId) return positions[i];
     }
     revert PositionNotFound();
   }
@@ -759,7 +755,8 @@ contract LendingBroker is
    */
   function _updateFixedPosition(address user, FixedLoanPosition memory position) internal {
     FixedLoanPosition[] storage positions = fixedLoanPositions[user];
-    for (uint256 i = 0; i < positions.length; i++) {
+    uint256 len = positions.length;
+    for (uint256 i = 0; i < len; i++) {
       if (positions[i].posId == position.posId) {
         positions[i] = position;
         return;
@@ -845,26 +842,46 @@ contract LendingBroker is
     if (term.duration == 0) revert InvalidDuration();
     if (term.apr < MIN_FIXED_TERM_APR || term.apr > MAX_FIXED_TERM_APR) revert InvalidAPR();
     // update term if it exists
-    for (uint256 i = 0; i < fixedTerms.length; i++) {
-      // term found
-      if (fixedTerms[i].termId == term.termId) {
-        // remove term
-        if (removeTerm) {
-          fixedTerms[i] = fixedTerms[fixedTerms.length - 1];
-          fixedTerms.pop();
-        } else {
-          fixedTerms[i] = term;
-          emit FixedTermAndRateUpdated(term.termId, term.duration, term.apr);
+    uint256 idx = termIndexPlusOne[term.termId];
+    if (idx != 0) {
+      uint256 i = idx - 1;
+      // remove term
+      if (removeTerm) {
+        uint256 last = fixedTerms.length - 1;
+        if (i != last) {
+          termIndexPlusOne[fixedTerms[last].termId] = i + 1;
+          fixedTerms[i] = fixedTerms[last];
         }
-        return;
+        fixedTerms.pop();
+        delete termIndexPlusOne[term.termId];
+      } else {
+        fixedTerms[i] = term;
+        emit FixedTermAndRateUpdated(term.termId, term.duration, term.apr);
       }
+      return;
     }
     // item not found
     // adding new term
     if (!removeTerm) {
       fixedTerms.push(term);
+      termIndexPlusOne[term.termId] = fixedTerms.length;
     } else {
       revert TermNotFound();
+    }
+  }
+
+  /**
+   * @dev One-time backfill of `termIndexPlusOne` for terms already in storage.
+   * @notice REQUIRED for any proxy that already has terms configured, and it MUST run
+   *         atomically with the upgrade:
+   *         upgradeToAndCall(newImpl, abi.encodeCall(LendingBroker.initializeTermIndex, ()))
+   *         Skipping it leaves the index empty and every _getTermById reverts TermNotFound.
+   *         Fresh deployments do not need it
+   */
+  function initializeTermIndex() external reinitializer(2) {
+    uint256 len = fixedTerms.length;
+    for (uint256 i = 0; i < len; i++) {
+      termIndexPlusOne[fixedTerms[i].termId] = i + 1;
     }
   }
 
