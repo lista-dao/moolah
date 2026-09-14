@@ -43,6 +43,7 @@ interface IYieldAccount {
   error NoReceiver();
   error WithdrawShortfall();
   error MinterNotSet();
+  error InvalidMinSkim();
 
   /* ----------------------------- immutables ----------------------------- */
 
@@ -74,6 +75,9 @@ interface IYieldAccount {
 
   function minSkimBnb() external view returns (uint256);
 
+  /// @notice ceiling on `minSkimBnb`
+  function MAX_MIN_SKIM_BNB() external view returns (uint256);
+
   /// @notice the only address `setMigratorAuthorization` can authorize on Moolah
   function migrator() external view returns (address);
 
@@ -91,6 +95,8 @@ interface IYieldAccount {
   function debt() external view returns (uint256);
 
   /// @notice collateral value above principal, in BNB. Clamps at 0.
+  /// @dev pure accounting: ignores debt and the health cap, so it can exceed what a skim could
+  ///      remove. Use `skimmable` for the amount a skim can actually take.
   function claimableYield() external view returns (uint256);
 
   /// @notice what a skim in this block could take, health-capped

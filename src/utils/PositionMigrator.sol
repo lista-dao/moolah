@@ -235,6 +235,10 @@ contract PositionMigrator is
       require(marketParams.collateralToken == SLISBNB, "invalid target collateral for BNB");
     }
 
+    // the routed account holds only a BNB CDP position, so the slisBNB-ilk branch is dead. Checked
+    // ahead of the CDP reads or "no debt to migrate" masks it.
+    require(onBehalf != YIELD_ACCOUNT_OWNER || isBnb, "routed migration must be bnb");
+
     // refresh CDP debt
     INTERACTION.drip(collAddr); // accrue interest to get the updated debt amount
     uint256 cdpDebt = INTERACTION.borrowed(collAddr, onBehalf);

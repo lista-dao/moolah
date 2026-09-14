@@ -415,6 +415,14 @@ contract PositionMigratorYieldAccountTest is Test {
     assertTrue(MOOLAH.isAuthorized(address(fresh), address(migrator)));
   }
 
+  /// @dev the slisBNB-ilk branch is dead code for the routed account. The check sits ahead of the
+  ///      CDP reads so "no debt to migrate" does not mask it.
+  function test_routedMigration_requiresBnb() public {
+    vm.prank(YIELD_ACCOUNT_OWNER);
+    vm.expectRevert("routed migration must be bnb");
+    migrator.migratePosition(params, false, 0);
+  }
+
   /* ----------------------------- deadline bounds ----------------------------- */
 
   /// @dev a deadline in the past arms `forceMigrate` in the same block, skipping the window the

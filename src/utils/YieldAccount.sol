@@ -29,7 +29,8 @@ import { IYieldAccount } from "./interfaces/IYieldAccount.sol";
 ///      1. Every position change goes through this contract; the only address it can authorize on
 ///         Moolah is `migrator`, never the OWNER key or an arbitrary address.
 ///      2. `_skim()` runs before every borrow and withdraw, so Moolah's own health check caps
-///         borrowing at principal. No risk math is duplicated here.
+///         borrowing at principal plus at most `minSkimBnb` — the non-forcing skim leaves a
+///         sub-threshold surplus in place. No risk math is duplicated here.
 ///      3. `principalBnb` falls only with funds leaving or collateral seized (`_sync`). A pure
 ///         exchange-rate drop never lowers it — deficit cover is the protocol's call.
 ///      4. MANAGER owns config but cannot move funds, pick the migrator (DEFAULT_ADMIN does), or
@@ -45,6 +46,8 @@ import { IYieldAccount } from "./interfaces/IYieldAccount.sol";
 ///      vault, every inflow here has a recording entry point — `depositBnb` / `depositSlisBnb` are
 ///      permissionless — so collateral supplied straight through the provider is a donation and is
 ///      correctly treated as yield.
+/// @dev Every deposit forfeits its appreciation, not only the migrated position — a health top-up
+///      included. Principal stays withdrawable; yield above it is the treasury's.
 contract YieldAccount is
   IYieldAccount,
   UUPSUpgradeable,
@@ -88,6 +91,9 @@ contract YieldAccount is
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // protocol ops multisig
   bytes32 public constant PAUSER = keccak256("PAUSER"); // pauser role
+  /// @dev caps how long treasury collection can be deferred, and how much un-skimmed yield a
+  ///      borrow may lean on
+  uint256 public constant MAX_MIN_SKIM_BNB = 1 ether;
 
   /// @dev events and errors live in IYieldAccount
 
@@ -153,10 +159,16 @@ contract YieldAccount is
     // so MANAGER can revoke a stuck pauser key without a TimeLock proposal
     _setRoleAdmin(PAUSER, MANAGER);
 
+    require(_minSkimBnb <= MAX_MIN_SKIM_BNB, InvalidMinSkim());
+
     marketParams = _marketParams;
     marketId = id;
     treasury = _treasury;
     minSkimBnb = _minSkimBnb;
+
+    // the setters' events, so a log-driven indexer starts complete
+    emit SetTreasury(_treasury);
+    emit SetMinSkimBnb(_minSkimBnb);
 
     for (uint256 i = 0; i < _receivers.length; ++i) {
       _addReceiver(_receivers[i]);
@@ -223,8 +235,9 @@ contract YieldAccount is
     require(receivers.contains(receiver), NotReceiver());
 
     _sync();
-    bool exitAll = bnbAssets == type(uint256).max;
-    // a full exit force-skims: minSkimBnb must not let a sub-threshold residual leave with the owner
+    // a full exit force-skims, or a sub-threshold residual strands in a zero-principal account.
+    // Exactly the principal is a full exit too; above it still reverts rather than being clamped.
+    bool exitAll = bnbAssets == type(uint256).max || bnbAssets == principalBnb;
     _skim(exitAll);
 
     uint256 coll = MOOLAH.position(marketId, address(this)).collateral;
@@ -270,6 +283,8 @@ contract YieldAccount is
       (repaidAssets, repaidShares) = MOOLAH.repay(params, 0, pos.borrowShares, address(this), "");
     } else {
       require(assets > 0, ZeroAmount());
+      // like the shares branch, rather than leaning on Moolah to reject a no-debt repay
+      require(MOOLAH.position(marketId, address(this)).borrowShares > 0, ZeroAmount());
       pulled = assets;
       loanToken.safeTransferFrom(msg.sender, address(this), pulled);
       loanToken.forceApprove(address(MOOLAH), pulled);
@@ -416,6 +431,7 @@ contract YieldAccount is
 
   function setMinSkimBnb(uint256 _minSkimBnb) external onlyRole(MANAGER) {
     require(_minSkimBnb != minSkimBnb, AlreadySet());
+    require(_minSkimBnb <= MAX_MIN_SKIM_BNB, InvalidMinSkim());
     minSkimBnb = _minSkimBnb;
     emit SetMinSkimBnb(_minSkimBnb);
   }
@@ -491,10 +507,11 @@ contract YieldAccount is
   /// @param force ignore minSkimBnb (full-exit path)
   function _skim(bool force) internal returns (uint256) {
     MOOLAH.accrueInterest(marketParams);
-    uint256 claimable = claimableYield();
     (uint256 amount, uint256 bnbValue) = _skimmable();
     if (amount == 0 || (!force && bnbValue < minSkimBnb)) return 0;
 
+    // only the event consumes this, and the early return skips it
+    uint256 claimable = claimableYield();
     address to = treasury;
     uint256 balanceBefore = IERC20(TOKEN).balanceOf(to);
     PROVIDER.withdrawCollateral(marketParams, amount, address(this), to);
@@ -518,8 +535,8 @@ contract YieldAccount is
 
     uint256 removable = coll;
     if (pos.borrowShares > 0) {
-      Market memory m = MOOLAH.market(marketId);
-      uint256 borrowed = uint256(pos.borrowShares).toAssetsUp(m.totalBorrowAssets, m.totalBorrowShares);
+      // like `borrowable()`: stored totals understate debt between accruals, overstating the skim
+      uint256 borrowed = MOOLAH.expectedBorrowAssets(marketParams, address(this));
       uint256 price = MOOLAH.getPrice(marketParams);
       uint256 minCollateral = borrowed.wDivUp(marketParams.lltv).mulDivUp(ORACLE_PRICE_SCALE, price);
       removable = coll > minCollateral ? coll - minCollateral : 0;

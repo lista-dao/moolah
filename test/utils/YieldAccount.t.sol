@@ -2,6 +2,7 @@
 pragma solidity 0.8.34;
 
 import { Test } from "forge-std/Test.sol";
+import { VmSafe } from "forge-std/Vm.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
@@ -505,11 +506,11 @@ contract YieldAccountForkTest is Test {
   /// @dev the embedded skim skips yield below minSkimBnb; the owner still cannot walk out with it
   function test_withdraw_cannotTakeSubMinSkimYield() public {
     vm.prank(manager);
-    account.setMinSkimBnb(10 ether); // well above the donation below
+    account.setMinSkimBnb(1 ether); // MAX_MIN_SKIM_BNB, well above the donation below
 
     _depositSlis(1000 ether);
     uint256 principal = account.principalBnb();
-    _donate(1 ether); // unskimmable yield
+    _donate(0.5 ether); // unskimmable yield
 
     // the partial path is capped at principal
     vm.prank(owner);
@@ -520,7 +521,7 @@ contract YieldAccountForkTest is Test {
     vm.prank(owner);
     account.withdraw(type(uint256).max, owner);
 
-    assertApproxEqAbs(SLISBNB.balanceOf(treasury), 1 ether, 2);
+    assertApproxEqAbs(SLISBNB.balanceOf(treasury), 0.5 ether, 2);
     uint256 ownerValue = stakeManager.convertSnBnbToBnb(SLISBNB.balanceOf(owner));
     assertApproxEqAbs(ownerValue, principal, 1e9);
     assertLe(ownerValue, principal + 1);
@@ -615,6 +616,131 @@ contract YieldAccountForkTest is Test {
     assertEq(account.debt(), 0);
     assertEq(MOOLAH.position(id, address(account)).borrowShares, 0);
     assertEq(LISUSD.balanceOf(address(account)), stray, "max repay swept the stray balance");
+  }
+
+  /* ----------------------------- exit and config bounds ----------------------------- */
+
+  /// @dev keying the forced skim only on the `max` sentinel stranded a sub-threshold residual in a
+  ///      zero-principal account, out of reach of both `skim()` and `withdraw(max)`
+  function test_withdraw_exactPrincipal_forcesSkim() public {
+    _depositSlis(1000 ether);
+    uint256 principal = account.principalBnb();
+    _donate(0.0001 ether); // below minSkimBnb (0.001 BNB)
+
+    (, uint256 pendingBnb) = account.skimmable();
+    assertGt(pendingBnb, 0, "no residual to strand");
+    assertLt(pendingBnb, account.minSkimBnb(), "residual must be sub-threshold");
+
+    uint256 treasuryBefore = SLISBNB.balanceOf(treasury);
+    vm.prank(owner);
+    account.withdraw(principal, owner); // the exact principal, not the max sentinel
+
+    assertGt(SLISBNB.balanceOf(treasury), treasuryBefore, "residual stranded");
+    assertEq(account.principalBnb(), 0);
+    assertEq(account.collateral(), 0);
+    assertEq(account.trackedCollateral(), 0);
+  }
+
+  /// @dev the exact-principal path must not swallow an over-withdraw: above principal still reverts
+  function test_withdraw_abovePrincipalStillReverts() public {
+    _depositSlis(1000 ether);
+    uint256 principal = account.principalBnb();
+
+    vm.prank(owner);
+    vm.expectRevert(IYieldAccount.ExceedsPrincipal.selector);
+    account.withdraw(principal + 1, owner);
+  }
+
+  /// @dev unbounded, a single MANAGER key parks the treasury's yield out of `skim()` reach and
+  ///      inside the owner's borrow capacity
+  function test_setMinSkimBnb_isBounded() public {
+    uint256 cap = account.MAX_MIN_SKIM_BNB();
+
+    vm.prank(manager);
+    vm.expectRevert(IYieldAccount.InvalidMinSkim.selector);
+    account.setMinSkimBnb(cap + 1);
+
+    vm.prank(manager);
+    account.setMinSkimBnb(cap);
+    assertEq(account.minSkimBnb(), cap);
+  }
+
+  function test_initialize_boundsMinSkimBnb() public {
+    address[] memory r = new address[](1);
+    r[0] = owner;
+    YieldAccount impl = new YieldAccount(address(MOOLAH), address(PROVIDER), owner);
+
+    vm.expectRevert(IYieldAccount.InvalidMinSkim.selector);
+    new ERC1967Proxy(
+      address(impl),
+      abi.encodeCall(YieldAccount.initialize, (TIMELOCK, manager, pauser, params, treasury, 1 ether + 1, owner, r))
+    );
+  }
+
+  /// @dev an indexer rebuilding config from logs must see the initial values too
+  function test_initialize_emitsConfigEvents() public {
+    address[] memory r = new address[](1);
+    r[0] = owner;
+    YieldAccount impl = new YieldAccount(address(MOOLAH), address(PROVIDER), owner);
+
+    vm.recordLogs();
+    new ERC1967Proxy(
+      address(impl),
+      abi.encodeCall(YieldAccount.initialize, (TIMELOCK, manager, pauser, params, treasury, 0.002 ether, owner, r))
+    );
+    VmSafe.Log[] memory logs = vm.getRecordedLogs();
+
+    bool sawTreasury;
+    bool sawMinSkim;
+    for (uint256 i = 0; i < logs.length; ++i) {
+      if (logs[i].topics[0] == IYieldAccount.SetTreasury.selector) {
+        sawTreasury = true;
+        assertEq(address(uint160(uint256(logs[i].topics[1]))), treasury);
+      }
+      if (logs[i].topics[0] == IYieldAccount.SetMinSkimBnb.selector) {
+        sawMinSkim = true;
+        assertEq(abi.decode(logs[i].data, (uint256)), 0.002 ether);
+      }
+    }
+    assertTrue(sawTreasury, "SetTreasury not emitted by initialize");
+    assertTrue(sawMinSkim, "SetMinSkimBnb not emitted by initialize");
+  }
+
+  /// @dev the partial branch must reject a no-debt repay itself, like the shares branch does
+  function test_repay_noDebtReverts() public {
+    _depositSlis(100 ether);
+
+    deal(address(LISUSD), keeper, 1 ether);
+    vm.startPrank(keeper);
+    LISUSD.approve(address(account), 1 ether);
+    vm.expectRevert(IYieldAccount.ZeroAmount.selector);
+    account.repay(1 ether);
+    vm.stopPrank();
+  }
+
+  /// @dev `_skimmable` priced debt from stored market totals, which lag accrued interest and
+  ///      overstated the skim. It now shares `expectedBorrowAssets` with `borrowable()`.
+  function test_skimmable_pricesPendingInterest() public {
+    _depositSlis(1000 ether);
+    uint256 max = account.borrowable(); // already nets off the 1 wei Moolah adds
+    vm.prank(owner);
+    account.borrow(max, owner); // sit at the cap so the health term, not the surplus, binds
+
+    _donate(5 ether);
+
+    // the resilient oracle rejects a warped timestamp; pin the price so only interest moves
+    uint256 price = MOOLAH.getPrice(params);
+    vm.warp(block.timestamp + 1 hours); // interest accrues; the market is not updated yet
+    vm.mockCall(address(MOOLAH), abi.encodeCall(IMoolah.getPrice, (params)), abi.encode(price));
+
+    (uint256 viewAmount, ) = account.skimmable();
+    // without the health cap binding, this would pass vacuously
+    uint256 surplusSlis = stakeManager.convertBnbToSnBnb(account.claimableYield());
+    assertLt(viewAmount, surplusSlis, "health cap must bind here");
+
+    MOOLAH.accrueInterest(params);
+    (uint256 accruedAmount, ) = account.skimmable();
+    assertEq(viewAmount, accruedAmount, "view must already price pending interest");
   }
 
   /// @dev anyone can repay this account's debt straight through Moolah, without touching the
