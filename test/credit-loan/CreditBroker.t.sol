@@ -9,13 +9,14 @@ import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
 import { IMoolah, MarketParams, Id, Position, Market } from "moolah/interfaces/IMoolah.sol";
 import { OracleMock } from "../../src/moolah/mocks/OracleMock.sol";
-import { IrmMockZero } from "../../src/moolah/mocks/IrmMock.sol";
+import { IrmMock, IrmMockZero } from "../../src/moolah/mocks/IrmMock.sol";
 import { ERC20Mock } from "../../src/moolah/mocks/ERC20Mock.sol";
 
 import { CreditBroker } from "../../src/credit-loan/CreditBroker.sol";
 import { CreditBrokerInterestRelayer } from "../../src/credit-loan/CreditBrokerInterestRelayer.sol";
 import { ICreditBroker, FixedLoanPosition, FixedTermAndRate, GraceConfig, FixedTermType } from "../../src/credit-loan/interfaces/ICreditBroker.sol";
 import { CreditBrokerMath, RATE_SCALE } from "../../src/credit-loan/libraries/CreditBrokerMath.sol";
+import { CreditBrokerOperatorLib } from "../../src/credit-loan/libraries/CreditBrokerOperatorLib.sol";
 import { MoolahVault } from "../../src/moolah-vault/MoolahVault.sol";
 import { MarketAllocation } from "../../src/moolah-vault/interfaces/IMoolahVault.sol";
 import { BrokerInterestLockBuffer } from "../../src/utils/BrokerInterestLockBuffer.sol";
@@ -45,7 +46,7 @@ contract CreditBrokerTest is Test {
   MoolahVault public vault;
   CreditBrokerInterestRelayer public relayer;
   CreditBrokerInfo public info;
-  BrokerInterestLockBuffer public lockBuffer; // audit #08 — opt-in via _enableLockBuffer
+  BrokerInterestLockBuffer public lockBuffer; // opt-in via _enableLockBuffer
   uint64 constant LOCK_DURATION = 6 hours;
 
   // Market commons
@@ -234,7 +235,7 @@ contract CreditBrokerTest is Test {
     assertEq(noInterestPeriod, 1);
     assertEq(broker.maxFixedLoanPositions(), 100);
 
-    // --- audit #08 wiring ---
+    // --- lock buffer wiring ---
     // Cache role hashes so startPrank covers the actual grantRole (separate STATICCALL for the
     // view-role lookup would otherwise consume vm.prank).
     bytes32 vaultCurator = vault.CURATOR();
@@ -270,7 +271,7 @@ contract CreditBrokerTest is Test {
     vm.stopPrank();
   }
 
-  // ===== audit #08 helpers =====
+  // ===== lock buffer helpers =====
 
   function _enableLockBuffer() internal {
     vm.prank(MANAGER);
@@ -1587,7 +1588,7 @@ contract CreditBrokerTest is Test {
     broker.repay(minLoan / 2, posId, borrower);
   }
 
-  function test_checkPositionsMeetsMinLoan_allowsFullRepay() public {
+  function test_positionAtMinLoan_allowsFullRepay() public {
     test_supplyCollateral();
     FixedTermAndRate memory term = FixedTermAndRate({
       termId: 100,
@@ -1671,7 +1672,7 @@ contract CreditBrokerTest is Test {
   }
 
   // =====================================================================================
-  //                 Audit #08 — BrokerInterestLockBuffer (credit side)
+  //                 BrokerInterestLockBuffer (credit side)
   // =====================================================================================
 
   /// @dev Flush is hidden in the same block, unlocks linearly over LOCK_DURATION.
@@ -1882,5 +1883,796 @@ contract CreditBrokerTest is Test {
     vm.expectRevert(VaultErrorsLib.LockBufferNotEmpty.selector);
     vm.prank(MANAGER);
     vault.setLockBuffer(address(newBuffer));
+  }
+
+  // =============================================
+  // minLoan stranding: per-position validation + repayAll
+  // =============================================
+
+  /// @dev Two positions, zero-interest term so amounts stay exact.
+  ///      Returns (posIdA, posIdB) for principals (amountA, amountB).
+  function _twoPositions(uint256 amountA, uint256 amountB) internal returns (uint256 posIdA, uint256 posIdB) {
+    test_supplyCollateral();
+
+    // 1e27 == RATE_SCALE, i.e. 0% APR: keeps repay amounts exact.
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: 900, duration: 30 days, apr: 1e27, termType: type1 });
+    vm.prank(MANAGER);
+    broker.updateFixedTermAndRate(term, false);
+
+    uint256 newScore = COLLATERAL * 10;
+    _generateTree(borrower, newScore, creditToken.versionId() + 1);
+
+    vm.startPrank(borrower);
+    creditToken.approve(address(broker), type(uint256).max);
+    broker.supplyAndBorrow(9 * COLLATERAL, amountA, term.termId, newScore, proof);
+    posIdA = broker.fixedPosUuid();
+    broker.borrow(amountB, term.termId, newScore, proof);
+    posIdB = broker.fixedPosUuid();
+    vm.stopPrank();
+  }
+
+  /// @notice A position stranded in the (0, minLoan) band must not block *partial* repayment of
+  ///         an unrelated healthy position. The old global `_validatePositions` looped every
+  ///         position and reverted "below min loan" here.
+  /// @dev    Scope note: this is the broker-level floor only. Fully repaying the healthy position
+  ///         is a different case — Moolah's account-level floor still rejects it. See
+  ///         `test_fullRepayHealthy_whileOtherStranded_revertsAtMoolah`.
+  function test_validation_isolation_strandedPositionDoesNotBlockOthers() public {
+    (uint256 posIdA, uint256 posIdB) = _twoPositions(100 ether, 20 ether);
+
+    // raise the floor so position B (20) lands in the dead band
+    vm.prank(MANAGER);
+    moolah.setMinLoanValue(30e8);
+    assertEq(moolah.minLoan(marketParams), 30 ether, "minLoan mismatch");
+
+    USDT.setBalance(borrower, 1_000 ether);
+    vm.prank(borrower);
+    broker.repay(50 ether, posIdA, borrower);
+
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    assertEq(positions.length, 2, "both positions should remain");
+    for (uint256 i = 0; i < positions.length; i++) {
+      if (positions[i].posId == posIdA) {
+        assertEq(positions[i].principalRepaid, 50 ether, "A should be half repaid");
+      } else {
+        assertEq(positions[i].posId, posIdB, "unexpected position");
+        assertEq(positions[i].principalRepaid, 0, "stranded B must be untouched");
+      }
+    }
+  }
+
+  /// @notice Same isolation for borrowing: a stranded position must not block a new borrow
+  ///         that is itself well above minLoan.
+  function test_validation_isolation_strandedPositionDoesNotBlockBorrow() public {
+    (, uint256 posIdB) = _twoPositions(100 ether, 20 ether);
+
+    vm.prank(MANAGER);
+    moolah.setMinLoanValue(30e8);
+
+    uint256 newScore = COLLATERAL * 10;
+    vm.prank(borrower);
+    broker.borrow(60 ether, 900, newScore, proof);
+
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    assertEq(positions.length, 3, "new position should have been created");
+    // the stranded position survives untouched
+    bool found;
+    for (uint256 i = 0; i < positions.length; i++) {
+      if (positions[i].posId == posIdB) {
+        found = true;
+        assertEq(positions[i].principal, 20 ether, "stranded principal changed");
+      }
+    }
+    assertTrue(found, "stranded position disappeared");
+  }
+
+  /// @notice A new borrow below minLoan is still rejected — per-position validation is not
+  ///         a loosening of the floor for the position being created. Moolah's own check only
+  ///         sees the account's aggregate debt (121 ether here), so the broker is the one that
+  ///         has to catch the undersized position.
+  function test_borrow_belowMinLoan_stillReverts() public {
+    _twoPositions(100 ether, 20 ether);
+
+    uint256 newScore = COLLATERAL * 10;
+    vm.prank(borrower);
+    vm.expectRevert("below min loan");
+    broker.borrow(1 ether, 900, newScore, proof);
+  }
+
+  /// @notice The reported failure mode: minLoanValue is denominated in USD, so a loan-token
+  ///         depeg raises `minLoan` in token terms and strands positions that were legal when
+  ///         opened. Partial repay is then impossible and `repayAll` is the only exit.
+  function test_loanTokenDepeg_strandsPosition_repayAllClears() public {
+    (uint256 posIdA, ) = _twoPositions(20 ether, 40 ether);
+
+    // minLoanValue is 15e8 ($15); at $1.00 the floor is 15 tokens
+    assertEq(moolah.minLoan(marketParams), 15 ether, "pre-depeg minLoan mismatch");
+
+    // the loan token trades at $0.50 -> floor doubles to 30 tokens, stranding the 20-token position
+    oracle.setPrice(address(USDT), 5e7);
+    assertEq(moolah.minLoan(marketParams), 30 ether, "post-depeg minLoan mismatch");
+
+    USDT.setBalance(borrower, 1_000 ether);
+
+    // partial repay of the stranded position is impossible: any remainder is below the floor
+    vm.prank(borrower);
+    vm.expectRevert("below min loan");
+    broker.repay(5 ether, posIdA, borrower);
+
+    // repayAll clears every position and every borrow share
+    uint256 quoted = broker.previewRepayAll(borrower);
+    assertEq(quoted, 60 ether, "quote should be the sum of both principals at 0% APR");
+
+    uint256 balanceBefore = USDT.balanceOf(borrower);
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+
+    assertEq(balanceBefore - USDT.balanceOf(borrower), quoted, "pulled amount should match the quote");
+    assertEq(broker.userFixedPositions(borrower).length, 0, "positions not cleared");
+    assertEq(moolah.position(id, borrower).borrowShares, 0, "borrow shares not cleared");
+  }
+
+  /// @notice Same stranding via a governance change to minLoanValue rather than a price move.
+  function test_minLoanValueRaise_strandsPosition_repayAllClears() public {
+    (uint256 posIdA, ) = _twoPositions(20 ether, 40 ether);
+
+    vm.prank(MANAGER);
+    moolah.setMinLoanValue(30e8);
+
+    USDT.setBalance(borrower, 1_000 ether);
+    vm.prank(borrower);
+    vm.expectRevert("below min loan");
+    broker.repay(5 ether, posIdA, borrower);
+
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+
+    assertEq(broker.userFixedPositions(borrower).length, 0, "positions not cleared");
+    assertEq(moolah.position(id, borrower).borrowShares, 0, "borrow shares not cleared");
+  }
+
+  /// @notice repayAll pulls exactly the quoted amount, routes interest to the relayer, and
+  ///         clears the Moolah leg by shares.
+  function test_repayAll_settlesInterestAndPrincipal() public {
+    test_supplyAndBorrow(); // one 500-ether ACCRUE_INTEREST position at 105% APR
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    uint256 principal = positions[0].principal;
+
+    vm.warp(vm.getBlockTimestamp() + 7 days);
+
+    uint256 quoted = broker.previewRepayAll(borrower);
+    assertGt(quoted, principal, "quote should include accrued interest");
+
+    USDT.setBalance(borrower, quoted);
+    uint256 interest = quoted - principal;
+    uint256 relayerHeldBefore = USDT.balanceOf(address(relayer));
+    uint256 vaultSuppliedBefore = moolah.market(id).totalSupplyAssets;
+
+    vm.expectEmit(true, false, false, true, address(broker));
+    emit ICreditBroker.AllPositionsRepaid(borrower, quoted);
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+
+    assertEq(USDT.balanceOf(borrower), 0, "borrower should have paid exactly the quote");
+    assertEq(broker.userFixedPositions(borrower).length, 0, "positions not cleared");
+    assertEq(moolah.position(id, borrower).borrowShares, 0, "borrow shares not cleared");
+    assertEq(USDT.balanceOf(address(broker)), 0, "broker should not retain loan token");
+
+    // interest is broker revenue: the relayer either still holds it or has flushed it to the vault
+    uint256 relayerDelta = USDT.balanceOf(address(relayer)) - relayerHeldBefore;
+    uint256 suppliedDelta = moolah.market(id).totalSupplyAssets - vaultSuppliedBefore;
+    assertEq(relayerDelta + suppliedDelta, interest, "interest did not reach the relayer or the vault");
+  }
+
+  /// @notice repayAll charges the delay penalty on an overdue position, exactly as repay does.
+  function test_repayAll_chargesDelayPenalty() public {
+    (uint256 posIdA, ) = _twoPositions(100 ether, 40 ether);
+
+    FixedLoanPosition memory posA = broker.getPosition(borrower, posIdA);
+    (uint256 period, uint256 penaltyRate, ) = broker.graceConfig();
+    vm.warp(posA.end + period + 1);
+
+    uint256 quoted = broker.previewRepayAll(borrower);
+    // 0% APR, so the only extra over the 140 principal is the 15% penalty on both positions
+    uint256 expectedPenalty = (140 ether * penaltyRate) / RATE_SCALE;
+    assertEq(quoted, 140 ether + expectedPenalty, "penalty not charged");
+
+    USDT.setBalance(borrower, quoted);
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+
+    assertEq(broker.userFixedPositions(borrower).length, 0, "positions not cleared");
+    assertEq(moolah.position(id, borrower).borrowShares, 0, "borrow shares not cleared");
+  }
+
+  /// @notice After a bad-debt liquidation the position keeps broker-side principal but has no
+  ///         Moolah shares. repayAll must settle that principal through the relayer while
+  ///         clearing the surviving position's shares to exactly zero.
+  function test_repayAll_clearsAfterBadDebtLiquidation() public {
+    (uint256 posIdA, ) = _twoPositions(100 ether, 40 ether);
+
+    FixedLoanPosition memory posA = broker.getPosition(borrower, posIdA);
+    (uint256 period, , ) = broker.graceConfig();
+    vm.warp(posA.end + period + 1);
+
+    vm.prank(BOT);
+    broker.liquidate(borrower, posIdA);
+
+    FixedLoanPosition memory liquidated = broker.getPosition(borrower, posIdA);
+    assertTrue(liquidated.isBadDebt, "A should be marked bad debt");
+    assertEq(liquidated.borrowedShares, 0, "A shares should be zeroed");
+    assertGt(moolah.position(id, borrower).borrowShares, 0, "B shares should survive");
+
+    uint256 quoted = broker.previewRepayAll(borrower);
+    USDT.setBalance(borrower, quoted);
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+
+    assertEq(broker.userFixedPositions(borrower).length, 0, "positions not cleared");
+    assertEq(moolah.position(id, borrower).borrowShares, 0, "residual borrow shares left behind");
+  }
+
+  /// @notice A bad-debt position sitting below minLoan carries no Moolah debt, so it must not
+  ///         gate repayment of a live position.
+  function test_badDebtPositionBelowMinLoan_doesNotBlockOtherRepay() public {
+    (uint256 posIdA, uint256 posIdB) = _twoPositions(20 ether, 100 ether);
+
+    FixedLoanPosition memory posA = broker.getPosition(borrower, posIdA);
+    (uint256 period, , ) = broker.graceConfig();
+    vm.warp(posA.end + period + 1);
+
+    vm.prank(BOT);
+    broker.liquidate(borrower, posIdA);
+
+    // floor now above A's written-off principal
+    vm.prank(MANAGER);
+    moolah.setMinLoanValue(30e8);
+
+    // B is penalized too (same term end), so it must be repaid in full
+    uint256 needed = broker.previewRepayAll(borrower);
+    USDT.setBalance(borrower, needed);
+    vm.prank(borrower);
+    broker.repay(needed, posIdB, borrower);
+
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    assertEq(positions.length, 1, "only the bad-debt position should remain");
+    assertEq(positions[0].posId, posIdA, "wrong position remained");
+  }
+
+  /// @notice repayAll on a user with nothing outstanding reverts rather than silently no-oping.
+  function test_repayAll_nothingToRepay_reverts() public {
+    test_supplyCollateral();
+    vm.prank(borrower);
+    vm.expectRevert("nothing to repay");
+    broker.repayAll(borrower);
+  }
+
+  /// @notice repayAll honours the global pause.
+  function test_repayAll_whenPaused_reverts() public {
+    _twoPositions(100 ether, 40 ether);
+
+    vm.prank(PAUSER);
+    broker.pause();
+
+    vm.prank(borrower);
+    vm.expectRevert();
+    broker.repayAll(borrower);
+  }
+
+  /// @notice Anyone can clear someone else's positions; the payer is msg.sender.
+  function test_repayAll_onBehalfOfAnotherUser() public {
+    _twoPositions(100 ether, 40 ether);
+
+    uint256 quoted = broker.previewRepayAll(borrower);
+    USDT.setBalance(supplier, quoted);
+    vm.startPrank(supplier);
+    USDT.approve(address(broker), type(uint256).max);
+    broker.repayAll(borrower);
+    vm.stopPrank();
+
+    assertEq(broker.userFixedPositions(borrower).length, 0, "positions not cleared");
+    assertEq(moolah.position(id, borrower).borrowShares, 0, "borrow shares not cleared");
+    assertEq(USDT.balanceOf(supplier), 0, "payer should have funded the full amount");
+  }
+
+  // =============================================
+  // repayAll cross-checks (audit)
+  // =============================================
+
+  /// @dev Two interest-bearing positions, so repayAll's interest/penalty math is exercised
+  ///      rather than skipped by a 0% APR.
+  function _twoInterestPositions(FixedTermType termType) internal returns (uint256 posIdA, uint256 posIdB) {
+    test_supplyCollateral();
+
+    FixedTermAndRate memory term = FixedTermAndRate({
+      termId: 910,
+      duration: 30 days,
+      apr: 112 * 1e25, // 12% APR
+      termType: termType
+    });
+    vm.prank(MANAGER);
+    broker.updateFixedTermAndRate(term, false);
+
+    uint256 newScore = COLLATERAL * 10;
+    _generateTree(borrower, newScore, creditToken.versionId() + 1);
+
+    vm.startPrank(borrower);
+    creditToken.approve(address(broker), type(uint256).max);
+    broker.supplyAndBorrow(9 * COLLATERAL, 100 ether, term.termId, newScore, proof);
+    posIdA = broker.fixedPosUuid();
+    broker.borrow(40 ether, term.termId, newScore, proof);
+    posIdB = broker.fixedPosUuid();
+    vm.stopPrank();
+  }
+
+  /// @notice repayAll must charge exactly what repaying each position in full would charge.
+  ///         Guards against the aggregated preview drifting from the per-position `repay` math.
+  function test_repayAll_matchesSumOfIndividualRepays() public {
+    (uint256 posIdA, uint256 posIdB) = _twoInterestPositions(type1);
+    vm.warp(vm.getBlockTimestamp() + 7 days);
+
+    uint256 snap = vm.snapshotState();
+
+    // path 1 — repayAll
+    uint256 quoted = broker.previewRepayAll(borrower);
+    USDT.setBalance(borrower, 10_000 ether);
+    uint256 beforeAll = USDT.balanceOf(borrower);
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+    uint256 spentAll = beforeAll - USDT.balanceOf(borrower);
+
+    vm.revertToState(snap);
+
+    // path 2 — full `repay` of each position, over-sending so the excess is refunded
+    USDT.setBalance(borrower, 10_000 ether);
+    uint256 beforeEach = USDT.balanceOf(borrower);
+    vm.startPrank(borrower);
+    broker.repay(1_000 ether, posIdA, borrower);
+    broker.repay(1_000 ether, posIdB, borrower);
+    vm.stopPrank();
+    uint256 spentEach = beforeEach - USDT.balanceOf(borrower);
+
+    assertEq(spentAll, quoted, "repayAll pulled a different amount than it quoted");
+    assertEq(spentAll, spentEach, "repayAll and per-position repay disagree on the total");
+  }
+
+  /// @notice Same cross-check for the UPFRONT_INTEREST term, whose interest is a fixed total on
+  ///         the original principal rather than a time-accrued figure.
+  function test_repayAll_matchesSumOfIndividualRepays_upfront() public {
+    (uint256 posIdA, uint256 posIdB) = _twoInterestPositions(type2);
+    vm.warp(vm.getBlockTimestamp() + 7 days);
+
+    uint256 snap = vm.snapshotState();
+
+    uint256 quoted = broker.previewRepayAll(borrower);
+    USDT.setBalance(borrower, 10_000 ether);
+    uint256 beforeAll = USDT.balanceOf(borrower);
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+    uint256 spentAll = beforeAll - USDT.balanceOf(borrower);
+
+    vm.revertToState(snap);
+
+    USDT.setBalance(borrower, 10_000 ether);
+    uint256 beforeEach = USDT.balanceOf(borrower);
+    vm.startPrank(borrower);
+    broker.repay(1_000 ether, posIdA, borrower);
+    broker.repay(1_000 ether, posIdB, borrower);
+    vm.stopPrank();
+    uint256 spentEach = beforeEach - USDT.balanceOf(borrower);
+
+    assertEq(spentAll, quoted, "upfront: repayAll pulled a different amount than it quoted");
+    assertEq(spentAll, spentEach, "upfront: repayAll and per-position repay disagree");
+  }
+
+  /// @notice Cross-check after the grace period, where every position also carries a penalty.
+  function test_repayAll_matchesSumOfIndividualRepays_penalized() public {
+    (uint256 posIdA, uint256 posIdB) = _twoInterestPositions(type1);
+    FixedLoanPosition memory posA = broker.getPosition(borrower, posIdA);
+    (uint256 period, , ) = broker.graceConfig();
+    vm.warp(posA.end + period + 1);
+
+    uint256 snap = vm.snapshotState();
+
+    uint256 quoted = broker.previewRepayAll(borrower);
+    USDT.setBalance(borrower, 10_000 ether);
+    uint256 beforeAll = USDT.balanceOf(borrower);
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+    uint256 spentAll = beforeAll - USDT.balanceOf(borrower);
+
+    vm.revertToState(snap);
+
+    USDT.setBalance(borrower, 10_000 ether);
+    uint256 beforeEach = USDT.balanceOf(borrower);
+    vm.startPrank(borrower);
+    broker.repay(1_000 ether, posIdA, borrower);
+    broker.repay(1_000 ether, posIdB, borrower);
+    vm.stopPrank();
+    uint256 spentEach = beforeEach - USDT.balanceOf(borrower);
+
+    assertEq(spentAll, quoted, "penalized: repayAll pulled a different amount than it quoted");
+    assertEq(spentAll, spentEach, "penalized: repayAll and per-position repay disagree");
+  }
+
+  /// @notice A user whose every position was written off has no Moolah shares left; repayAll
+  ///         must still settle the broker-side principal through the relayer.
+  function test_repayAll_onlyBadDebtPositions() public {
+    (uint256 posIdA, uint256 posIdB) = _twoInterestPositions(type1);
+    FixedLoanPosition memory posA = broker.getPosition(borrower, posIdA);
+    (uint256 period, , ) = broker.graceConfig();
+    vm.warp(posA.end + period + 1);
+
+    vm.startPrank(BOT);
+    broker.liquidate(borrower, posIdA);
+    broker.liquidate(borrower, posIdB);
+    vm.stopPrank();
+
+    assertEq(moolah.position(id, borrower).borrowShares, 0, "all shares should be written off");
+
+    uint256 quoted = broker.previewRepayAll(borrower);
+    assertGt(quoted, 0, "written-off principal is still owed to the broker");
+
+    USDT.setBalance(borrower, quoted);
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+
+    assertEq(USDT.balanceOf(borrower), 0, "should have paid exactly the quote");
+    assertEq(broker.userFixedPositions(borrower).length, 0, "positions not cleared");
+  }
+
+  /// @notice An under-funded caller must revert rather than partially clearing state.
+  function test_repayAll_insufficientFunds_reverts() public {
+    _twoInterestPositions(type1);
+    vm.warp(vm.getBlockTimestamp() + 7 days);
+
+    uint256 quoted = broker.previewRepayAll(borrower);
+    USDT.setBalance(borrower, quoted - 1);
+
+    vm.prank(borrower);
+    vm.expectRevert();
+    broker.repayAll(borrower);
+
+    // state untouched
+    assertEq(broker.userFixedPositions(borrower).length, 2, "positions should survive the revert");
+    assertGt(moolah.position(id, borrower).borrowShares, 0, "shares should survive the revert");
+  }
+
+  /// @notice After repayAll the account is clean enough to withdraw collateral and borrow again,
+  ///         including when a written-off position was blocking withdrawal beforehand.
+  function test_repayAll_unblocksWithdrawAndBorrow() public {
+    (uint256 posIdA, ) = _twoInterestPositions(type1);
+    FixedLoanPosition memory posA = broker.getPosition(borrower, posIdA);
+    (uint256 period, , ) = broker.graceConfig();
+    vm.warp(posA.end + period + 1);
+
+    vm.prank(BOT);
+    broker.liquidate(borrower, posIdA);
+
+    uint256 score = COLLATERAL * 10;
+    // a bad-debt position blocks collateral withdrawal
+    vm.prank(borrower);
+    vm.expectRevert("bad debt position exists");
+    broker.withdrawCollateral(1 ether, score, proof);
+
+    uint256 quoted = broker.previewRepayAll(borrower);
+    USDT.setBalance(borrower, quoted);
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+
+    vm.prank(borrower);
+    broker.withdrawCollateral(1 ether, score, proof);
+    assertEq(creditToken.balanceOf(borrower), 1 ether, "collateral not returned");
+  }
+
+  /// @notice repayAll is the only exit for a stranded position, so it must stay executable at
+  ///         `maxFixedLoanPositions`. Guards against the two per-position loops (preview +
+  ///         removal events) turning the escape hatch into an out-of-gas trap.
+  function test_repayAll_atMaxPositions_gasBounded() public {
+    test_supplyCollateral();
+
+    FixedTermAndRate memory term = FixedTermAndRate({
+      termId: 920,
+      duration: 30 days,
+      apr: 112 * 1e25,
+      termType: type1
+    });
+    vm.prank(MANAGER);
+    broker.updateFixedTermAndRate(term, false);
+
+    uint256 max = broker.maxFixedLoanPositions();
+    uint256 newScore = COLLATERAL * 100;
+    _generateTree(borrower, newScore, creditToken.versionId() + 1);
+
+    vm.startPrank(borrower);
+    creditToken.approve(address(broker), type(uint256).max);
+    broker.supplyAndBorrow(99 * COLLATERAL, 20 ether, term.termId, newScore, proof);
+    for (uint256 i = 1; i < max; i++) {
+      broker.borrow(20 ether, term.termId, newScore, proof);
+    }
+    vm.stopPrank();
+    assertEq(broker.userFixedPositions(borrower).length, max, "should be at the position cap");
+
+    vm.warp(vm.getBlockTimestamp() + 7 days);
+
+    uint256 quoted = broker.previewRepayAll(borrower);
+    USDT.setBalance(borrower, quoted);
+
+    uint256 gasBefore = gasleft();
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+    uint256 gasUsed = gasBefore - gasleft();
+    emit log_named_uint("repayAll gas at max positions", gasUsed);
+
+    assertEq(broker.userFixedPositions(borrower).length, 0, "positions not cleared");
+    assertEq(moolah.position(id, borrower).borrowShares, 0, "borrow shares not cleared");
+    // BSC blocks carry ~140M gas; stay an order of magnitude under it.
+    assertLt(gasUsed, 14_000_000, "repayAll too expensive at the position cap");
+  }
+
+  /// @notice The operator library is only ever meant to run under CreditBroker's DELEGATECALL.
+  ///         A direct CALL at the library's own address must not execute — Solidity's library
+  ///         call-protection guard is what stops it, so pin that behaviour.
+  function test_operatorLib_directCallReverts() public {
+    address lib = address(CreditBrokerOperatorLib);
+    (bool ok, ) = lib.call(abi.encodeWithSignature("repayAll(address)", borrower));
+    assertFalse(ok, "direct call into the operator library should revert");
+  }
+
+  // =============================================
+  // repayAll scope and non-zero-IRM repay
+  // =============================================
+
+  /// @notice Scope of the isolation fix. The broker no longer blocks *partial* repay of a
+  ///         healthy position, but Moolah keeps its own account-level floor: a FULL repay that
+  ///         would leave the account's aggregate Moolah debt inside (0, minLoan) still reverts
+  ///         with "remain borrow too low". `repayAll` (or clearing the stranded leg first) is the
+  ///         way out. Pins the caveat so the PR/UI wording cannot drift from the behaviour.
+  function test_fullRepayHealthy_whileOtherStranded_revertsAtMoolah() public {
+    (uint256 posIdA, ) = _twoPositions(100 ether, 20 ether);
+
+    vm.prank(MANAGER);
+    moolah.setMinLoanValue(30e8);
+    assertEq(moolah.minLoan(marketParams), 30 ether, "minLoan mismatch");
+
+    USDT.setBalance(borrower, 1_000 ether);
+
+    // partial repay of the healthy leg works — that is the isolation fix
+    vm.prank(borrower);
+    broker.repay(50 ether, posIdA, borrower);
+
+    // clearing it outright would leave the account at 20 (only the stranded leg), inside the band
+    vm.prank(borrower);
+    vm.expectRevert("remain borrow too low");
+    broker.repay(50 ether, posIdA, borrower);
+
+    // repayAll is the exit
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+    assertEq(broker.userFixedPositions(borrower).length, 0, "positions not cleared");
+    assertEq(moolah.position(id, borrower).borrowShares, 0, "borrow shares not cleared");
+  }
+
+  /// @dev Stand up a second CreditBroker on a market whose IRM charges a non-zero borrow rate.
+  ///      Returns the broker, its market id, and a funded borrower.
+  function _nonZeroIrmBroker() internal returns (CreditBroker b2, Id id2, address user2) {
+    IrmMock liveIrm = new IrmMock();
+    vm.prank(MANAGER);
+    Moolah(address(moolah)).enableIrm(address(liveIrm));
+
+    CreditBroker impl2 = new CreditBroker(
+      address(moolah),
+      address(relayer),
+      address(oracle),
+      address(LISTA),
+      address(creditToken)
+    );
+    ERC1967Proxy proxy2 = new ERC1967Proxy(
+      address(impl2),
+      abi.encodeWithSelector(CreditBroker.initialize.selector, ADMIN, MANAGER, BOT, PAUSER)
+    );
+    b2 = CreditBroker(payable(address(proxy2)));
+
+    MarketParams memory mp2 = MarketParams({
+      loanToken: address(USDT),
+      collateralToken: address(creditToken),
+      oracle: address(b2),
+      irm: address(liveIrm),
+      lltv: LTV
+    });
+    id2 = mp2.id();
+    Moolah(address(moolah)).createMarket(mp2);
+
+    vm.prank(MANAGER);
+    b2.setMarketId(id2);
+
+    vm.startPrank(MANAGER);
+    Moolah(address(moolah)).setMarketBroker(id2, address(b2), true);
+    Moolah(address(moolah)).setProvider(id2, address(b2), true);
+    creditToken.grantRole(creditToken.TRANSFERER(), address(b2));
+    relayer.addBroker(address(b2));
+    vm.stopPrank();
+
+    // seed liquidity so utilization (and therefore the borrow rate) is non-zero but healthy
+    USDT.setBalance(supplier, USDT.balanceOf(supplier) + SUPPLY_LIQ);
+    vm.startPrank(supplier);
+    IERC20(address(USDT)).approve(address(moolah), type(uint256).max);
+    moolah.supply(mp2, SUPPLY_LIQ, 0, supplier, bytes(""));
+    vm.stopPrank();
+
+    user2 = address(0x203);
+    vm.prank(user2);
+    USDT.approve(address(b2), type(uint256).max);
+
+    FixedTermAndRate memory term = FixedTermAndRate({
+      termId: 930,
+      duration: 30 days,
+      apr: 112 * 1e25,
+      termType: type1
+    });
+    vm.prank(MANAGER);
+    b2.updateFixedTermAndRate(term, false);
+  }
+
+  /// @notice Regression: on a market with a non-zero IRM, Moolah accrues interest as the
+  ///         first step of its own `repay`, which lifts `totalBorrowAssets` while borrow shares
+  ///         stay put. Shares derived from pre-accrual totals therefore cost more assets than the
+  ///         broker had approved, and the whole repayment reverted on the allowance. `repayAll`
+  ///         was safe because it pre-accrued; `repay` was not. `repayToMoolah` now accrues first.
+  function test_repay_onNonZeroIrmMarket_doesNotRevert() public {
+    (CreditBroker b2, Id id2, address user2) = _nonZeroIrmBroker();
+
+    uint256 score = 5_000 ether;
+    _generateTree(user2, score, creditToken.versionId() + 1);
+
+    vm.startPrank(user2);
+    creditToken.approve(address(b2), type(uint256).max);
+    b2.supplyAndBorrow(score, 1_000 ether, 930, score, proof);
+    vm.stopPrank();
+
+    uint256 posId = b2.fixedPosUuid();
+
+    // let the market IRM run so Moolah owes itself interest the broker has not seen
+    vm.warp(vm.getBlockTimestamp() + 30 days);
+
+    // confirm the pending accrual is material, WITHOUT accruing on the path under test —
+    // accruing here would refresh `lastUpdate` and hide the very staleness the bug needs
+    uint256 snap = vm.snapshotState();
+    uint256 staleAssets = moolah.market(id2).totalBorrowAssets;
+    moolah.accrueInterest(moolah.idToMarketParams(id2));
+    assertGt(moolah.market(id2).totalBorrowAssets, staleAssets, "market IRM should have accrued");
+    vm.revertToState(snap);
+
+    // totals are stale going in: Moolah will accrue as the first step of its own repay()
+    assertLt(moolah.market(id2).lastUpdate, block.timestamp, "totals should still be stale");
+
+    // a partial repay must go through rather than reverting on an allowance shortfall
+    USDT.setBalance(user2, 5_000 ether);
+    vm.prank(user2);
+    b2.repay(600 ether, posId, user2);
+
+    assertGt(b2.getPosition(user2, posId).principalRepaid, 0, "principal should have been repaid");
+  }
+
+  /// @notice The same market must also stay fully exitable via repayAll.
+  function test_repayAll_onNonZeroIrmMarket() public {
+    (CreditBroker b2, Id id2, address user2) = _nonZeroIrmBroker();
+
+    uint256 score = 5_000 ether;
+    _generateTree(user2, score, creditToken.versionId() + 1);
+
+    vm.startPrank(user2);
+    creditToken.approve(address(b2), type(uint256).max);
+    b2.supplyAndBorrow(score, 1_000 ether, 930, score, proof);
+    vm.stopPrank();
+
+    vm.warp(vm.getBlockTimestamp() + 30 days);
+
+    USDT.setBalance(user2, 10_000 ether);
+    vm.prank(user2);
+    b2.repayAll(user2);
+
+    assertEq(b2.userFixedPositions(user2).length, 0, "positions not cleared");
+    assertEq(moolah.position(id2, user2).borrowShares, 0, "borrow shares not cleared");
+  }
+
+  /// @notice `repayAll` must emit the same per-position `RepaidFixedLoanPosition` breakdown that
+  ///         `repay` emits, so an off-chain indexer reconstructing interest and penalty revenue
+  ///         sees every position regardless of which path closed it. Previously `repayAll` emitted
+  ///         only `FixedLoanPositionRemoved` plus the aggregate `AllPositionsRepaid`.
+  function test_repayAll_emitsPerPositionRepaidEvent() public {
+    (uint256 posIdA, uint256 posIdB) = _twoInterestPositions(type1);
+    vm.warp(vm.getBlockTimestamp() + 7 days);
+
+    FixedLoanPosition memory a = broker.getPosition(borrower, posIdA);
+    FixedLoanPosition memory b = broker.getPosition(borrower, posIdB);
+    uint256 interestA = CreditBrokerMath.getInterestForFixedPosition(a) - a.interestRepaid;
+    uint256 interestB = CreditBrokerMath.getInterestForFixedPosition(b) - b.interestRepaid;
+    assertGt(interestA, 0, "position A should carry interest");
+
+    uint256 quoted = broker.previewRepayAll(borrower);
+    USDT.setBalance(borrower, quoted);
+
+    // both positions must report their own principal / interest / penalty split
+    vm.expectEmit(true, false, false, true, address(broker));
+    emit ICreditBroker.RepaidFixedLoanPosition(
+      borrower,
+      posIdA,
+      a.principal,
+      a.start,
+      a.end,
+      a.apr,
+      a.principal,
+      a.principal - a.principalRepaid,
+      interestA,
+      0,
+      a.interestRepaid + interestA,
+      false
+    );
+    vm.expectEmit(true, false, false, true, address(broker));
+    emit ICreditBroker.FixedLoanPositionRemoved(borrower, posIdA);
+    vm.expectEmit(true, false, false, true, address(broker));
+    emit ICreditBroker.RepaidFixedLoanPosition(
+      borrower,
+      posIdB,
+      b.principal,
+      b.start,
+      b.end,
+      b.apr,
+      b.principal,
+      b.principal - b.principalRepaid,
+      interestB,
+      0,
+      b.interestRepaid + interestB,
+      false
+    );
+    vm.expectEmit(true, false, false, true, address(broker));
+    emit ICreditBroker.FixedLoanPositionRemoved(borrower, posIdB);
+
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+
+    assertEq(broker.userFixedPositions(borrower).length, 0, "positions not cleared");
+    // the per-position interest must add up to the aggregate the caller actually paid
+    assertEq(interestA + interestB, quoted - (a.principal + b.principal), "interest split mismatch");
+  }
+
+  /// @notice The per-position breakdown must also carry the delay penalty and the bad-debt flag.
+  function test_repayAll_perPositionEvent_carriesPenaltyAndBadDebt() public {
+    (uint256 posIdA, ) = _twoPositions(100 ether, 40 ether);
+    FixedLoanPosition memory posA = broker.getPosition(borrower, posIdA);
+    (uint256 period, uint256 penaltyRate, ) = broker.graceConfig();
+    vm.warp(posA.end + period + 1);
+
+    vm.prank(BOT);
+    broker.liquidate(borrower, posIdA);
+
+    FixedLoanPosition memory a = broker.getPosition(borrower, posIdA);
+    assertTrue(a.isBadDebt, "A should be bad debt");
+    // 0% APR term, so the only charge on A is the 15% penalty on its principal
+    uint256 penaltyA = (a.principal * penaltyRate) / RATE_SCALE;
+
+    uint256 quoted = broker.previewRepayAll(borrower);
+    USDT.setBalance(borrower, quoted);
+
+    vm.expectEmit(true, false, false, true, address(broker));
+    emit ICreditBroker.RepaidFixedLoanPosition(
+      borrower,
+      posIdA,
+      a.principal,
+      a.start,
+      a.end,
+      a.apr,
+      a.principal,
+      a.principal - a.principalRepaid,
+      0,
+      penaltyA,
+      a.interestRepaid,
+      true // bad-debt flag survives into the event
+    );
+
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+    assertEq(broker.userFixedPositions(borrower).length, 0, "positions not cleared");
   }
 }
