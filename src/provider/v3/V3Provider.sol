@@ -479,92 +479,17 @@ abstract contract V3Provider is
   /* ───────────────────────── view functions ───────────────────────── */
 
   /// @inheritdoc IV3Provider
-  function getTotalAmounts() public view returns (uint256 total0, uint256 total1) {
-    return IV3DexAdapter(ADAPTER).positionAmountsAt(IV3DexAdapter(ADAPTER).spotSqrtPriceX96());
-  }
-
-  /// @inheritdoc IV3Provider
-  /// @dev The managed position's token composition valued at the FAIR (manipulation-resistant) price,
-  ///      inclusive of idle inventory and collected fees. This is the ratio a subsequent deposit binds
-  ///      to; front-ends should size the two deposit legs in this ratio to minimise the refund. Returns
-  ///      (0, 0) before the first deposit (no position yet) — use previewDepositAmounts for that case.
-  function getFairComposition() public view returns (uint256 total0, uint256 total1) {
-    return IV3DexAdapter(ADAPTER).positionAmountsAt(IV3DexAdapter(ADAPTER).fairSqrtPriceX96());
-  }
-
-  /// @notice Simulate a redemption of `shares` at the current pool price (for tight minAmount0/1).
-  function previewRedeemUnderlying(uint256 shares) external view returns (uint256 amount0, uint256 amount1) {
-    return IV3DexAdapter(ADAPTER).previewRemoveLiquidity(shares, totalSupply());
-  }
-
-  /// @notice Simulate a deposit at the current pool price (for tight amount0Min/amount1Min).
-  /// @notice Preview the token amounts a deposit would consume.
-  /// @dev For the first deposit (totalSupply == 0) this previews the pool mint (liquidity + amounts at
-  ///      spot). For subsequent deposits it previews the composition-ratio binding used by deposit():
-  ///      the amounts are `frac` of the current fair composition, where `frac = min(d0/T0, d1/T1)`, and
-  ///      `liquidity` is returned as 0 since the deposit is parked as idle rather than minted.
-  function previewDepositAmounts(
+  /// @dev The read-only composition / preview views live on {V3ProviderLens} (nothing in `src/` reads
+  ///      them and the implementation is at the EIP-170 limit). This is the one quote the lens cannot
+  ///      re-derive without forking the share formula, so it is exposed here: previews and the mint
+  ///      keep a single source of truth in `_quoteDeposit`.
+  function quoteDeposit(
     uint256 amount0Desired,
     uint256 amount1Desired
-  ) external view returns (uint128 liquidity, uint256 amount0, uint256 amount1) {
-    if (totalSupply() == 0) {
-      return IV3DexAdapter(ADAPTER).previewAddLiquidity(amount0Desired, amount1Desired);
-    }
-    (uint256 t0, uint256 t1) = IV3DexAdapter(ADAPTER).positionAmountsAt(IV3DexAdapter(ADAPTER).fairSqrtPriceX96());
-    uint256 frac;
-    if (t0 == 0) {
-      frac = t1 == 0 ? 0 : (amount1Desired * WAD) / t1;
-    } else if (t1 == 0) {
-      frac = (amount0Desired * WAD) / t0;
-    } else {
-      uint256 f0 = (amount0Desired * WAD) / t0;
-      uint256 f1 = (amount1Desired * WAD) / t1;
-      frac = f0 < f1 ? f0 : f1;
-    }
-    // Round UP, matching _quoteDeposit: the preview must report exactly what deposit() will consume.
-    amount0 = (t0 * frac + WAD - 1) / WAD;
-    amount1 = (t1 * frac + WAD - 1) / WAD;
-  }
-
-  /// @notice Preview the shares a deposit would mint — the exact min(fair, spot) credit deposit() uses.
-  ///         Frontends size `minShares` off this (× a slippage tolerance). First deposit (supply == 0)
-  ///         previews the oracle-valued opening mint.
-  /// @param amount0Desired token0 offered by the depositor.
-  /// @param amount1Desired token1 offered by the depositor.
-  /// @return shares shares deposit() would mint for these amounts.
-  function previewDepositShares(uint256 amount0Desired, uint256 amount1Desired) external view returns (uint256 shares) {
-    uint256 supplyBefore = totalSupply();
-    if (supplyBefore > 0) {
-      (shares, , ) = _quoteDeposit(supplyBefore, amount0Desired, amount1Desired);
-      return shares;
-    }
-    (uint128 liquidity, , ) = IV3DexAdapter(ADAPTER).previewAddLiquidity(amount0Desired, amount1Desired);
-    (uint256 added0, uint256 added1) = IV3DexAdapter(ADAPTER).amountsForLiquidity(
-      liquidity,
-      IV3DexAdapter(ADAPTER).fairSqrtPriceX96()
-    );
-    uint256 assetPrice = IOracle(resilientOracle).peek(asset());
-    if (assetPrice > 0)
-      shares = (_amountsValueUsd(added0, added1) * (10 ** uint256(accountingAssetDecimals))) / assetPrice;
-  }
-
-  /// @notice Given a desired token0 amount, the token1 amount that pairs with it at the current fair
-  ///         composition ratio, so a subsequent deposit consumes both legs fully (minimal refund).
-  /// @dev    amount1 = amount0 * T1 / T0, where (T0, T1) = getFairComposition(). Reverts once fair has
-  ///         drifted past tickUpper (no token0 leg); deposits are then closed in every shape until the
-  ///         BOT recenters. Symmetric below tickLower. First deposit: use previewDepositAmounts.
-  function previewDepositForToken0(uint256 amount0) external view returns (uint256 amount1) {
-    (uint256 t0, uint256 t1) = getFairComposition();
-    if (t0 == 0) revert ZeroAmounts();
-    amount1 = (amount0 * t1) / t0;
-  }
-
-  /// @notice Mirror of previewDepositForToken0: the token0 amount that pairs with a desired token1
-  ///         amount at the current fair composition ratio (amount0 = amount1 * T0 / T1).
-  function previewDepositForToken1(uint256 amount1) external view returns (uint256 amount0) {
-    (uint256 t0, uint256 t1) = getFairComposition();
-    if (t1 == 0) revert ZeroAmounts();
-    amount0 = (amount1 * t0) / t1;
+  ) external view returns (uint256 shares, uint256 amount0Used, uint256 amount1Used) {
+    uint256 supply = totalSupply();
+    if (supply == 0) return (0, 0, 0); // first deposit mints at spot — the lens previews that branch
+    return _quoteDeposit(supply, amount0Desired, amount1Desired);
   }
 
   /// @notice IProvider hook — the "token" is this shares contract itself.

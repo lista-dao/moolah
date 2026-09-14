@@ -12,6 +12,7 @@ import { WbETHV3Provider } from "../../src/provider/v3/WbETHV3Provider.sol";
 import { WbETHV3DexAdapter } from "../../src/provider/v3/WbETHV3DexAdapter.sol";
 import { V3DexAdapter } from "../../src/provider/v3/V3DexAdapter.sol";
 import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
+import { V3ProviderLens } from "../../src/provider/v3/V3ProviderLens.sol";
 import { IWbETH } from "../../src/provider/interfaces/IWbETH.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
 import { IMoolah, MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
@@ -92,6 +93,7 @@ contract WbETHV3ProviderTest is Test {
   Moolah moolah;
   WbETHV3DexAdapter adapter;
   WbETHV3Provider provider;
+  V3ProviderLens lens;
   V3ProviderOracle providerOracle;
   MockOracle oracle;
   PoolSwapper swapper;
@@ -145,6 +147,7 @@ contract WbETHV3ProviderTest is Test {
 
     vm.prank(admin);
     adapter.setProvider(address(provider));
+    lens = new V3ProviderLens(address(provider), address(adapter));
 
     V3ProviderOracle oracleImpl = new V3ProviderOracle(address(adapter), address(provider), WBETH, WETH);
     providerOracle = V3ProviderOracle(
@@ -315,7 +318,7 @@ contract WbETHV3ProviderTest is Test {
     _bootstrap();
     _swapPoolUp(20 ether);
 
-    uint256 preview = provider.previewDepositShares(10 ether, 10 ether);
+    uint256 preview = lens.previewDepositShares(10 ether, 10 ether);
     (uint256 actual, , ) = _depositRet(10 ether, 10 ether);
     assertEq(preview, actual, "preview == mint (skewed)");
     assertGt(actual, 0, "mints > 0");
@@ -328,7 +331,7 @@ contract WbETHV3ProviderTest is Test {
     _swapPoolUp(20 ether); // skew slot0 before the cycle
 
     (uint256 shares, uint256 in0, uint256 in1) = _depositRet(10 ether, 10 ether);
-    (uint256 e0, uint256 e1) = provider.previewRedeemUnderlying(shares);
+    (uint256 e0, uint256 e1) = lens.previewRedeemUnderlying(shares);
     vm.prank(user);
     (uint256 out0, uint256 out1) = provider.withdraw(
       marketParams,

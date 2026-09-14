@@ -14,6 +14,7 @@ import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
 import { IStakeManager } from "../../src/provider/interfaces/IStakeManager.sol";
 import { V3Provider } from "../../src/provider/v3/V3Provider.sol";
 import { V3DexAdapter } from "../../src/provider/v3/V3DexAdapter.sol";
+import { V3ProviderLens } from "../../src/provider/v3/V3ProviderLens.sol";
 import { SwapInventoryLib } from "../../src/provider/libraries/SwapInventoryLib.sol";
 import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
 import { IV3PoolMinimal } from "../../src/provider/interfaces/IV3PoolMinimal.sol";
@@ -170,6 +171,7 @@ contract SlisBNBV3ProviderTest is Test {
   Moolah moolah;
   SlisBNBV3Provider provider;
   SlisBNBV3DexAdapter adapter;
+  V3ProviderLens lens;
   SlisBNBV3ProviderOracle providerOracle;
   MockOracle oracle;
   MockSwap mockSwap;
@@ -291,6 +293,9 @@ contract SlisBNBV3ProviderTest is Test {
     deal(LISUSD, address(this), 1_000_000 ether);
     IERC20(LISUSD).approve(MOOLAH_PROXY, 1_000_000 ether);
     moolah.supply(marketParams, 1_000_000 ether, 0, address(this), "");
+
+    // 5) Read-only preview surface (front-end / bot facing; keeps the provider under EIP-170).
+    lens = new V3ProviderLens(address(provider), address(adapter));
   }
 
   /* ────────────────────────── helper fns ─────────────────────────── */
@@ -304,12 +309,12 @@ contract SlisBNBV3ProviderTest is Test {
     deal(WBNB, _user, amount1);
     // Derive tight min amounts (0.1% slippage) from previewDeposit so that we
     // never bypass the slippage guard with zeros.
-    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
+    (, uint256 exp0, uint256 exp1) = lens.previewDepositAmounts(amount0, amount1);
     uint256 min0 = (exp0 * 999) / 1000;
     uint256 min1 = (exp1 * 999) / 1000;
     // min0/min1 floor the CONSUMED amounts, not the entry price; minShares is the only guard against a
     // bad price, so mirror production and never pass 0.
-    uint256 minShares = (provider.previewDepositShares(amount0, amount1) * 999) / 1000;
+    uint256 minShares = (lens.previewDepositShares(amount0, amount1) * 999) / 1000;
     vm.startPrank(_user);
     IERC20(SLISBNB).approve(address(provider), amount0);
     IERC20(WBNB).approve(address(provider), amount1);
@@ -551,7 +556,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     // previewDepositShares returns the exact min(fair, spot) credit deposit() will mint, so the floor
     // below is measured against the real amount (not a fair-only estimate that a spot move could fail).
-    uint256 expectedShares = provider.previewDepositShares(10 ether, 10 ether);
+    uint256 expectedShares = lens.previewDepositShares(10 ether, 10 ether);
 
     deal(SLISBNB, user2, 10 ether);
     deal(WBNB, user2, 10 ether);
@@ -575,7 +580,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint256 slisBefore = IERC20(SLISBNB).balanceOf(user);
     uint256 bnbBefore = user.balance; // WBNB (TOKEN1) is unwrapped to native BNB on withdrawal
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(shares);
     uint256 min0 = (exp0 * 999) / 1000;
     uint256 min1 = (exp1 * 999) / 1000;
 
@@ -594,7 +599,7 @@ contract SlisBNBV3ProviderTest is Test {
   function test_withdraw_partialWithdrawal() public {
     (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares / 2);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(shares / 2);
     uint256 min0 = (exp0 * 999) / 1000;
     uint256 min1 = (exp1 * 999) / 1000;
 
@@ -697,7 +702,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint256 slisBefore = IERC20(SLISBNB).balanceOf(liquidator);
     uint256 bnbBefore = liquidator.balance; // WBNB (TOKEN1) is unwrapped to native BNB
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(shares);
     uint256 min0 = (exp0 * 999) / 1000;
     uint256 min1 = (exp1 * 999) / 1000;
 
@@ -778,7 +783,7 @@ contract SlisBNBV3ProviderTest is Test {
     adapter.setCenterRateThresholdBps(0);
 
     // bot can rebalance — range is derived internally by the provider/adapter.
-    (uint256 total0, uint256 total1) = provider.getTotalAmounts();
+    (uint256 total0, uint256 total1) = lens.getTotalAmounts();
     uint256 min0 = (total0 * 999) / 1000;
     uint256 min1 = (total1 * 999) / 1000;
     uint256 oldTokenId = adapter.tokenId();
@@ -792,13 +797,13 @@ contract SlisBNBV3ProviderTest is Test {
   function test_rebalance_liquidity_preserved() public {
     (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
 
-    (uint256 total0Before, uint256 total1Before) = provider.getTotalAmounts();
+    (uint256 total0Before, uint256 total1Before) = lens.getTotalAmounts();
 
     // Disable the rate-drift guard (the rate is unchanged by deposits / pool activity).
     vm.prank(manager);
     adapter.setCenterRateThresholdBps(0);
 
-    (uint256 total0, uint256 total1) = provider.getTotalAmounts();
+    (uint256 total0, uint256 total1) = lens.getTotalAmounts();
     uint256 min0 = (total0 * 999) / 1000;
     uint256 min1 = (total1 * 999) / 1000;
     vm.prank(bot);
@@ -808,7 +813,7 @@ contract SlisBNBV3ProviderTest is Test {
     assertEq(_collateral(user), shares, "shares should be unchanged after rebalance");
 
     // Total amounts should be roughly preserved (small dust from ratio mismatch is acceptable).
-    (uint256 total0After, uint256 total1After) = provider.getTotalAmounts();
+    (uint256 total0After, uint256 total1After) = lens.getTotalAmounts();
     uint256 valueBefore = total0Before + total1Before;
     uint256 valueAfter = total0After + total1After;
     assertApproxEqRel(valueAfter, valueBefore, 0.02e18, "total value should be preserved within 2%");
@@ -843,7 +848,7 @@ contract SlisBNBV3ProviderTest is Test {
   function test_getTotalAmounts_nonZeroAfterDeposit() public {
     _deposit(user, 10 ether, 10 ether);
 
-    (uint256 total0, uint256 total1) = provider.getTotalAmounts();
+    (uint256 total0, uint256 total1) = lens.getTotalAmounts();
     assertGt(total0 + total1, 0, "total amounts should be non-zero after deposit");
   }
 
@@ -920,7 +925,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint256 amount0 = 10 ether;
     uint256 amount1 = 10 ether;
 
-    (uint128 liquidity, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
+    (uint128 liquidity, uint256 exp0, uint256 exp1) = lens.previewDepositAmounts(amount0, amount1);
 
     assertGt(liquidity, 0, "liquidity should be non-zero");
     // Both preview amounts must be within the desired amounts.
@@ -943,7 +948,7 @@ contract SlisBNBV3ProviderTest is Test {
   function test_previewDeposit_amountsMatchActual_subsequentDeposit() public {
     _deposit(user, 100 ether, 100 ether); // seed so the frac branch is taken
 
-    (uint128 liquidity, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(10 ether, 10 ether);
+    (uint128 liquidity, uint256 exp0, uint256 exp1) = lens.previewDepositAmounts(10 ether, 10 ether);
     assertEq(liquidity, 0, "subsequent deposit parks to idle, mints no liquidity");
 
     (, uint256 used0, uint256 used1) = _depositWithMin(user2, 10 ether, 10 ether, 0, 0);
@@ -955,7 +960,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint256 amount0 = 10 ether;
     uint256 amount1 = 10 ether;
 
-    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
+    (, uint256 exp0, uint256 exp1) = lens.previewDepositAmounts(amount0, amount1);
 
     // Apply 0.5% slippage tolerance.
     uint256 min0 = (exp0 * 995) / 1000;
@@ -974,7 +979,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     // preview (and deposit) bind to the FAIR composition — rate-implied for slisBNB, which stays
     // ~in-range — so both legs are consumed regardless of where the manipulable pool spot sits.
-    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(10 ether, 10 ether);
+    (, uint256 exp0, uint256 exp1) = lens.previewDepositAmounts(10 ether, 10 ether);
     assertGt(exp0, 0, "fair composition consumes token0 regardless of spot");
     assertGt(exp1, 0, "fair composition consumes token1 regardless of spot");
   }
@@ -983,7 +988,7 @@ contract SlisBNBV3ProviderTest is Test {
     _deposit(user, 10 ether, 10 ether);
     _pushPriceAboveRange(); // manipulate SPOT above range
 
-    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(10 ether, 10 ether);
+    (, uint256 exp0, uint256 exp1) = lens.previewDepositAmounts(10 ether, 10 ether);
     assertGt(exp0, 0, "fair composition consumes token0 regardless of spot");
     assertGt(exp1, 0, "fair composition consumes token1 regardless of spot");
   }
@@ -1020,13 +1025,13 @@ contract SlisBNBV3ProviderTest is Test {
     _deposit(user, 100 ether, 100 ether); // seed
 
     uint256 snap = vm.snapshotState();
-    uint256 preview1 = provider.previewDepositShares(100 ether, 100 ether);
+    uint256 preview1 = lens.previewDepositShares(100 ether, 100 ether);
     (uint256 actual1, , ) = _deposit(user2, 100 ether, 100 ether);
     vm.revertToState(snap);
     assertEq(preview1, actual1, "preview matches mint (unskewed)");
 
     _skewSpotUp(300 ether);
-    uint256 preview2 = provider.previewDepositShares(100 ether, 100 ether);
+    uint256 preview2 = lens.previewDepositShares(100 ether, 100 ether);
     (uint256 actual2, , ) = _deposit(user2, 100 ether, 100 ether);
     assertEq(preview2, actual2, "preview matches mint (skewed spot)");
     assertLt(preview2, preview1, "skew lowers the previewed shares (min = spot quote)");
@@ -1039,7 +1044,7 @@ contract SlisBNBV3ProviderTest is Test {
     _skewSpotUp(300 ether);
 
     (uint256 shares, uint256 in0, uint256 in1) = _deposit(user2, 100 ether, 100 ether);
-    (uint256 e0, uint256 e1) = provider.previewRedeemUnderlying(shares);
+    (uint256 e0, uint256 e1) = lens.previewRedeemUnderlying(shares);
     vm.prank(user2);
     (uint256 out0, uint256 out1) = provider.withdraw(
       marketParams,
@@ -1066,7 +1071,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     deal(SLISBNB, user2, 100 ether);
     deal(WBNB, user2, 100 ether);
-    (, uint256 e0, uint256 e1) = provider.previewDepositAmounts(100 ether, 100 ether);
+    (, uint256 e0, uint256 e1) = lens.previewDepositAmounts(100 ether, 100 ether);
     vm.startPrank(user2);
     IERC20(SLISBNB).approve(address(provider), 100 ether);
     IERC20(WBNB).approve(address(provider), 100 ether);
@@ -1079,17 +1084,17 @@ contract SlisBNBV3ProviderTest is Test {
   function test_previewDepositForToken_pairsLegsAtFairComposition() public {
     _deposit(user, 10 ether, 10 ether);
 
-    (uint256 t0, uint256 t1) = provider.getFairComposition();
+    (uint256 t0, uint256 t1) = lens.getFairComposition();
     assertGt(t0, 0, "fair composition token0 > 0");
     assertGt(t1, 0, "fair composition token1 > 0");
 
     // token0 -> matching token1 at the fair ratio.
     uint256 a0 = 5 ether;
-    uint256 a1 = provider.previewDepositForToken0(a0);
+    uint256 a1 = lens.previewDepositForToken0(a0);
     assertEq(a1, (a0 * t1) / t0, "previewDepositForToken0 = a0 * T1 / T0");
 
     // Reverse direction round-trips within rounding.
-    assertApproxEqRel(provider.previewDepositForToken1(a1), a0, 0.0001e18, "reverse pairing round-trips");
+    assertApproxEqRel(lens.previewDepositForToken1(a1), a0, 0.0001e18, "reverse pairing round-trips");
 
     // Depositing the paired amounts consumes both legs ~fully (minimal refund).
     deal(SLISBNB, user2, a0);
@@ -1112,7 +1117,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint256 amount0 = 20 ether;
     uint256 amount1 = 20 ether;
 
-    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
+    (, uint256 exp0, uint256 exp1) = lens.previewDepositAmounts(amount0, amount1);
 
     uint256 min0 = exp0 > 0 ? exp0 - 1 : 0;
     uint256 min1 = exp1 > 0 ? exp1 - 1 : 0;
@@ -1125,7 +1130,7 @@ contract SlisBNBV3ProviderTest is Test {
   /* ──────────────── previewRedeem tests ──────────────────────────── */
 
   function test_previewRedeem_zeroBeforeDeposit() public view {
-    (uint256 amount0, uint256 amount1) = provider.previewRedeemUnderlying(1 ether);
+    (uint256 amount0, uint256 amount1) = lens.previewRedeemUnderlying(1 ether);
     assertEq(amount0, 0, "should return 0 when no position exists");
     assertEq(amount1, 0, "should return 0 when no position exists");
   }
@@ -1138,7 +1143,7 @@ contract SlisBNBV3ProviderTest is Test {
     assertGt(currentTick, adapter.tickLower(), "price should be above tickLower");
     assertLt(currentTick, adapter.tickUpper(), "price should be below tickUpper");
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(shares);
     assertGt(exp0, 0, "previewRedeem should predict token0 in-range");
     assertGt(exp1, 0, "previewRedeem should predict token1 in-range");
 
@@ -1160,7 +1165,7 @@ contract SlisBNBV3ProviderTest is Test {
     vm.prank(MOOLAH_PROXY);
     provider.transfer(user2, shares);
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(shares);
 
     uint256 min0 = exp0 > 0 ? exp0 - 1 : 0;
     uint256 min1 = exp1 > 0 ? exp1 - 1 : 0;
@@ -1175,8 +1180,8 @@ contract SlisBNBV3ProviderTest is Test {
   function test_previewRedeem_partialShares_proportional() public {
     (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
 
-    (uint256 fullExp0, uint256 fullExp1) = provider.previewRedeemUnderlying(shares);
-    (uint256 halfExp0, uint256 halfExp1) = provider.previewRedeemUnderlying(shares / 2);
+    (uint256 fullExp0, uint256 fullExp1) = lens.previewRedeemUnderlying(shares);
+    (uint256 halfExp0, uint256 halfExp1) = lens.previewRedeemUnderlying(shares / 2);
 
     // Half the shares should yield approximately half the tokens.
     assertApproxEqRel(halfExp0, fullExp0 / 2, 0.001e18, "half shares ~half token0");
@@ -1187,7 +1192,7 @@ contract SlisBNBV3ProviderTest is Test {
     (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
     _pushPriceBelowRange();
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(shares);
     assertGt(exp0, 0, "should return token0 when price below range");
     assertEq(exp1, 0, "should return no token1 when price below range");
   }
@@ -1196,7 +1201,7 @@ contract SlisBNBV3ProviderTest is Test {
     (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
     _pushPriceAboveRange();
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(shares);
     assertEq(exp0, 0, "should return no token0 when price above range");
     assertGt(exp1, 0, "should return token1 when price above range");
   }
@@ -1204,7 +1209,7 @@ contract SlisBNBV3ProviderTest is Test {
   function test_previewRedeem_derivedMinAmounts_succeed() public {
     (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(shares);
 
     // Apply 0.5% slippage tolerance.
     uint256 min0 = (exp0 * 995) / 1000;
@@ -1424,7 +1429,7 @@ contract SlisBNBV3ProviderTest is Test {
     (, int24 tickAfterSwap) = IV3PoolMinimal(POOL).slot0();
     assertLt(tickAfterSwap, adapter.tickLower(), "tick should be below tickLower after swap");
 
-    (uint256 total0, uint256 total1) = provider.getTotalAmounts();
+    (uint256 total0, uint256 total1) = lens.getTotalAmounts();
     assertGt(total0, 0, "should hold slisBNB");
     assertEq(total1, 0, "position should be fully slisBNB (token1 == 0) when price is below range");
   }
@@ -1435,7 +1440,7 @@ contract SlisBNBV3ProviderTest is Test {
     _pushPriceBelowRange();
 
     // Snapshot USD value before rebalance (position is 100% slisBNB).
-    (uint256 total0Before, uint256 total1Before) = provider.getTotalAmounts();
+    (uint256 total0Before, uint256 total1Before) = lens.getTotalAmounts();
     uint256 valueBefore = _valueUSD(total0Before, total1Before);
     assertGt(valueBefore, 0, "should have non-zero value before rebalance");
 
@@ -1449,7 +1454,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
 
-    (uint256 total0After, uint256 total1After) = provider.getTotalAmounts();
+    (uint256 total0After, uint256 total1After) = lens.getTotalAmounts();
     uint256 valueAfter = _valueUSD(total0After, total1After);
 
     // Recenter-only (empty swapData ⇒ no inventory conversion): the all-slisBNB inventory is re-minted
@@ -1667,7 +1672,7 @@ contract SlisBNBV3ProviderTest is Test {
     (, int24 tickAfterSwap) = IV3PoolMinimal(POOL).slot0();
     assertGt(tickAfterSwap, adapter.tickUpper(), "tick should be above tickUpper after swap");
 
-    (uint256 total0, uint256 total1) = provider.getTotalAmounts();
+    (uint256 total0, uint256 total1) = lens.getTotalAmounts();
     assertEq(total0, 0, "position should be fully WBNB (token0 == 0) when price is above range");
     assertGt(total1, 0, "should hold WBNB");
   }
@@ -1678,7 +1683,7 @@ contract SlisBNBV3ProviderTest is Test {
     _pushPriceAboveRange();
 
     // Snapshot USD value before rebalance (position is 100% WBNB).
-    (uint256 total0Before, uint256 total1Before) = provider.getTotalAmounts();
+    (uint256 total0Before, uint256 total1Before) = lens.getTotalAmounts();
     uint256 valueBefore = _valueUSD(total0Before, total1Before);
     assertGt(valueBefore, 0, "should have non-zero value before rebalance");
 
@@ -1692,7 +1697,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
 
-    (uint256 total0After, uint256 total1After) = provider.getTotalAmounts();
+    (uint256 total0After, uint256 total1After) = lens.getTotalAmounts();
     uint256 valueAfter = _valueUSD(total0After, total1After);
 
     // Recenter-only (empty swapData ⇒ no inventory conversion): the all-WBNB inventory is re-minted into
@@ -1729,7 +1734,7 @@ contract SlisBNBV3ProviderTest is Test {
     _deposit(user, 10 ether, 10 ether);
     _pushPriceBelowRange();
 
-    (uint256 total0, ) = provider.getTotalAmounts();
+    (uint256 total0, ) = lens.getTotalAmounts();
 
     // Get past the rate-drift guard so the revert is the intended NPM slippage check.
     vm.prank(manager);
@@ -1767,7 +1772,7 @@ contract SlisBNBV3ProviderTest is Test {
     _deposit(user, 10 ether, 10 ether);
     _pushPriceAboveRange();
 
-    (, uint256 total1) = provider.getTotalAmounts();
+    (, uint256 total1) = lens.getTotalAmounts();
 
     // Get past the rate-drift guard so the revert is the intended NPM slippage check.
     vm.prank(manager);
@@ -1782,7 +1787,7 @@ contract SlisBNBV3ProviderTest is Test {
   function test_withdraw_minAmount_tooHigh_reverts() public {
     (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
 
-    (uint256 exp0, ) = provider.previewRedeemUnderlying(shares);
+    (uint256 exp0, ) = lens.previewRedeemUnderlying(shares);
 
     vm.prank(user);
     vm.expectRevert();
@@ -1795,7 +1800,7 @@ contract SlisBNBV3ProviderTest is Test {
     vm.prank(MOOLAH_PROXY);
     provider.transfer(user2, shares);
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(shares);
     uint256 min0 = (exp0 * 999) / 1000;
 
     vm.prank(user2);
@@ -1822,7 +1827,7 @@ contract SlisBNBV3ProviderTest is Test {
     stdstore.target(address(adapter)).sig("idleToken1()").checked_write(uint256(0));
 
     // Preview reports principal + pro-rata idle; a tight (preview-sized) floor must now pass.
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(shares);
     uint256 min0 = (exp0 * 999) / 1000;
     uint256 min1 = (exp1 * 999) / 1000;
     assertGt(exp0, 0, "preview includes idle payout");
@@ -1841,7 +1846,7 @@ contract SlisBNBV3ProviderTest is Test {
     (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
     _pushPriceBelowRange();
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(shares);
     assertGt(exp0, 0, "previewRedeem should predict token0 below range");
     assertEq(exp1, 0, "previewRedeem should predict zero token1 below range");
 
@@ -1857,7 +1862,7 @@ contract SlisBNBV3ProviderTest is Test {
     (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
     _pushPriceAboveRange();
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(shares);
     assertEq(exp0, 0, "previewRedeem should predict zero token0 above range");
     assertGt(exp1, 0, "previewRedeem should predict token1 above range");
 
@@ -1873,7 +1878,7 @@ contract SlisBNBV3ProviderTest is Test {
     // Setting min to 0 disables the floor but does not change what is received.
     (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
 
-    (uint256 exp0, ) = provider.previewRedeemUnderlying(shares);
+    (uint256 exp0, ) = lens.previewRedeemUnderlying(shares);
 
     vm.prank(user);
     (uint256 out0, uint256 out1) = provider.withdraw(marketParams, shares, (exp0 * 999) / 1000, 0, user, user);
@@ -1974,7 +1979,7 @@ contract SlisBNBV3ProviderTest is Test {
   function test_withdraw_updatesUserMarketDeposit() public {
     (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(shares);
     vm.prank(user);
     provider.withdraw(marketParams, shares, (exp0 * 99) / 100, (exp1 * 99) / 100, user, user);
 
@@ -1986,7 +1991,7 @@ contract SlisBNBV3ProviderTest is Test {
     (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
     uint256 half = shares / 2;
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(half);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(half);
     vm.prank(user);
     provider.withdraw(marketParams, half, (exp0 * 99) / 100, (exp1 * 99) / 100, user, user);
 
@@ -2161,7 +2166,7 @@ contract SlisBNBV3ProviderTest is Test {
     (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
     assertGt(ISlisBNBx(SLISBNBX).balanceOf(user), 0, "setup: slisBNBx minted after deposit");
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(shares);
     vm.prank(user);
     provider.withdraw(marketParams, shares, (exp0 * 99) / 100, (exp1 * 99) / 100, user, user);
 
@@ -2182,7 +2187,7 @@ contract SlisBNBV3ProviderTest is Test {
     assertGt(slisBNBxAfterDeposit, 0);
 
     uint256 half = shares / 2;
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(half);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(half);
     vm.prank(user);
     provider.withdraw(marketParams, half, (exp0 * 99) / 100, (exp1 * 99) / 100, user, user);
 
@@ -2333,7 +2338,7 @@ contract SlisBNBV3ProviderTest is Test {
     moolah.liquidate(marketParams, user, shares, 0, "");
 
     uint256 seizedShares = provider.balanceOf(liquidator);
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(seizedShares);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(seizedShares);
     (uint256 out0, uint256 out1) = provider.redeemShares(
       seizedShares,
       (exp0 * 99) / 100,
@@ -2836,16 +2841,16 @@ contract SlisBNBV3ProviderTest is Test {
 
     // Remaining-holder per-share redeemable value (fee-inclusive) BEFORE the partial withdraw.
     uint256 probe = 1e18;
-    (uint256 before0, uint256 before1) = provider.previewRedeemUnderlying(probe);
+    (uint256 before0, uint256 before1) = lens.previewRedeemUnderlying(probe);
 
     // `user` exits its full stake — but that is only ~50% of the position (user2 stays in).
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(shares1);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(shares1);
     vm.prank(user);
     provider.withdraw(marketParams, shares1, (exp0 * 99) / 100, (exp1 * 99) / 100, user, user);
 
     // Per-share value must not drop: the fees `user` left behind stay with the remaining holders (kept
     // in idle and counted in NAV). Pre-fix `user` scooped them → at least one leg would drop here.
-    (uint256 after0, uint256 after1) = provider.previewRedeemUnderlying(probe);
+    (uint256 after0, uint256 after1) = lens.previewRedeemUnderlying(probe);
     assertGe(after0, before0, "token0 per-share not diluted by fee over-collection");
     assertGe(after1, before1, "token1 per-share not diluted by fee over-collection");
   }
@@ -3043,5 +3048,71 @@ contract SlisBNBV3ProviderTest is Test {
     vm.prank(manager);
     providerOracle.setHaircutBps(h1); // real change → applies
     assertEq(providerOracle.haircutBps(), h1, "haircut updated on a real change");
+  }
+
+  /* ──────────────── V3ProviderLens equivalence ───────────────────── */
+
+  /// @dev The lens is the only preview surface left after the read-only views moved off the provider,
+  ///      so its quotes must be what deposit() actually mints and consumes, to the wei. On the
+  ///      subsequent-deposit branch (supply > 0) both sides share _quoteDeposit, so equality is exact.
+  function testFuzz_lens_previewMatchesActualDeposit(uint256 amount0, uint256 amount1) public {
+    _deposit(user, 10 ether, 10 ether); // seed so supply > 0
+
+    amount0 = bound(amount0, 0.001 ether, 100 ether);
+    amount1 = bound(amount1, 0.001 ether, 100 ether);
+
+    uint256 pShares = lens.previewDepositShares(amount0, amount1);
+    (uint128 liquidity, uint256 pUsed0, uint256 pUsed1) = lens.previewDepositAmounts(amount0, amount1);
+    assertEq(liquidity, 0, "subsequent deposit parks idle, mints no pool liquidity");
+
+    (uint256 shares, uint256 used0, uint256 used1) = _depositWithMin(user2, amount0, amount1, 0, 0);
+
+    assertEq(shares, pShares, "lens.previewDepositShares == deposit() shares");
+    assertEq(used0, pUsed0, "lens.previewDepositAmounts amount0 == deposit() amount0Used");
+    assertEq(used1, pUsed1, "lens.previewDepositAmounts amount1 == deposit() amount1Used");
+  }
+
+  /// @dev supply == 0: the lens must still quote the opening pool mint — non-zero liquidity and the
+  ///      oracle-valued opening shares — the branch deposit() takes before any shares exist.
+  function test_lens_previewFirstDepositQuotesOpeningMint() public {
+    assertEq(provider.totalSupply(), 0, "no shares yet");
+
+    (uint128 liquidity, uint256 pUsed0, uint256 pUsed1) = lens.previewDepositAmounts(10 ether, 10 ether);
+    assertGt(liquidity, 0, "first deposit previews the pool mint liquidity");
+    uint256 pShares = lens.previewDepositShares(10 ether, 10 ether);
+    assertGt(pShares, 0, "first deposit previews non-zero opening shares");
+
+    (uint256 shares, uint256 used0, uint256 used1) = _depositWithMin(user, 10 ether, 10 ether, 0, 0);
+
+    assertApproxEqAbs(used0, pUsed0, 1, "opening amount0 within 1 wei of the preview");
+    assertApproxEqAbs(used1, pUsed1, 1, "opening amount1 within 1 wei of the preview");
+    assertApproxEqRel(shares, pShares, 1e12, "opening shares match the preview");
+  }
+
+  /// @dev The composition and redeem views the lens took over still describe the live position: both
+  ///      compositions are populated, the paired-leg helpers follow the fair ratio, and the redeem
+  ///      preview equals what withdraw() pays out.
+  function test_lens_compositionAndRedeemPreviewMatchWithdraw() public {
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+
+    (uint256 spot0, uint256 spot1) = lens.getTotalAmounts();
+    (uint256 fair0, uint256 fair1) = lens.getFairComposition();
+    assertGt(spot0, 0, "spot composition token0");
+    assertGt(spot1, 0, "spot composition token1");
+    assertGt(fair0, 0, "fair composition token0");
+    assertGt(fair1, 0, "fair composition token1");
+
+    assertEq(lens.previewDepositForToken0(5 ether), (5 ether * fair1) / fair0, "token0 leg pairs at fair");
+    assertEq(lens.previewDepositForToken1(5 ether), (5 ether * fair0) / fair1, "token1 leg pairs at fair");
+
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(shares);
+    assertGt(exp0, 0, "redeem preview token0 in-range");
+    assertGt(exp1, 0, "redeem preview token1 in-range");
+
+    vm.prank(user);
+    (uint256 out0, uint256 out1) = provider.withdraw(marketParams, shares, exp0 - 1, exp1 - 1, user, user);
+
+    assertApproxEqAbs(out0, exp0, 1, "withdraw token0 within 1 wei of the lens preview");
+    assertApproxEqAbs(out1, exp1, 1, "withdraw token1 within 1 wei of the lens preview");
   }
 }

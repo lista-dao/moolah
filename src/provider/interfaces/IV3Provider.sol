@@ -25,12 +25,24 @@ interface IV3Provider is IProvider {
   /// @notice The DEX adapter holding the V3 NFT / idle inventory.
   function ADAPTER() external view returns (address);
 
-  /// @notice Total token0/token1 backing the vault at the current pool spot (display/bots).
-  function getTotalAmounts() external view returns (uint256 total0, uint256 total1);
+  /// @notice Resilient oracle the vault prices TOKEN0/TOKEN1 through (8-decimal USD).
+  function resilientOracle() external view returns (address);
 
-  /// @notice Total token0/token1 backing the vault at the FAIR price (idle + fees included). This is the
-  ///         ratio a subsequent deposit binds to; size deposit legs in this ratio to minimise the refund.
-  function getFairComposition() external view returns (uint256 total0, uint256 total1);
+  /// @notice Decimal precision of the ERC-4626 accounting asset.
+  function accountingAssetDecimals() external view returns (uint8);
+
+  /// @notice The deposit quote `deposit()` itself uses, exposed for {V3ProviderLens} so a preview can
+  ///         never drift from the mint. Returns (0, 0, 0) before the first deposit (supply == 0), whose
+  ///         opening mint the lens previews instead.
+  /// @param amount0Desired token0 offered by the depositor.
+  /// @param amount1Desired token1 offered by the depositor.
+  /// @return shares      shares deposit() would mint = min(fair, spot).
+  /// @return amount0Used token0 deposit() would consume (the rest is refunded).
+  /// @return amount1Used token1 deposit() would consume (the rest is refunded).
+  function quoteDeposit(
+    uint256 amount0Desired,
+    uint256 amount1Desired
+  ) external view returns (uint256 shares, uint256 amount0Used, uint256 amount1Used);
 
   /// @notice Deposit token0/token1 into the V3 position and supply resulting shares as Moolah
   ///         collateral on behalf of `onBehalf`.

@@ -10,6 +10,7 @@ import { SlisBNBV3Provider } from "../../src/provider/v3/SlisBNBV3Provider.sol";
 import { SlisBNBV3DexAdapter } from "../../src/provider/v3/SlisBNBV3DexAdapter.sol";
 import { SlisBNBV3ProviderOracle } from "../../src/provider/v3/SlisBNBV3ProviderOracle.sol";
 import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
+import { V3ProviderLens } from "../../src/provider/v3/V3ProviderLens.sol";
 import { V3Liquidator } from "../../src/liquidator/V3Liquidator.sol";
 import { LiquidationVault } from "../../src/liquidator/LiquidationVault.sol";
 import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
@@ -108,6 +109,7 @@ contract V3LiquidatorTest is Test {
   Moolah moolah;
   SlisBNBV3DexAdapter adapter;
   SlisBNBV3Provider provider;
+  V3ProviderLens lens;
   SlisBNBV3ProviderOracle providerOracle;
   V3Liquidator liquidator;
   MockOneInch mockSwap;
@@ -171,6 +173,7 @@ contract V3LiquidatorTest is Test {
     // 3) Wire the adapter to the vault (one-time, admin).
     vm.prank(admin);
     adapter.setProvider(address(provider));
+    lens = new V3ProviderLens(address(provider), address(adapter));
 
     // 4) Oracle: Moolah market.oracle; prices the share off the adapter's fair view.
     SlisBNBV3ProviderOracle oracleImpl = new SlisBNBV3ProviderOracle(
@@ -239,7 +242,7 @@ contract V3LiquidatorTest is Test {
   ) internal returns (uint256 shares, uint256 used0, uint256 used1) {
     deal(SLISBNB, _user, amount0);
     deal(WBNB, _user, amount1);
-    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
+    (, uint256 exp0, uint256 exp1) = lens.previewDepositAmounts(amount0, amount1);
     vm.startPrank(_user);
     IERC20(SLISBNB).approve(address(provider), amount0);
     IERC20(WBNB).approve(address(provider), amount1);
@@ -764,7 +767,7 @@ contract V3LiquidatorTest is Test {
     uint256 heldShares = provider.balanceOf(address(liquidator));
     assertGt(heldShares, 0, "setup: liquidator holds shares");
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(heldShares);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(heldShares);
 
     vm.prank(bot);
     (uint256 out0, uint256 out1) = liquidator.redeemV3Shares(

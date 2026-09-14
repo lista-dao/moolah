@@ -11,6 +11,7 @@ import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.so
 import { WstETHV3Provider } from "../../src/provider/v3/WstETHV3Provider.sol";
 import { WstETHV3DexAdapter } from "../../src/provider/v3/WstETHV3DexAdapter.sol";
 import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
+import { V3ProviderLens } from "../../src/provider/v3/V3ProviderLens.sol";
 import { IWstETH } from "../../src/provider/interfaces/IWstETH.sol";
 import { V3Liquidator } from "../../src/liquidator/V3Liquidator.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
@@ -79,6 +80,7 @@ contract V3LiquidatorEthTest is Test {
   Moolah moolah;
   WstETHV3DexAdapter adapter;
   WstETHV3Provider provider;
+  V3ProviderLens lens;
   V3ProviderOracle providerOracle;
   V3Liquidator liquidator;
   MockOneInch mockSwap;
@@ -137,6 +139,7 @@ contract V3LiquidatorEthTest is Test {
 
     vm.prank(admin);
     adapter.setProvider(address(provider));
+    lens = new V3ProviderLens(address(provider), address(adapter));
 
     // 3) Share oracle (Moolah market.oracle).
     V3ProviderOracle oracleImpl = new V3ProviderOracle(address(adapter), address(provider), WSTETH, WETH);
@@ -203,7 +206,7 @@ contract V3LiquidatorEthTest is Test {
   function _depositTo(MarketParams memory mp, uint256 amtWst, uint256 amtWeth) internal returns (uint256 shares) {
     deal(WSTETH, user, amtWst);
     deal(WETH, user, amtWeth);
-    (, uint256 e0, uint256 e1) = provider.previewDepositAmounts(amtWst, amtWeth);
+    (, uint256 e0, uint256 e1) = lens.previewDepositAmounts(amtWst, amtWeth);
     vm.startPrank(user);
     IERC20(WSTETH).approve(address(provider), amtWst);
     IERC20(WETH).approve(address(provider), amtWeth);
@@ -257,7 +260,7 @@ contract V3LiquidatorEthTest is Test {
     uint256 held = provider.balanceOf(address(liquidator));
     assertGt(held, 0, "setup: liquidator holds seized shares");
 
-    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(held);
+    (uint256 exp0, uint256 exp1) = lens.previewRedeemUnderlying(held);
     uint256 wstBefore = IERC20(WSTETH).balanceOf(address(liquidator));
     uint256 ethBefore = address(liquidator).balance;
 
@@ -286,7 +289,7 @@ contract V3LiquidatorEthTest is Test {
     _makeUnhealthy();
 
     // Expected native WETH-leg amount; require the venue to be paid this as msg.value.
-    (, uint256 exp1) = provider.previewRedeemUnderlying(shares);
+    (, uint256 exp1) = lens.previewRedeemUnderlying(shares);
     uint256 nativeAmountIn = (exp1 * 99) / 100;
 
     // WETH leg (native): MockOneInch requires msg.value >= nativeAmountIn, then mints borrowed*2 USDC.
@@ -358,7 +361,7 @@ contract V3LiquidatorEthTest is Test {
     }
     _makeUnhealthy();
 
-    (, uint256 exp1) = provider.previewRedeemUnderlying(shares);
+    (, uint256 exp1) = lens.previewRedeemUnderlying(shares);
 
     // No swaps: token0 (wstETH) is held as residue; token1 (WETH) returns native and must be wrapped.
     V3Liquidator.FlashLiquidateParams memory params = V3Liquidator.FlashLiquidateParams({

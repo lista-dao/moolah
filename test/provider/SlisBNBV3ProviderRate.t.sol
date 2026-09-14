@@ -12,6 +12,7 @@ import { SlisBNBV3DexAdapter } from "../../src/provider/v3/SlisBNBV3DexAdapter.s
 import { V3DexAdapter } from "../../src/provider/v3/V3DexAdapter.sol";
 import { SlisBNBV3ProviderOracle } from "../../src/provider/v3/SlisBNBV3ProviderOracle.sol";
 import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
+import { V3ProviderLens } from "../../src/provider/v3/V3ProviderLens.sol";
 import { IStakeManager } from "../../src/provider/interfaces/IStakeManager.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
 import { IMoolah, MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
@@ -143,6 +144,7 @@ contract SlisBNBV3ProviderRateTest is Test {
   Moolah moolah;
   SlisBNBV3DexAdapter adapter;
   SlisBNBV3Provider provider;
+  V3ProviderLens lens;
   SlisBNBV3ProviderOracle providerOracle;
   MockOracle oracle;
   PoolSwapper swapper;
@@ -210,6 +212,7 @@ contract SlisBNBV3ProviderRateTest is Test {
     // 3) Wire adapter -> vault (one-time, admin).
     vm.prank(admin);
     adapter.setProvider(address(provider));
+    lens = new V3ProviderLens(address(provider), address(adapter));
 
     // 4) Oracle (Moolah market.oracle; prices the share off the adapter's fair view).
     SlisBNBV3ProviderOracle oracleImpl = new SlisBNBV3ProviderOracle(
@@ -255,9 +258,9 @@ contract SlisBNBV3ProviderRateTest is Test {
   function _deposit(uint256 amtSlis, uint256 amtWbnb) internal returns (uint256 shares) {
     deal(SLISBNB, user, amtSlis);
     deal(WBNB, user, amtWbnb);
-    (, uint256 e0, uint256 e1) = provider.previewDepositAmounts(amtSlis, amtWbnb);
+    (, uint256 e0, uint256 e1) = lens.previewDepositAmounts(amtSlis, amtWbnb);
     // minShares is the only guard against a bad entry price; mirror production and never pass 0.
-    uint256 minShares = (provider.previewDepositShares(amtSlis, amtWbnb) * 99) / 100;
+    uint256 minShares = (lens.previewDepositShares(amtSlis, amtWbnb) * 99) / 100;
     vm.startPrank(user);
     IERC20(SLISBNB).approve(address(provider), amtSlis);
     IERC20(WBNB).approve(address(provider), amtWbnb);
@@ -278,14 +281,14 @@ contract SlisBNBV3ProviderRateTest is Test {
     _deposit(10 ether, 10 ether);
 
     uint256 peekBefore = providerOracle.peek(address(provider));
-    (uint256 s0Before, uint256 s1Before) = provider.getTotalAmounts(); // slot0-based, for contrast
+    (uint256 s0Before, uint256 s1Before) = lens.getTotalAmounts(); // slot0-based, for contrast
 
     int24 tickBefore = _tick();
     _manipulatePoolUp(20_000 ether);
     int24 tickAfter = _tick();
 
     uint256 peekAfter = providerOracle.peek(address(provider));
-    (uint256 s0After, uint256 s1After) = provider.getTotalAmounts();
+    (uint256 s0After, uint256 s1After) = lens.getTotalAmounts();
 
     // sanity: the pool price actually moved a lot
     assertGt(tickAfter - tickBefore, 100, "pool tick should move materially");
@@ -405,11 +408,11 @@ contract SlisBNBV3ProviderRateTest is Test {
     MockStakeManager bumped = new MockStakeManager((oldRate * 101) / 100, SLISBNB);
     vm.etch(STAKE_MANAGER, address(bumped).code);
 
-    (uint256 t0, ) = provider.getFairComposition();
+    (uint256 t0, ) = lens.getFairComposition();
     assertEq(t0, 0, "fair token0 leg gone");
-    assertEq(provider.previewDepositShares(10 ether, 10 ether), 0, "preview quotes 0");
+    assertEq(lens.previewDepositShares(10 ether, 10 ether), 0, "preview quotes 0");
     vm.expectRevert(V3Provider.ZeroAmounts.selector);
-    provider.previewDepositForToken0(1 ether);
+    lens.previewDepositForToken0(1 ether);
 
     // Every shape reverts, including the token1-only one.
     deal(SLISBNB, user, 10 ether);
@@ -431,7 +434,7 @@ contract SlisBNBV3ProviderRateTest is Test {
     // A BOT recenter reopens deposits.
     vm.prank(bot);
     provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
-    assertGt(provider.previewDepositShares(10 ether, 10 ether), 0, "deposits reopen");
+    assertGt(lens.previewDepositShares(10 ether, 10 ether), 0, "deposits reopen");
   }
 
   function _collateralOf(address who) internal view returns (uint256 col) {

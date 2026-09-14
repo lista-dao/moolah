@@ -12,6 +12,7 @@ import { WstETHV3DexAdapter } from "../../src/provider/v3/WstETHV3DexAdapter.sol
 import { V3DexAdapter } from "../../src/provider/v3/V3DexAdapter.sol";
 import { V3Provider } from "../../src/provider/v3/V3Provider.sol";
 import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
+import { V3ProviderLens } from "../../src/provider/v3/V3ProviderLens.sol";
 import { IWstETH } from "../../src/provider/interfaces/IWstETH.sol";
 import { SwapInventoryLib } from "../../src/provider/libraries/SwapInventoryLib.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
@@ -99,6 +100,7 @@ contract WstETHV3ProviderTest is Test {
   Moolah moolah;
   WstETHV3DexAdapter adapter;
   WstETHV3Provider provider;
+  V3ProviderLens lens;
   V3ProviderOracle providerOracle;
   MockOracle oracle;
   PoolSwapper swapper;
@@ -160,6 +162,7 @@ contract WstETHV3ProviderTest is Test {
     // 3) Wire adapter -> vault (one-time, admin).
     vm.prank(admin);
     adapter.setProvider(address(provider));
+    lens = new V3ProviderLens(address(provider), address(adapter));
 
     // 4) Oracle (Moolah market.oracle; prices the share off the adapter's rate-implied fair view).
     V3ProviderOracle oracleImpl = new V3ProviderOracle(address(adapter), address(provider), WSTETH, WETH);
@@ -203,7 +206,7 @@ contract WstETHV3ProviderTest is Test {
   function _deposit(uint256 amtWst, uint256 amtWeth) internal returns (uint256 shares) {
     deal(WSTETH, user, amtWst);
     deal(WETH, user, amtWeth);
-    (, uint256 e0, uint256 e1) = provider.previewDepositAmounts(amtWst, amtWeth);
+    (, uint256 e0, uint256 e1) = lens.previewDepositAmounts(amtWst, amtWeth);
     vm.startPrank(user);
     IERC20(WSTETH).approve(address(provider), amtWst);
     IERC20(WETH).approve(address(provider), amtWeth);
@@ -323,11 +326,11 @@ contract WstETHV3ProviderTest is Test {
     _deposit(10 ether, 10 ether);
 
     uint256 peekBefore = providerOracle.peek(address(provider));
-    (uint256 s0Before, ) = provider.getTotalAmounts(); // spot/slot0-based, for contrast
+    (uint256 s0Before, ) = lens.getTotalAmounts(); // spot/slot0-based, for contrast
 
     _swapPoolUp(2000 ether); // instant, no warp
 
-    (uint256 s0After, ) = provider.getTotalAmounts();
+    (uint256 s0After, ) = lens.getTotalAmounts();
     assertTrue(s0After != s0Before, "spot composition shifts with slot0");
     assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 1e16, "peek resists instant manipulation");
     assertGt(peekBefore, 0, "peek non-zero");
@@ -638,13 +641,13 @@ contract WstETHV3ProviderTest is Test {
     _deposit(50 ether, 50 ether); // seed
 
     uint256 snap = vm.snapshotState();
-    uint256 preview1 = provider.previewDepositShares(10 ether, 10 ether);
+    uint256 preview1 = lens.previewDepositShares(10 ether, 10 ether);
     (uint256 actual1, , ) = _depositRet(10 ether, 10 ether);
     vm.revertToState(snap);
     assertEq(preview1, actual1, "preview == mint (unskewed)");
 
     _swapPoolUp(5000 ether);
-    uint256 preview2 = provider.previewDepositShares(10 ether, 10 ether);
+    uint256 preview2 = lens.previewDepositShares(10 ether, 10 ether);
     (uint256 actual2, , ) = _depositRet(10 ether, 10 ether);
     assertEq(preview2, actual2, "preview == mint (skewed)");
     assertLt(preview2, preview1, "skew lowers preview");
@@ -657,7 +660,7 @@ contract WstETHV3ProviderTest is Test {
     _swapPoolUp(5000 ether); // skew slot0 before the cycle
 
     (uint256 shares, uint256 in0, uint256 in1) = _depositRet(10 ether, 10 ether);
-    (uint256 e0, uint256 e1) = provider.previewRedeemUnderlying(shares);
+    (uint256 e0, uint256 e1) = lens.previewRedeemUnderlying(shares);
     vm.prank(user);
     (uint256 out0, uint256 out1) = provider.withdraw(
       marketParams,
