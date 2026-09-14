@@ -110,5 +110,5 @@ interface IV3Provider is IProvider {
 
   function setDepositWhitelistEnabled(bool enabled) external;
 
-  function setDepositWhitelist(address[] calldata accounts, bool allowed) external;
+  function setDepositWhitelist(address account, bool allowed) external;
 }

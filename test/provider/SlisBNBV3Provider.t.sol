@@ -320,10 +320,8 @@ contract SlisBNBV3ProviderTest is Test {
   /* ─────────────────────── deposit whitelist ─────────────────────── */
 
   function _allow(address who, bool ok) internal {
-    address[] memory a = new address[](1);
-    a[0] = who;
     vm.prank(manager);
-    provider.setDepositWhitelist(a, ok);
+    provider.setDepositWhitelist(who, ok);
   }
 
   function _enableWhitelist() internal {
@@ -400,10 +398,8 @@ contract SlisBNBV3ProviderTest is Test {
   }
 
   function test_setDepositWhitelist_onlyManager() public {
-    address[] memory a = new address[](1);
-    a[0] = user;
     vm.expectRevert();
-    provider.setDepositWhitelist(a, true);
+    provider.setDepositWhitelist(user, true);
     vm.expectRevert();
     provider.setDepositWhitelistEnabled(true);
   }
