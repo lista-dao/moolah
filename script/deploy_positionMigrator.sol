@@ -16,7 +16,8 @@ contract PositionMigratorDeploy is Script {
     console.log("Deployer: ", deployer);
     vm.startBroadcast(deployerPrivateKey);
 
-    // Deploy PositionMigrator implementation
+    // Deploy PositionMigrator implementation. Routing is off until DEFAULT_ADMIN calls
+    // setYieldAccount on the proxy.
     PositionMigrator impl = new PositionMigrator();
     console.log("PositionMigrator implementation: ", address(impl));
 

@@ -121,15 +121,38 @@ contract MarketTest is IntegrationTest {
   }
 
   function testAcceptCapMaxQueueLengthExceeded() public {
-    for (uint256 i = 3; i < ConstantsLib.MAX_QUEUE_LENGTH - 1; ++i) {
-      _setCap(allMarkets[i], CAP);
+    // Fill the withdraw queue up to MAX_QUEUE_LENGTH by enabling fresh markets.
+    // setUp already enabled some markets (idle + markets 0..2), so top up the remainder.
+    uint256 toFill = ConstantsLib.MAX_QUEUE_LENGTH - vault.withdrawQueueLength();
+    for (uint256 i; i < toFill; ++i) {
+      MarketParams memory mp = _createFreshMarket(i);
+      vm.prank(CURATOR_ADDR);
+      vault.setCap(mp, CAP);
     }
+    assertEq(vault.withdrawQueueLength(), ConstantsLib.MAX_QUEUE_LENGTH);
 
-    MarketParams memory marketParams = allMarkets[ConstantsLib.MAX_QUEUE_LENGTH];
-
-    vm.startPrank(CURATOR_ADDR);
+    // Enabling one more market pushes the withdraw queue past the max.
+    MarketParams memory extra = _createFreshMarket(toFill);
+    vm.prank(CURATOR_ADDR);
     vm.expectRevert(ErrorsLib.MaxQueueLengthExceeded.selector);
-    vault.setCap(marketParams, CAP);
+    vault.setCap(extra, CAP);
+  }
+
+  /// @dev Creates and enables a fresh Moolah market with a unique, low lltv that cannot
+  /// collide with the markets created in setUp (lltv = 0.8e18 / (i + 1)).
+  function _createFreshMarket(uint256 salt) internal returns (MarketParams memory mp) {
+    uint256 lltv = salt + 1;
+    mp = MarketParams({
+      loanToken: address(loanToken),
+      collateralToken: address(collateralToken),
+      oracle: address(oracle),
+      irm: address(irm),
+      lltv: lltv
+    });
+
+    vm.startPrank(MOOLAH_OWNER);
+    moolah.enableLltv(lltv);
+    moolah.createMarket(mp);
     vm.stopPrank();
   }
 

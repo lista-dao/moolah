@@ -21,8 +21,6 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
   /// @inheritdoc IMoolahVaultFactory
   address public immutable MOOLAH;
 
-  address public constant MOOLAH_VAULT_IMPL_18 = 0x2F1e420ea6D11d52707C1C45a52B548f62ecD735;
-
   address public vaultAdmin;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
@@ -35,6 +33,11 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
 
   /// @inheritdoc IMoolahVaultFactory
   mapping(address => bool) public isMoolahVault;
+
+  /// @inheritdoc IMoolahVaultFactory
+  /// @dev Appended after `isMoolahVault` to preserve the storage layout of the deployed proxy.
+  ///      Zero until `setMoolahVaultImpl` is called; `createMoolahVault` reverts while unset.
+  address public MOOLAH_VAULT_IMPL_18;
 
   /// CONSTRUCTOR
   /// @param moolah The address of the Moolah contract.
@@ -73,6 +76,8 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
     string memory name,
     string memory symbol
   ) external returns (address, address, address) {
+    address impl = MOOLAH_VAULT_IMPL_18;
+    if (impl == address(0)) revert ErrorsLib.ZeroAddress();
     require(IERC20Metadata(asset).decimals() == 18, "Asset must have 18 decimals");
 
     address[] memory managerProposers = new address[](1);
@@ -105,7 +110,7 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
     }
 
     ERC1967Proxy proxy = new ERC1967Proxy(
-      address(MOOLAH_VAULT_IMPL_18),
+      impl,
       abi.encodeWithSignature(
         "initialize(address,address,address,string,string)",
         address(this),
@@ -133,7 +138,7 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
 
     emit EventsLib.CreateMoolahVault(
       address(proxy),
-      address(MOOLAH_VAULT_IMPL_18),
+      impl,
       address(managerTimeLock),
       address(curatorTimeLock),
       timeLockDelay,
@@ -155,6 +160,16 @@ contract MoolahVaultFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeab
     vaultAdmin = _vaultAdmin;
 
     emit EventsLib.SetVaultAdmin(_vaultAdmin);
+  }
+
+  /// @notice Sets the MoolahVault implementation that newly created vaults point at.
+  /// @param impl The address of the 18-decimals MoolahVault implementation.
+  function setMoolahVaultImpl(address impl) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    if (impl == address(0)) revert ErrorsLib.ZeroAddress();
+    if (impl == MOOLAH_VAULT_IMPL_18) revert ErrorsLib.AlreadySet();
+    MOOLAH_VAULT_IMPL_18 = impl;
+
+    emit EventsLib.SetMoolahVaultImpl(impl);
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}

@@ -12,6 +12,9 @@ interface IMoolahVaultFactory {
   /// @notice Whether a MoolahVault was created with the factory.
   function isMoolahVault(address target) external view returns (bool);
 
+  /// @notice The MoolahVault implementation that newly created vaults point at.
+  function MOOLAH_VAULT_IMPL_18() external view returns (address);
+
   /// @notice Creates a new MoolahVault.
   /// @param manager The manager of the vault.
   /// @param curator The curator of the vault.

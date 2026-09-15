@@ -37,6 +37,10 @@ library MoolahOperateLib {
 
   /**
    * @dev Repay an amount on behalf of a user to Moolah
+   * @notice Interest is accrued before the market totals are read. `Moolah.repay` accrues as its
+   *         own first step, so shares derived from stale totals would cost more assets than the
+   *         allowance set here and the whole repayment would revert on a market with a non-zero
+   *         rate. Accruing up front keeps the totals, the shares, and the allowance consistent.
    * @param loanToken The address of the loan token
    * @param moolah The address of the Moolah contract
    * @param marketId The market id to repay
@@ -55,6 +59,9 @@ library MoolahOperateLib {
     IERC20(loanToken).safeTransferFrom(payer, address(this), amount);
     IERC20(loanToken).safeIncreaseAllowance(moolah, amount);
 
+    // accrue first so the totals read below are exact for this block
+    IMoolah(moolah).accrueInterest(_getMarketParams(moolah, marketId));
+
     Market memory market = IMoolah(moolah).market(marketId);
     // convert amount to shares
     uint256 amountShares = amount.toSharesDown(market.totalBorrowAssets, market.totalBorrowShares);
@@ -69,6 +76,45 @@ library MoolahOperateLib {
     // refund any excess amount to payer
     if (amount > assetsRepaid) {
       IERC20(loanToken).safeTransfer(payer, amount - assetsRepaid);
+    }
+  }
+
+  /**
+   * @dev Repay an exact number of borrow shares on behalf of a user to Moolah
+   * @notice Share-based repayment is the only way to drive `borrowShares` to exactly zero. An
+   *         asset-based repay rounds down to shares, so it leaves residual shares behind
+   *         whenever `totalBorrowAssets : totalBorrowShares` has drifted off its clean ratio,
+   *         and those residuals are worth far less than `minLoan` — enough to make every later
+   *         Moolah operation on the user revert with `remain borrow too low`. Broker markets
+   *         run a zero-rate IRM, which pins that ratio, so this is a guarantee by construction
+   *         rather than a fix for drift that is reachable today.
+   * @param loanToken The address of the loan token
+   * @param moolah The address of the Moolah contract
+   * @param marketId The market id to repay
+   * @param payer The address of the user who pays for the repayment
+   * @param onBehalf The address of the user to repay on behalf of
+   * @param shares The exact borrow shares to repay
+   * @param maxAmount The maximum assets the payer is willing to pay for `shares`
+   */
+  function repayToMoolahByShares(
+    address loanToken,
+    address moolah,
+    Id marketId,
+    address payer,
+    address onBehalf,
+    uint256 shares,
+    uint256 maxAmount
+  ) public returns (uint256 assetsRepaid) {
+    IERC20(loanToken).safeTransferFrom(payer, address(this), maxAmount);
+    IERC20(loanToken).safeIncreaseAllowance(moolah, maxAmount);
+
+    (assetsRepaid, ) = IMoolah(moolah).repay(_getMarketParams(moolah, marketId), 0, shares, onBehalf, "");
+    require(assetsRepaid <= maxAmount, "repay exceeds max");
+
+    // drop any leftover allowance and refund the unused amount to the payer
+    if (maxAmount > assetsRepaid) {
+      IERC20(loanToken).forceApprove(moolah, 0);
+      IERC20(loanToken).safeTransfer(payer, maxAmount - assetsRepaid);
     }
   }
 
