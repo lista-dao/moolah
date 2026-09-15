@@ -18,7 +18,8 @@ contract FixedRateIrmTest is Test {
   address bot = makeAddr("bot");
 
   function setUp() external {
-    FixedRateIrm impl = new FixedRateIrm();
+    // this contract stands in as MOOLAH; see the `market` stub below
+    FixedRateIrm impl = new FixedRateIrm(address(this));
     ERC1967Proxy proxy = new ERC1967Proxy(
       address(impl),
       abi.encodeWithSelector(impl.initialize.selector, admin, manager)
@@ -144,4 +145,10 @@ contract FixedRateIrmTest is Test {
 
     assertEq(fixedRateIrm.borrowRateView(marketPrams, market), uint256(newBorrowRate));
   }
+
+  /* MOOLAH STUB */
+
+  /// @dev This contract is deployed as the IRM's MOOLAH. `updateRateCap`/`updateRateFloor` probe the market
+  /// before accruing interest; returning an empty market (lastUpdate == 0) makes the accrual a no-op.
+  function market(Id) external pure returns (Market memory m) {}
 }

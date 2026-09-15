@@ -25,6 +25,13 @@ interface ILiquidationVault {
   /// @notice Whether an address is a registered liquidator (provideFund allow-list + collect* target).
   function liquidators(address liquidator) external view returns (bool);
 
+  /// @notice Whether a token is on the sell/collect allow-list (sell* legs + BOT collect*).
+  function tokenWhitelist(address token) external view returns (bool);
+
+  /// @notice Add / remove a token from the sell/collect allow-list. Requires MANAGER on the vault.
+  /// @dev Reverts (WhitelistSameStatus) when the token is already in the requested state.
+  function setTokenWhitelist(address token, bool status) external;
+
   event FundProvided(address indexed liquidator, address indexed token, uint256 amount);
   event FundCollected(address indexed liquidator, address indexed token, uint256 amount);
   event LiquidatorSet(address indexed liquidator, bool registered);

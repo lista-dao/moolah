@@ -8,7 +8,7 @@ import { IIrm } from "moolah/interfaces/IIrm.sol";
 import { IFixedRateIrm } from "./interfaces/IFixedRateIrm.sol";
 
 import { MarketParamsLib } from "../moolah/libraries/MarketParamsLib.sol";
-import { Id, MarketParams, Market } from "moolah/interfaces/IMoolah.sol";
+import { IMoolah, Id, MarketParams, Market } from "moolah/interfaces/IMoolah.sol";
 import { ErrorsLib } from "./libraries/ErrorsLib.sol";
 
 /* ERRORS */
@@ -44,6 +44,11 @@ contract FixedRateIrm is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IF
   /// @inheritdoc IFixedRateIrm
   int256 public constant MAX_BORROW_RATE = 8.0 ether / int256(365 days);
 
+  /* IMMUTABLES */
+
+  /// @inheritdoc IFixedRateIrm
+  address public immutable MOOLAH;
+
   /* STORAGE */
 
   /// @inheritdoc IFixedRateIrm
@@ -64,8 +69,11 @@ contract FixedRateIrm is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IF
   /* CONSTRUCTOR */
 
   /// @custom:oz-upgrades-unsafe-allow constructor
-  constructor() {
+  /// @param moolah The address of the Moolah contract.
+  constructor(address moolah) {
+    require(moolah != address(0), ErrorsLib.ZERO_ADDRESS);
     _disableInitializers();
+    MOOLAH = moolah;
   }
 
   /// @notice Constructor.
@@ -96,6 +104,9 @@ contract FixedRateIrm is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IF
       require(newBorrowRate >= int256(rateFloor[id]), "rate below floor");
     }
 
+    // settle interest accrued at the old rate before it changes
+    _accrueInterest(id);
+
     borrowRateStored[id] = newBorrowRate;
 
     emit SetBorrowRate(id, newBorrowRate);
@@ -106,6 +117,9 @@ contract FixedRateIrm is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IF
     uint256 oldCap = rateCap[id];
     require(newRateCap >= minCap && newRateCap != oldCap && newRateCap <= uint256(MAX_BORROW_RATE), "invalid rate cap");
     require(rateFloor[id] <= newRateCap, "invalid new cap vs floor");
+
+    // settle interest accrued under the old cap before it changes
+    _accrueInterest(id);
 
     rateCap[id] = newRateCap;
 
@@ -122,9 +136,20 @@ contract FixedRateIrm is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IF
     if (_cap < minCap) _cap = minCap;
     require(newRateFloor <= _cap, "invalid rate floor vs cap");
 
+    // settle interest accrued under the old floor before it changes
+    _accrueInterest(id);
+
     rateFloor[id] = newRateFloor;
 
     emit BorrowRateFloorUpdate(id, oldFloor, newRateFloor);
+  }
+
+  /// @dev Accrues interest on Moolah for `id` so pending interest is settled at the current rate bounds.
+  /// @dev No-op when the market does not exist yet, so bounds can still be pre-set before market creation.
+  function _accrueInterest(Id id) private {
+    if (IMoolah(MOOLAH).market(id).lastUpdate == 0) return;
+
+    IMoolah(MOOLAH).accrueInterest(IMoolah(MOOLAH).idToMarketParams(id));
   }
 
   /// @dev Updates the minimum borrow rate cap for all markets.

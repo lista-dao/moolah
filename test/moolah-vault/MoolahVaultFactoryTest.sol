@@ -9,6 +9,7 @@ import { IMoolahVaultFactory } from "moolah-vault/interfaces/IMoolahVaultFactory
 import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 import { MoolahVaultFactory } from "moolah-vault/MoolahVaultFactory.sol";
 import { ERC20Mock } from "moolah-vault/mocks/ERC20Mock.sol";
+import { ErrorsLib } from "moolah-vault/libraries/ErrorsLib.sol";
 import { TimeLock } from "timelock/TimeLock.sol";
 
 contract MoolahVaultFactoryTest is Test {
@@ -19,6 +20,7 @@ contract MoolahVaultFactoryTest is Test {
   address vaultAdmin;
   uint256 timeLockDelay = 1 days;
   address asset = 0x55d398326f99059fF775485246999027B3197955;
+  address vaultImpl = 0x713a7e23Cff5016a479b079E48B575818A3Fcc95; // 18-dec MoolahVault impl on BSC
 
   IMoolahVaultFactory factory;
 
@@ -93,6 +95,60 @@ contract MoolahVaultFactoryTest is Test {
       abi.encodeWithSelector(impl.initialize.selector, admin, vaultAdmin)
     );
 
+    // MOOLAH_VAULT_IMPL_18 is storage now, so a fresh factory starts unset.
+    vm.prank(admin);
+    MoolahVaultFactory(address(proxy)).setMoolahVaultImpl(vaultImpl);
+
     return IMoolahVaultFactory(address(proxy));
+  }
+
+  function test_setMoolahVaultImpl() public {
+    MoolahVaultFactory f = MoolahVaultFactory(address(factory));
+    address newImpl = makeAddr("newImpl");
+
+    assertEq(f.MOOLAH_VAULT_IMPL_18(), vaultImpl, "impl not seeded");
+
+    vm.prank(admin);
+    f.setMoolahVaultImpl(newImpl);
+    assertEq(f.MOOLAH_VAULT_IMPL_18(), newImpl, "impl not updated");
+  }
+
+  function test_setMoolahVaultImpl_onlyAdmin() public {
+    MoolahVaultFactory f = MoolahVaultFactory(address(factory));
+
+    vm.prank(makeAddr("stranger"));
+    vm.expectRevert();
+    f.setMoolahVaultImpl(makeAddr("newImpl"));
+  }
+
+  function test_setMoolahVaultImpl_rejectsZeroAndDuplicate() public {
+    MoolahVaultFactory f = MoolahVaultFactory(address(factory));
+
+    vm.startPrank(admin);
+    vm.expectRevert(ErrorsLib.ZeroAddress.selector);
+    f.setMoolahVaultImpl(address(0));
+
+    vm.expectRevert(ErrorsLib.AlreadySet.selector);
+    f.setMoolahVaultImpl(vaultImpl);
+    vm.stopPrank();
+  }
+
+  function test_createMoolahVault_revertsWhenImplUnset() public {
+    MoolahVaultFactory impl = new MoolahVaultFactory(moolah);
+    ERC1967Proxy proxy = new ERC1967Proxy(
+      address(impl),
+      abi.encodeWithSelector(impl.initialize.selector, admin, vaultAdmin)
+    );
+
+    vm.expectRevert(ErrorsLib.ZeroAddress.selector);
+    IMoolahVaultFactory(address(proxy)).createMoolahVault(
+      admin,
+      curator,
+      guardian,
+      timeLockDelay,
+      asset,
+      "test name",
+      "test symbol"
+    );
   }
 }

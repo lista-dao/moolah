@@ -8,6 +8,7 @@ import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import { Id, IMoolah, MarketParams, Market, Position } from "../moolah/interfaces/IMoolah.sol";
 import { IBrokerBase } from "./interfaces/IBroker.sol";
@@ -32,6 +33,14 @@ contract BrokerInterestRelayer is
   // ------- Roles -------
   bytes32 public constant MANAGER = keccak256("MANAGER");
 
+  // ------- Constants -------
+  /// @dev WAD scaling for the fee rate (1e18 == 100%), matching Moolah's market fee semantics
+  uint256 public constant WAD = 1e18;
+  /// @dev maximum protocol fee rate (25%), mirroring Moolah's MAX_FEE
+  uint256 public constant MAX_FEE = 0.25e18;
+  /// @dev default protocol fee rate (10%) applied by initializeV2
+  uint256 public constant DEFAULT_FEE_RATE = 0.1e18;
+
   // ------- State variables -------
   /// @dev Moolah contract
   IMoolah public MOOLAH;
@@ -41,6 +50,12 @@ contract BrokerInterestRelayer is
   EnumerableSet.AddressSet private brokers;
   /// @dev vault token
   address public token;
+
+  // --- V2 storage (appended to preserve layout) ---
+  /// @dev protocol fee rate charged on broker revenue (interest + penalty), WAD-scaled
+  uint256 public feeRate;
+  /// @dev recipient of the protocol fee
+  address public feeRecipient;
 
   // ------- Modifiers -------
   modifier onlyBroker() {
@@ -87,6 +102,23 @@ contract BrokerInterestRelayer is
     token = _token;
   }
 
+  /**
+   * @dev V2 reinitializer: enable the protocol fee on broker revenue at the default 10% rate.
+   *      Must be called atomically via `upgradeToAndCall` by the DEFAULT_ADMIN_ROLE (timelock),
+   *      so the config is set in the same tx the new implementation is wired in.
+   *      The rate can be changed afterwards via `setFeeRate` (MANAGER).
+   * @param _feeRecipient The recipient of the protocol fee
+   */
+  function initializeV2(address _feeRecipient) external reinitializer(2) onlyRole(DEFAULT_ADMIN_ROLE) {
+    require(_feeRecipient != address(0), "relayer/zero-address-provided");
+
+    feeRate = DEFAULT_FEE_RATE;
+    feeRecipient = _feeRecipient;
+
+    emit SetFeeRate(0, DEFAULT_FEE_RATE);
+    emit SetFeeRecipient(address(0), _feeRecipient);
+  }
+
   ///////////////////////////////////////
   /////      External functions     /////
   ///////////////////////////////////////
@@ -99,6 +131,14 @@ contract BrokerInterestRelayer is
   function supplyToVault(uint256 amount) external override nonReentrant onlyBroker {
     // transfer interest from broker
     IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+
+    // skim the protocol fee on incoming revenue (interest + penalty) before it accrues to the vault.
+    // Fee is floored so rounding dust stays with the vault (suppliers), never the fee recipient.
+    uint256 fee = Math.mulDiv(amount, feeRate, WAD, Math.Rounding.Floor);
+    if (fee > 0 && feeRecipient != address(0)) {
+      IERC20(token).safeTransfer(feeRecipient, fee);
+      emit ProtocolFeeCharged(msg.sender, feeRecipient, fee);
+    }
 
     // get minLoan
     uint256 minLoan = MOOLAH.minLoan(MOOLAH.idToMarketParams(IBrokerBase(msg.sender).MARKET_ID()));
@@ -159,6 +199,28 @@ contract BrokerInterestRelayer is
     require(brokers.contains(broker), "broker/same-value-provided");
     brokers.remove(broker);
     emit RemovedBroker(broker);
+  }
+
+  /**
+   * @dev Set the protocol fee rate charged on broker revenue (interest + penalty)
+   * @param _feeRate The new fee rate, WAD-scaled (1e18 == 100%)
+   */
+  function setFeeRate(uint256 _feeRate) external override onlyRole(MANAGER) {
+    require(_feeRate <= MAX_FEE, "relayer/max-fee-exceeded");
+    require(_feeRate != feeRate, "broker/same-value-provided");
+    emit SetFeeRate(feeRate, _feeRate);
+    feeRate = _feeRate;
+  }
+
+  /**
+   * @dev Set the recipient of the protocol fee
+   * @param _feeRecipient The new fee recipient
+   */
+  function setFeeRecipient(address _feeRecipient) external override onlyRole(MANAGER) {
+    require(_feeRecipient != address(0), "relayer/zero-address-provided");
+    require(_feeRecipient != feeRecipient, "broker/same-value-provided");
+    emit SetFeeRecipient(feeRecipient, _feeRecipient);
+    feeRecipient = _feeRecipient;
   }
 
   /// @dev only callable by the DEFAULT_ADMIN_ROLE (must be a TimeLock contract)

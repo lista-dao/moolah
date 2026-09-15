@@ -13,6 +13,9 @@ interface IFixedRateIrm is IIrm {
 
   /* EXTERNAL */
 
+  /// @notice The address of the Moolah contract.
+  function MOOLAH() external view returns (address);
+
   /// @notice Max settable borrow rate (800%).
   function MAX_BORROW_RATE() external returns (int256);
 
