@@ -397,6 +397,55 @@ contract SlisBNBV3ProviderTest is Test {
     assertLt(_collateral(user), shares, "liquidation still seizes under the gate");
   }
 
+  /// @dev The bypass: a listed holder pulls collateral out to an unlisted receiver, who then supplies it
+  ///      as collateral for itself. Both legs use the internal _transfer, so the Moolah-only ERC20
+  ///      restriction does not stop it. Each leg must be closed.
+  function test_depositWhitelist_cannotReassignSharesToUnlisted() public {
+    _enableWhitelist();
+    _allow(user, true);
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+
+    // Leg 1: withdrawShares to a different owner is refused.
+    vm.prank(user);
+    vm.expectRevert(V3Provider.NotWhitelisted.selector);
+    provider.withdrawShares(marketParams, shares / 2, user, user2);
+
+    // Withdrawing to yourself still works.
+    vm.prank(user);
+    provider.withdrawShares(marketParams, shares / 2, user, user);
+    assertEq(provider.balanceOf(user), shares / 2, "holder pulled their own shares");
+  }
+
+  function test_depositWhitelist_blocksUnlistedSupplyShares() public {
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    vm.prank(user);
+    provider.withdrawShares(marketParams, shares, user, user); // pre-gate, shares sit in the wallet
+    _enableWhitelist(); // user is NOT listed
+
+    // Leg 2: an unlisted holder cannot open a collateral position with those shares.
+    vm.prank(user);
+    vm.expectRevert(V3Provider.NotWhitelisted.selector);
+    provider.supplyShares(marketParams, shares, user);
+
+    // ... but can still exit, so nothing is stranded.
+    vm.prank(user);
+    provider.redeemShares(shares, 0, 0, user);
+    assertEq(provider.balanceOf(user), 0, "unlisted holder still exited");
+  }
+
+  /// @dev A listed caller must not open a position for an unlisted owner either.
+  function test_depositWhitelist_blocksSupplySharesForUnlistedOnBehalf() public {
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    vm.prank(user);
+    provider.withdrawShares(marketParams, shares, user, user);
+    _enableWhitelist();
+    _allow(user, true); // caller listed, onBehalf not
+
+    vm.prank(user);
+    vm.expectRevert(V3Provider.NotWhitelisted.selector);
+    provider.supplyShares(marketParams, shares, user2);
+  }
+
   function test_setDepositWhitelist_onlyManager() public {
     vm.expectRevert();
     provider.setDepositWhitelist(user, true);

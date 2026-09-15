@@ -411,6 +411,9 @@ abstract contract V3Provider is
     if (shares == 0) revert ZeroShares();
     if (receiver == address(0)) revert ZeroAddress();
     if (!_isSenderAuthorized(onBehalf)) revert Unauthorized();
+    // Reassigning collateral hands shares to an address the gate never saw; withdrawing to yourself
+    // stays open so a delisted holder is never trapped.
+    if (depositWhitelistEnabled && receiver != onBehalf) revert NotWhitelisted();
 
     // No inline compound — deploying liquidity is BOT-gated. The health check still counts pending fees:
     // the oracle prices the share via positionAmountsAt(fair), which is fee-inclusive.
@@ -427,6 +430,10 @@ abstract contract V3Provider is
     if (shares == 0) revert ZeroShares();
     if (onBehalf == address(0)) revert ZeroAddress();
     if (balanceOf(msg.sender) < shares) revert InsufficientShares();
+    // Opening a position is an entry, gated like deposit(). A delisted holder keeps their shares and
+    // can still redeemShares().
+    if (depositWhitelistEnabled && (!depositWhitelist[msg.sender] || !depositWhitelist[onBehalf]))
+      revert NotWhitelisted();
 
     // No inline compound — deploying liquidity is BOT-gated. The health check still counts pending fees:
     // the oracle prices the share via positionAmountsAt(fair), which is fee-inclusive.
