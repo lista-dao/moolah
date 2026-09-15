@@ -93,7 +93,7 @@ jobs:
           import json, sys
           # Legacy contracts already over the 24576-byte runtime limit at this point in history;
           # tracked separately, so they do not block CI. Anything else over the limit fails.
-          ALLOW = {"Moolah", "CreditBroker"}
+          ALLOW = {"Moolah"}
           data = json.load(open("sizes.json"))
           over = []
           for key, v in data.items():
