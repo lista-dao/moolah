@@ -29,7 +29,12 @@ jobs:
           fetch-depth: 1
 
       - name: Install Foundry
+        # Pinned: foundry-toolchain@v1 tracks the latest stable, and 1.8.3 tightened how
+        # vm.expectRevert matches a custom-error selector against a string revert, which fails
+        # several suites that pass on 1.8.1. Unpin once those expectations are updated.
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.1
 
       - name: Install submodule node_modules
         run: |
@@ -61,7 +66,12 @@ jobs:
           fetch-depth: 1
 
       - name: Install Foundry
+        # Pinned: foundry-toolchain@v1 tracks the latest stable, and 1.8.3 tightened how
+        # vm.expectRevert matches a custom-error selector against a string revert, which fails
+        # several suites that pass on 1.8.1. Unpin once those expectations are updated.
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.1
 
       - name: Install submodule node_modules
         run: |
