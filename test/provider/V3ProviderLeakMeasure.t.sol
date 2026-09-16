@@ -124,6 +124,12 @@ contract V3ProviderLeakMeasureTest is Test {
   uint256 constant LLTV = 70 * 1e16;
   uint256 constant BNB_USD = 600e8;
 
+  /// @dev Rounding slack for the value invariants, in the `_v` scale (1 USD = 1e26 there). The adapter's
+  ///      cap compares 8-decimal USD values, so every truncation inside it is worth 1e-8 USD = 1e18 here;
+  ///      4 of them covers both legs of both the entitlement and the delivered basket. That is ~13 orders
+  ///      of magnitude below the leaks asserted away (a 12 bps leak on this fixture is ~1e28).
+  uint256 constant VALUE_SLACK = 4e18;
+
   /// @dev MIN/MAX sqrt ratio guards (ticks ±887272) — clamp targets so the pool's own range check passes.
   uint160 constant MIN_SQRT_RATIO = 4295128739;
   uint160 constant MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342;
@@ -638,6 +644,70 @@ contract V3ProviderLeakMeasureTest is Test {
     );
   }
 
+  /* ──────── INV1: the redemption leg never out-delivers the fair entitlement ──────── */
+
+  /// @notice Value flows IN at min(fair, spot) but the burn returns the CURRENT spot basket, whose fair
+  ///         value has its unique minimum at spot == fair — so ANY skew, in either direction, lets the
+  ///         exiter take more than their fair share. The adapter's value cap must close that for every
+  ///         δ, while leaving the δ == 0 payout untouched.
+  function test_invariant_redeemNeverExceedsFairEntitlement() public {
+    int256[6] memory mags = [int256(0), 10, 25, 50, 100, 500];
+
+    for (uint256 d = 0; d < 2; d++) {
+      bool up = d == 0;
+      for (uint256 i = 0; i < mags.length; i++) {
+        if (mags[i] == 0 && !up) continue; // δ=0 is direction-free; assert it once
+        _assertNoOverDelivery(up ? mags[i] : -mags[i], up ? "up" : "down");
+      }
+    }
+  }
+
+  function _assertNoOverDelivery(int256 targetDelta, string memory dir) internal {
+    uint256 snap = vm.snapshotState();
+
+    _buildTwoHolderPosition(marketParams, 100 ether);
+    _pushSpotTo(_sqrtTargetFromFair(targetDelta));
+
+    uint256 supply = provider.totalSupply();
+    uint256 shares = _collateralIn(marketId, user);
+    (uint256 xf, uint256 yf) = adapter.positionAmountsAt(adapter.fairSqrtPriceX96());
+    uint256 vEnt = (_v(xf, yf) * shares) / supply;
+
+    // The preview is what a caller sizes minAmount0/1 from, so it has to quote the CAPPED basket too —
+    // otherwise every honest redeem reverts on its own slippage floor.
+    (uint256 q0, uint256 q1) = adapter.previewRemoveLiquidity(shares, supply);
+
+    vm.prank(user);
+    (uint256 out0, uint256 out1) = provider.withdraw(marketParams, shares, 0, 0, user, user);
+    uint256 vDel = _v(out0, out1);
+
+    string memory tag = string.concat("INV1 dir=", dir, " target_bps=", vm.toString(targetDelta));
+    console2.log(
+      string.concat(
+        tag,
+        " delta_bps=",
+        vm.toString(_signedDeltaBps(adapter.spotSqrtPriceX96(), adapter.fairSqrtPriceX96())),
+        " v_entitled=",
+        vm.toString(vEnt),
+        " v_delivered=",
+        vm.toString(vDel),
+        " v_preview=",
+        vm.toString(_v(q0, q1)),
+        " leak_ppm=",
+        vm.toString(_ppm(vDel, vEnt))
+      )
+    );
+
+    assertLe(vDel, vEnt + VALUE_SLACK, string.concat(tag, ": delivered value exceeds the fair entitlement"));
+    assertLe(_v(q0, q1), vEnt + VALUE_SLACK, string.concat(tag, ": preview quotes more than the fair entitlement"));
+    if (targetDelta == 0) {
+      // spot == fair ⇒ the spot basket IS the fair basket; the cap must be a no-op, not a haircut.
+      assertApproxEqAbs(vDel, vEnt, VALUE_SLACK, string.concat(tag, ": delta=0 payout must equal the entitlement"));
+    }
+
+    vm.revertToState(snap);
+  }
+
   /* ───────────── M3: real liquidation across the live LLTV tiers ───────────── */
 
   function test_measure_liquidationAcrossLltvTiers() public {
@@ -650,6 +720,28 @@ contract V3ProviderLeakMeasureTest is Test {
         _measureLiquidation(lltvs[i], skews[j]);
         vm.revertToState(snap);
       }
+    }
+  }
+
+  /// @notice INV2: capping the redeem must not brick liquidations. At the tightest live tier (lltv 96.5%,
+  ///         the thinnest incentive) the realised collateral must still clear the repayment by essentially
+  ///         the whole tolerable-discount budget `1 − 1/I`, under no skew and under ±50 bps of skew.
+  function test_invariant_liquidationStaysProfitableAtTightestLltv() public {
+    int256[3] memory skews = [int256(0), 50, -50];
+
+    for (uint256 j = 0; j < skews.length; j++) {
+      uint256 snap = vm.snapshotState();
+      Liq memory q = _measureLiquidation(965e15, skews[j]);
+
+      string memory tag = string.concat("INV2 lltv=965e15 skew_bps=", vm.toString(skews[j]));
+      assertGt(q.valueOut, q.valueRepaid, string.concat(tag, ": liquidation is unprofitable"));
+      assertGe(
+        uint256(_marginPpm(q.valueOut, q.valueRepaid)),
+        (q.maxTolerablePpm * 999) / 1000,
+        string.concat(tag, ": margin fell below 99.9% of the 1 - 1/I budget")
+      );
+
+      vm.revertToState(snap);
     }
   }
 
@@ -672,8 +764,7 @@ contract V3ProviderLeakMeasureTest is Test {
     uint256 nonpos;
   }
 
-  function _measureLiquidation(uint256 lltv, int256 skewBps) internal {
-    Liq memory q;
+  function _measureLiquidation(uint256 lltv, int256 skewBps) internal returns (Liq memory q) {
     q.lltv = lltv;
     q.skew = skewBps;
 

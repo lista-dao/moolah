@@ -78,7 +78,8 @@ interface IV3DexAdapter {
     uint256 amount1Desired
   ) external view returns (uint128 liquidity, uint256 amount0, uint256 amount1);
 
-  /// @notice Simulate removing `shares/totalShares` of the position (liquidity + idle) at spot.
+  /// @notice Simulate removing `shares/totalShares` of the position (liquidity + idle) at spot, capped
+  ///         to the slice's fair-priced value exactly as removeLiquidity caps the real payout.
   function previewRemoveLiquidity(
     uint256 shares,
     uint256 totalShares
@@ -102,7 +103,9 @@ interface IV3DexAdapter {
   /// @notice Remove the `shares/totalShares` pro-rata slice of liquidity AND idle inventory, sending
   ///         the underlying directly to `receiver` (WBNB unwrapped to native BNB). Used by the vault's
   ///         withdraw / redeemShares. No protocol value floor — the caller's minAmount0/1 is the guard
-  ///         (keeps liquidation live).
+  ///         (keeps liquidation live). There IS a value CAP: both legs are scaled down by one common
+  ///         factor if the spot basket is worth more than the slice's fair-priced entitlement, and the
+  ///         withheld remainder stays as idle for the remaining holders.
   function removeLiquidity(
     uint256 shares,
     uint256 totalShares,

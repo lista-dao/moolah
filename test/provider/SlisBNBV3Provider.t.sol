@@ -2796,8 +2796,12 @@ contract SlisBNBV3ProviderTest is Test {
     assertApproxEqAbs(pend1, col1 - owed1, 2, "simulated pending1 == actual collectable minus checkpointed");
   }
 
-  /// @dev previewRemoveLiquidity pro-rates the fee-inclusive fair composition, so it no longer
-  ///      under-reports by pending fees (was: spot principal + idle only).
+  /// @dev previewRemoveLiquidity pro-rates the fee-inclusive composition, so it no longer under-reports
+  ///      by pending fees (was: spot principal + idle only). It then scales that pro-rata down to the
+  ///      slice's fair-priced entitlement — the redemption value cap — and the swaps below leave the
+  ///      pool spot off fair, so the cap is active here and the comparison against the raw spot pro-rata
+  ///      is `<=` under one common scale factor rather than an exact match. The fee-inclusion claim is
+  ///      therefore asserted on the composition itself, which is what that fix changed.
   function test_previewRemoveLiquidity_includesPendingFees() public {
     (uint256 shares, , ) = _deposit(user, 100 ether, 100 ether);
     uint256 supply = provider.totalSupply();
@@ -2811,18 +2815,20 @@ contract SlisBNBV3ProviderTest is Test {
 
     uint160 spot = adapter.spotSqrtPriceX96();
 
-    // New preview == pro-rata of the fee-inclusive spot composition (matches actual delivery).
+    // Preview == pro-rata of the fee-inclusive spot composition, capped to the fair entitlement.
     (uint256 p0, uint256 p1) = adapter.previewRemoveLiquidity(shares, supply);
     (uint256 t0, uint256 t1) = adapter.positionAmountsAt(spot);
-    assertEq(p0, (t0 * shares) / supply, "preview0 == pro-rata spot composition (incl. fees)");
-    assertEq(p1, (t1 * shares) / supply, "preview1 == pro-rata spot composition (incl. fees)");
+    uint256 pro0 = (t0 * shares) / supply;
+    uint256 pro1 = (t1 * shares) / supply;
+    assertLe(p0, pro0, "preview0 <= pro-rata spot composition (incl. fees)");
+    assertLe(p1, pro1, "preview1 <= pro-rata spot composition (incl. fees)");
+    assertApproxEqRel(p0 * pro1, p1 * pro0, 1e12, "both legs scaled by one common factor");
 
     // Old formula (spot principal + idle, no pending fees) under-reports on at least one leg.
-    uint128 liqRemove = uint128((uint256(adapter.totalLiquidity()) * shares) / supply);
-    (uint256 o0, uint256 o1) = adapter.amountsForLiquidity(liqRemove, spot);
-    o0 += (adapter.idleToken0() * shares) / supply;
-    o1 += (adapter.idleToken1() * shares) / supply;
-    assertTrue(p0 > o0 || p1 > o1, "preview now exceeds the fee-omitting spot formula");
+    (uint256 o0, uint256 o1) = adapter.amountsForLiquidity(adapter.totalLiquidity(), spot);
+    o0 += adapter.idleToken0();
+    o1 += adapter.idleToken1();
+    assertTrue(t0 > o0 || t1 > o1, "composition now exceeds the fee-omitting spot formula");
   }
 
   /// @dev Partial-withdraw fee fairness: accrued fees are swept to idle and split pro-rata, so a partial

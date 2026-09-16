@@ -11,6 +11,7 @@ import { TickMath } from "lista-dao-contracts/libraries/TickMath.sol";
 import { LiquidityAmounts } from "lista-dao-contracts/libraries/LiquidityAmounts.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { FullMath } from "lista-dao-contracts/oracle/libraries/FullMath.sol";
+import { IOracle } from "moolah/interfaces/IOracle.sol";
 
 import { INonfungiblePositionManager } from "../interfaces/INonfungiblePositionManager.sol";
 import { V3PositionLib } from "../libraries/V3PositionLib.sol";
@@ -67,6 +68,8 @@ abstract contract V3DexAdapter is
   bytes32 public constant MANAGER = keccak256("MANAGER");
 
   uint256 internal constant BPS = 10_000;
+  /// @dev Fixed-point scale for the redemption value-cap scaling factor.
+  uint256 internal constant WAD = 1e18;
   /// @dev Denominator for `maxSwapLossBp` — parts-per-million (ppm).
   uint256 internal constant LOSS_DENOM = 1e6;
   /// @dev Fallback half-range (ticks) around spot for non-rate (TWAP) pairs.
@@ -328,6 +331,11 @@ abstract contract V3DexAdapter is
       if (fee1 > 0) idleToken1 += fee1;
     }
 
+    // Basis for the fair-value cap applied to the payout below. Snapshot it HERE: after the fee sweep,
+    // so the caller's pro-rata fees are inside the entitlement, and before decreaseLiquidity, because
+    // afterwards positionAmountsAt() reads the already-shrunk position and the basis is understated.
+    uint256 entitledValue = _fairEntitledValue(shares, totalShares);
+
     uint128 totalLiq = _getPositionLiquidity();
     uint128 liquidityToRemove = totalShares == 0 ? 0 : uint128((uint256(totalLiq) * shares) / totalShares);
 
@@ -350,6 +358,22 @@ abstract contract V3DexAdapter is
       if (idleOut1 > 0) {
         idleToken1 -= idleOut1;
         amount1 += idleOut1;
+      }
+    }
+
+    // Fair-value cap: the burn above hands back the CURRENT SPOT basket, while value entered the vault
+    // at min(fair, spot). Withhold whatever the spot basket is worth above the fair entitlement and
+    // leave it as idle — it belongs to the remaining holders. Applied BEFORE the slippage floor so a
+    // caller cannot use minAmount0/1 to force the uncapped payout.
+    {
+      (uint256 keep0, uint256 keep1) = _capToEntitledValue(amount0, amount1, entitledValue);
+      if (keep0 > 0) {
+        amount0 -= keep0;
+        idleToken0 += keep0;
+      }
+      if (keep1 > 0) {
+        amount1 -= keep1;
+        idleToken1 += keep1;
       }
     }
 
@@ -740,6 +764,88 @@ abstract contract V3DexAdapter is
     (uint256 total0, uint256 total1) = positionAmountsAt(spotSqrtPriceX96());
     amount0 = (total0 * shares) / totalShares;
     amount1 = (total1 * shares) / totalShares;
+
+    // Mirror removeLiquidity's fair-value cap. Without it the quote overstates the payout under a skew,
+    // and minAmount0/1 sized from this preview would revert every honest exit on its own floor.
+    (uint256 keep0, uint256 keep1) = _capToEntitledValue(amount0, amount1, _fairEntitledValue(shares, totalShares));
+    amount0 -= keep0;
+    amount1 -= keep1;
+  }
+
+  /// @dev Fair-priced 8-decimal USD value the `shares/totalShares` slice of the position is entitled to.
+  function _fairEntitledValue(uint256 shares, uint256 totalShares) internal view returns (uint256) {
+    if (totalShares == 0) return 0;
+    (uint256 fair0, uint256 fair1) = positionAmountsAt(fairSqrtPriceX96());
+    return (_valueUsd(fair0, fair1) * shares) / totalShares;
+  }
+
+  /// @dev Amounts to WITHHOLD from an (amount0, amount1) payout so its value does not exceed
+  ///      `entitledValue`.
+  ///
+  ///      Why a cap is needed: value enters the vault at min(fair, spot) but a share burn returns the
+  ///      CURRENT spot basket, and that basket's fair value V(p) = x(p)·p* + y(p) has its UNIQUE minimum
+  ///      at p == fair (V3 gives y'(p) = −p·x'(p), hence dV/dp = x'(p)·(p* − p), with x'(p) < 0 in
+  ///      range). So spot drifting in EITHER direction lets the exiter take more than their share.
+  ///
+  ///      Both legs are scaled by the SAME factor. A per-leg min(fair_i, spot_i) would instead cut ~50%
+  ///      off the payout even at tiny skews and blow past every live LLTV tier's liquidation budget;
+  ///      uniform value scaling leaves the fair-priced payout exactly whole.
+  ///
+  ///      `entitledValue == 0` (oracle unavailable) skips the cap — see {_valueUsd} for that tradeoff.
+  function _capToEntitledValue(
+    uint256 amount0,
+    uint256 amount1,
+    uint256 entitledValue
+  ) internal view returns (uint256 keep0, uint256 keep1) {
+    if (entitledValue == 0) return (0, 0);
+    uint256 deliverValue = _valueUsd(amount0, amount1);
+    if (deliverValue <= entitledValue) return (0, 0);
+
+    uint256 scale = (entitledValue * WAD) / deliverValue; // < WAD
+    keep0 = amount0 - (amount0 * scale) / WAD;
+    keep1 = amount1 - (amount1 * scale) / WAD;
+  }
+
+  /// @dev 8-decimal USD value of an (amount0, amount1) pair at the vault's resilient-oracle prices.
+  ///
+  ///      FAIL-OPEN: returns 0 when the price cannot be read (no provider yet, oracle call reverts, or
+  ///      either leg prices at 0), and the redemption cap reads 0 as "skip the cap". This is the exact
+  ///      OPPOSITE of {V3ProviderOracle.peek}, which is fail-CLOSED on a zero leg price
+  ///      (`revert ZeroPrice()`), and the difference is deliberate: peek() only produces a number, so
+  ///      refusing to answer is safe, whereas this sits on the liquidation path
+  ///      (redeemShares → removeLiquidity) where a revert bricks liquidation outright. Forced to choose
+  ///      between bricking liquidation and leaking at most the spot-vs-fair gap while a feed is down,
+  ///      take the leak.
+  ///
+  ///      The oracle address is re-read from the vault on every call: `resilientOracle` is a mutable
+  ///      public variable there, so it must never be cached here.
+  function _valueUsd(uint256 amount0, uint256 amount1) internal view returns (uint256) {
+    address _provider = provider;
+    if (_provider == address(0)) return 0;
+
+    address oracle;
+    try IV3Provider(_provider).resilientOracle() returns (address o) {
+      oracle = o;
+    } catch {
+      return 0;
+    }
+    if (oracle == address(0)) return 0;
+
+    uint256 price0;
+    uint256 price1;
+    try IOracle(oracle).peek(TOKEN0) returns (uint256 p) {
+      price0 = p;
+    } catch {
+      return 0;
+    }
+    try IOracle(oracle).peek(TOKEN1) returns (uint256 p) {
+      price1 = p;
+    } catch {
+      return 0;
+    }
+    if (price0 == 0 || price1 == 0) return 0;
+
+    return (amount0 * price0) / (10 ** DECIMALS0) + (amount1 * price1) / (10 ** DECIMALS1);
   }
 
   /// @notice TWAP tick over TWAP_PERIOD seconds.
