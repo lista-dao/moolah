@@ -98,7 +98,7 @@ contract PositionMigrator is
   event UpdateWhitelist(address indexed account, bool status);
   event MigrationDeadlineChanged(uint256 oldDeadline, uint256 newDeadline);
   event SetYieldAccount(address indexed account, bytes32 marketId);
-  event ForcedMigration(address indexed bot, uint256 debtAmount);
+  event ForcedMigration(address indexed bot, address indexed onBehalf, uint256 debtAmount);
   event UpdateSupportedCollateral(address indexed collAddr, bool supported);
 
   struct CallbackData {
@@ -191,29 +191,29 @@ contract PositionMigrator is
   }
 
   /**
-   * @dev Migrates YIELD_ACCOUNT_OWNER's whole BNB CDP position after the migration window closed,
-   *      without a transaction from that address.
-   * @notice The CDP's `Interaction.migrator()` role is what permits repaying and releasing on its
-   *         behalf, so no CDP contract change is needed.
-   * @notice The destination is not a choice this function makes: funds can only land in
-   *         `yieldAccount`, and the owner keeps its usual withdraw and repay rights there.
-   * @notice The whole debt is flash-loaned and re-borrowed in one transaction, so the market needs
-   *         both the flash-loan liquidity and the borrowable supply to cover it in full.
-   * @param minSlisBnb minimum slisBNB expected from the release
+   * @dev Migrates `onBehalf`'s whole CDP position once the window closed, with no transaction from
+   *      that address. `Interaction.migrator()` is what permits it, so the CDP needs no change.
+   * @notice The destination is not this function's choice: YIELD_ACCOUNT_OWNER can only land in
+   *         `yieldAccount` and only from the BNB ilk, everyone else in their own plain position.
+   * @notice Needs roughly 2x the debt in Moolah's lisUSD and 1x in the market — the flash loan and
+   *         the re-borrow are outstanding at the same time.
+   * @param minSlisBnb minimum slisBNB from the release; only meaningful when isBnb
    */
   function forceMigrate(
+    address onBehalf,
     MarketParams calldata marketParams,
+    bool isBnb,
     uint256 minSlisBnb
   ) external nonReentrant onlyRole(BOT) returns (uint256) {
     uint256 deadline = migrationDeadline;
     require(deadline != 0, "deadline not set");
     require(block.timestamp >= deadline, "migration window open");
     // the same whitelist gate as the voluntary path
-    require(whitelist.contains(YIELD_ACCOUNT_OWNER), "not whitelisted");
+    require(whitelist.contains(onBehalf), "not whitelisted");
 
-    uint256 migrated = _migrate(marketParams, YIELD_ACCOUNT_OWNER, true, minSlisBnb);
+    uint256 migrated = _migrate(marketParams, onBehalf, isBnb, minSlisBnb);
 
-    emit ForcedMigration(msg.sender, migrated);
+    emit ForcedMigration(msg.sender, onBehalf, migrated);
 
     return migrated;
   }
