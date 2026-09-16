@@ -1,0 +1,1005 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.34;
+
+import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
+import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { TickMath } from "lista-dao-contracts/libraries/TickMath.sol";
+import { LiquidityAmounts } from "lista-dao-contracts/libraries/LiquidityAmounts.sol";
+import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
+import { FullMath } from "lista-dao-contracts/oracle/libraries/FullMath.sol";
+
+import { INonfungiblePositionManager } from "../interfaces/INonfungiblePositionManager.sol";
+import { V3PositionLib } from "../libraries/V3PositionLib.sol";
+import { SwapInventoryLib } from "../libraries/SwapInventoryLib.sol";
+import { IListaV3Factory } from "lista-v3/core/interfaces/IListaV3Factory.sol";
+import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
+import { IWBNB } from "../interfaces/IWBNB.sol";
+import { IV3DexAdapter } from "../interfaces/IV3DexAdapter.sol";
+import { IV3Provider } from "../interfaces/IV3Provider.sol";
+import { IV3PoolMinimal } from "../interfaces/IV3PoolMinimal.sol";
+
+/**
+ * @title V3DexAdapter
+ * @author Lista DAO
+ * @notice Generic, abstract DEX-custodian for a single Uniswap V3 / PancakeSwap V3 concentrated
+ *         liquidity NFT. Sole holder of the position (tokenId), the idle inventory and all NPM/pool
+ *         interaction. The vault (V3Provider) drives it through `onlyProvider` writes; the vault and
+ *         the oracle (SlisBNBV3ProviderOracle) read its raw-NAV/composition views via staticcall.
+ *
+ *         Splitting NFT custody + DEX math out of the vault keeps each runtime under EIP-170 and
+ *         isolates the position state from the share-accounting / pricing logic.
+ *
+ *         The rebalance (rate-centered recenter) and the DEX-agnostic, backend-built inventory-conversion
+ *         swap (+ swap-pair whitelist) live here and are shared by every rate-implied pair.
+ *
+ * Extension points (rate-implied subclasses override):
+ *   - _lstNativeRate(): the LST↔native exchange rate — the range center and the fair-price anchor.
+ *   - fairSqrtPriceX96(): the valuation price (rate-implied by default; wstETH/wbETH clamp the pool TWAP
+ *     to the rate). receive() may also be overridden to widen accepted native senders.
+ */
+abstract contract V3DexAdapter is
+  UUPSUpgradeable,
+  AccessControlEnumerableUpgradeable,
+  ReentrancyGuardUpgradeable,
+  IV3DexAdapter
+{
+  using SafeERC20 for IERC20;
+
+  /* ─────────────────────────── immutables ─────────────────────────── */
+
+  INonfungiblePositionManager public immutable POSITION_MANAGER;
+  address public immutable POOL;
+  address public immutable TOKEN0;
+  address public immutable TOKEN1;
+  uint24 public immutable FEE;
+  uint32 public immutable TWAP_PERIOD;
+  uint8 public immutable DECIMALS0;
+  uint8 public immutable DECIMALS1;
+
+  /// @dev Wrapped-native token of the chain (WBNB on BSC, WETH on Ethereum). Native sent on deposit
+  ///      is wrapped to this before forwarding; refunds/withdrawals unwrap it back to native.
+  address public immutable WRAPPED_NATIVE;
+
+  bytes32 public constant MANAGER = keccak256("MANAGER");
+
+  uint256 internal constant BPS = 10_000;
+  /// @dev Denominator for `maxSwapLossBp` — parts-per-million (ppm).
+  uint256 internal constant LOSS_DENOM = 1e6;
+  /// @dev Half-width of the rate-centered range for rate-implied pairs (±0.5%).
+  uint256 internal constant INITIAL_RANGE_BPS = 50;
+  /// @dev Fallback half-range (ticks) around spot for non-rate (TWAP) pairs.
+  int24 internal constant FALLBACK_HALF_RANGE_TICKS = 500;
+  /// @dev Fixed-point 2^128, the denominator of Uniswap V3 fee-growth (feeGrowthInside/Global) values.
+  uint256 internal constant Q128 = 1 << 128;
+
+  /* ──────────────────────────── storage ───────────────────────────── */
+
+  /// @dev The vault (V3Provider) authorized to drive this adapter. Set once via setProvider.
+  address public provider;
+
+  /// @dev tokenId of the V3 NFT held by this adapter; 0 means no position yet.
+  uint256 public tokenId;
+
+  int24 public tickLower;
+  int24 public tickUpper;
+
+  /// @dev Idle inventory from ratio mismatch during compound/rebalance. Tracked in storage (not
+  ///      balanceOf) so donations cannot inflate the reported NAV.
+  uint256 public idleToken0;
+  uint256 public idleToken1;
+
+  /// @dev Exchange rate at the last successful center/init; used as the range center. Rate-implied
+  ///      pairs only (0 for pure-TWAP pairs).
+  uint256 public lastCenterRate;
+
+  /// @dev Min relative exchange-rate drift from lastCenterRate before rebalance is allowed (BPS; 0 = off).
+  uint256 public centerRateThresholdBps;
+
+  /// @dev Whitelisted swap venues the rebalance inventory conversion may call. The BOT backend builds the
+  ///      swap calldata; the adapter only allows whitelisted targets (à la {Liquidator}'s pairWhitelist).
+  ///      Chain/venue-agnostic: a DEX pool, an aggregator, or any router that converts TOKEN0<->TOKEN1.
+  mapping(address => bool) public swapPairWhitelist;
+
+  /// @dev Per-swap fair-value loss cap for the rebalance inventory-conversion swap, in ppm
+  ///      (LOSS_DENOM = 1e6). The swap's output is bounded against the LST↔native rate — NOT the pool
+  ///      spot and NOT the BOT-supplied amountOutMin — so a compromised BOT cannot realize more than
+  ///      this slippage on the converted leg. Default 50_000 = 5%.
+  uint256 public maxSwapLossBp;
+
+  /// @dev Max allowed |pool spot − fair| price deviation (bps) for adding liquidity at the pool spot.
+  ///      Gates the compound path: fairSqrtPriceX96 is rate-anchored, so a flash-loan skew cannot make
+  ///      compound add at a manipulated price and get sandwiched on the back-swap. The rebalance re-mint
+  ///      has no fair gate — only the BOT's targetSqrtPriceX96 assertion (same tolerance), skipped at
+  ///      target 0, so pass a non-zero target in production. 0 disables. Default INITIAL_RANGE_BPS (0.5%).
+  uint256 public maxSpotDeviationBps;
+
+  /// @dev Max |live center rate − BOT expectedCenterRate| deviation on rebalance (BPS; 0 = off). Guards
+  ///      the range anchor against a build↔exec rate anomaly the fair-NAV loss caps can't see.
+  uint256 public maxCenterRateDeviationBps;
+
+  /// @dev Reserved storage for future base variables (keep subclass storage stable on upgrade).
+  uint256[44] private __gap;
+
+  /* ───────────────────────────── events ───────────────────────────── */
+
+  event ProviderSet(address indexed provider);
+  event Compounded(uint256 amount0, uint256 amount1, uint128 liquidityAdded);
+  event LiquidityAdded(uint128 liquidityAdded, uint256 amount0Used, uint256 amount1Used);
+  event LiquidityRemoved(uint256 shares, uint256 totalShares, uint256 amount0, uint256 amount1, address receiver);
+  event CenterRateThresholdChanged(uint256 centerRateThresholdBps);
+  event LastCenterRateUpdated(uint256 oldCenterRate, uint256 newCenterRate);
+  event Rebalanced(int24 oldTickLower, int24 oldTickUpper, int24 newTickLower, int24 newTickUpper, uint256 newTokenId);
+  event SwapPairWhitelistSet(address indexed swapPair, bool status);
+  event MaxSwapLossBpChanged(uint256 maxSwapLossBp);
+  event MaxSpotDeviationBpsChanged(uint256 maxSpotDeviationBps);
+  event MaxCenterRateDeviationBpsChanged(uint256 maxCenterRateDeviationBps);
+  event CompoundSkippedSpotDeviated(uint160 spotSqrtPriceX96, uint160 fairSqrtPriceX96);
+  event CompoundSkippedNoLiquidity(uint256 idleToken0, uint256 idleToken1);
+  event IdleCredited(uint256 amount0, uint256 amount1);
+
+  /* ───────────────────────────── errors ───────────────────────────── */
+
+  error ZeroAddress();
+  error TokenOrderInvalid();
+  error ZeroFee();
+  error ZeroTwapPeriod();
+  error PoolDoesNotExist();
+  error InvalidTickRange();
+  error OnlyProvider();
+  error ProviderAlreadySet();
+  error ProviderAdapterMismatch();
+  error BnbTransferFailed();
+  error NotWrappedNative();
+  error DeadlineExpired();
+  error InsufficientLiquidityMinted();
+  error RateDeviationBelowThreshold();
+  error InvalidThreshold();
+  error NotWhitelistedPair();
+  error InvalidSwapPair();
+  error SwapLossTooHigh();
+  error InvalidParam();
+  error InsufficientBalance();
+  error InsufficientAmount();
+  error SpotDeviationTooHigh();
+  error CenterRateDeviationTooHigh();
+  error ZeroAmount();
+
+  /* ─────────────────────────── constructor ────────────────────────── */
+
+  /// @custom:oz-upgrades-unsafe-allow constructor
+  constructor(
+    address _positionManager,
+    address _token0,
+    address _token1,
+    uint24 _fee,
+    uint32 _twapPeriod,
+    address _wrappedNative
+  ) {
+    if (_positionManager == address(0)) revert ZeroAddress();
+    if (_token0 == address(0) || _token1 == address(0)) revert ZeroAddress();
+    if (_wrappedNative == address(0)) revert ZeroAddress();
+    if (_token0 >= _token1) revert TokenOrderInvalid();
+    if (_fee == 0) revert ZeroFee();
+    if (_twapPeriod == 0) revert ZeroTwapPeriod();
+
+    address _pool = IListaV3Factory(INonfungiblePositionManager(_positionManager).factory()).getPool(
+      _token0,
+      _token1,
+      _fee
+    );
+    if (_pool == address(0)) revert PoolDoesNotExist();
+
+    POSITION_MANAGER = INonfungiblePositionManager(_positionManager);
+    TOKEN0 = _token0;
+    TOKEN1 = _token1;
+    FEE = _fee;
+    POOL = _pool;
+    TWAP_PERIOD = _twapPeriod;
+    WRAPPED_NATIVE = _wrappedNative;
+    DECIMALS0 = IERC20Metadata(_token0).decimals();
+    DECIMALS1 = IERC20Metadata(_token1).decimals();
+
+    _disableInitializers();
+  }
+
+  /* ─────────────────────────── initializer ────────────────────────── */
+
+  function __V3DexAdapter_init(
+    address _admin,
+    address _manager,
+    int24 _tickLower,
+    int24 _tickUpper
+  ) internal onlyInitializing {
+    if (_admin == address(0) || _manager == address(0)) revert ZeroAddress();
+    if (_tickLower >= _tickUpper) revert InvalidTickRange();
+
+    __AccessControl_init();
+    __ReentrancyGuard_init();
+
+    _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+    _grantRole(MANAGER, _manager);
+
+    tickLower = _tickLower;
+    tickUpper = _tickUpper;
+
+    maxSwapLossBp = 50_000; // 5% (ppm) — per-swap rate-anchored loss cap
+    emit MaxSwapLossBpChanged(maxSwapLossBp);
+
+    maxSpotDeviationBps = INITIAL_RANGE_BPS; // 0.5% — spot-vs-fair gate for adding liquidity at pool spot
+    emit MaxSpotDeviationBpsChanged(maxSpotDeviationBps);
+  }
+
+  /// @notice Wire the vault that may drive this adapter. One-time, admin-only.
+  /// @dev Cross-validates the wiring: the vault's immutable ADAPTER (set in its constructor) must point
+  ///      back to THIS adapter. Guards against a silent mis-wire — especially across same-pair adapters —
+  ///      that would permanently brick the adapter (setProvider is one-time) or misprice collateral.
+  function setProvider(address _provider) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    if (_provider == address(0)) revert ZeroAddress();
+    if (provider != address(0)) revert ProviderAlreadySet();
+    if (IV3Provider(_provider).ADAPTER() != address(this)) revert ProviderAdapterMismatch();
+    provider = _provider;
+    emit ProviderSet(_provider);
+  }
+
+  modifier onlyProvider() {
+    if (msg.sender != provider) revert OnlyProvider();
+    _;
+  }
+
+  /* ─────────────────────── writes (onlyProvider) ──────────────────── */
+
+  /// @inheritdoc IV3DexAdapter
+  function addLiquidity(
+    uint256 amount0Desired,
+    uint256 amount1Desired,
+    uint256 amount0Min,
+    uint256 amount1Min,
+    address refundTo
+  ) external onlyProvider nonReentrant returns (uint128 liquidityAdded, uint256 amount0Used, uint256 amount1Used) {
+    if (tokenId == 0) {
+      (tokenId, liquidityAdded, amount0Used, amount1Used) = V3PositionLib.mint(
+        POSITION_MANAGER,
+        TOKEN0,
+        TOKEN1,
+        FEE,
+        tickLower,
+        tickUpper,
+        amount0Desired,
+        amount1Desired,
+        amount0Min,
+        amount1Min
+      );
+    } else {
+      (liquidityAdded, amount0Used, amount1Used) = V3PositionLib.increaseLiquidity(
+        POSITION_MANAGER,
+        TOKEN0,
+        TOKEN1,
+        tokenId,
+        amount0Desired,
+        amount1Desired,
+        amount0Min,
+        amount1Min
+      );
+    }
+
+    // Refund unused input (ratio mismatch) to the depositor. The wrapped-native token is unwrapped to native coin.
+    uint256 refund0 = amount0Desired - amount0Used;
+    uint256 refund1 = amount1Desired - amount1Used;
+    if (refund0 > 0) _sendToken(TOKEN0, refund0, payable(refundTo));
+    if (refund1 > 0) _sendToken(TOKEN1, refund1, payable(refundTo));
+
+    emit LiquidityAdded(liquidityAdded, amount0Used, amount1Used);
+  }
+
+  /// @inheritdoc IV3DexAdapter
+  function removeLiquidity(
+    uint256 shares,
+    uint256 totalShares,
+    uint256 minAmount0,
+    uint256 minAmount1,
+    address receiver
+  ) external onlyProvider nonReentrant returns (uint256 amount0, uint256 amount1) {
+    // Sweep fees into idle first so they split pro-rata: decreaseLiquidity settles the whole position's
+    // fees into tokensOwed, so collecting them with the pro-rata principal would pay this withdrawer
+    // 100% of the fees. collect only claims owed tokens (no swap / no spot move), so it is safe here.
+    if (tokenId != 0) {
+      (uint256 fee0, uint256 fee1) = V3PositionLib.collectAll(POSITION_MANAGER, tokenId);
+      if (fee0 > 0) idleToken0 += fee0;
+      if (fee1 > 0) idleToken1 += fee1;
+    }
+
+    uint128 totalLiq = _getPositionLiquidity();
+    uint128 liquidityToRemove = totalShares == 0 ? 0 : uint128((uint256(totalLiq) * shares) / totalShares);
+
+    if (liquidityToRemove > 0) {
+      // Fees drained above, so this returns only the freshly-burned pro-rata principal. Slippage is
+      // enforced on the OVERALL delivered amount at function end (min sized from previewRemoveLiquidity =
+      // principal + pro-rata idle+fees), not on the burned principal here.
+      V3PositionLib.decreaseLiquidity(POSITION_MANAGER, tokenId, liquidityToRemove, 0, 0);
+      (amount0, amount1) = V3PositionLib.collectAll(POSITION_MANAGER, tokenId);
+    }
+
+    // Pro-rata idle inventory: redeem the same fraction of idle as of liquidity.
+    if (totalShares > 0) {
+      uint256 idleOut0 = (idleToken0 * shares) / totalShares;
+      uint256 idleOut1 = (idleToken1 * shares) / totalShares;
+      if (idleOut0 > 0) {
+        idleToken0 -= idleOut0;
+        amount0 += idleOut0;
+      }
+      if (idleOut1 > 0) {
+        idleToken1 -= idleOut1;
+        amount1 += idleOut1;
+      }
+    }
+
+    // Overall-amount slippage floor: bounds the total actually delivered to the receiver, consistent
+    // with what previewRemoveLiquidity reports, and covers the idle-only / dust-exit path too.
+    if (amount0 < minAmount0 || amount1 < minAmount1) revert InsufficientAmount();
+
+    // Zero-output guard: a dust redeem where both the pro-rata liquidity and idle round to 0 would
+    // otherwise burn the caller's shares and deliver nothing when minAmount0/1 are 0 (the floor above
+    // is trivially satisfied by 0 >= 0). Revert so the share burn rolls back instead of being lost.
+    if (shares > 0 && amount0 == 0 && amount1 == 0) revert ZeroAmount();
+
+    if (amount0 > 0) _sendToken(TOKEN0, amount0, payable(receiver));
+    if (amount1 > 0) _sendToken(TOKEN1, amount1, payable(receiver));
+
+    emit LiquidityRemoved(shares, totalShares, amount0, amount1, receiver);
+  }
+
+  /// @inheritdoc IV3DexAdapter
+  function collectAndCompound(uint256 amount0Min, uint256 amount1Min) external onlyProvider nonReentrant {
+    _collectAndCompound(amount0Min, amount1Min);
+  }
+
+  /// @inheritdoc IV3DexAdapter
+  function creditIdle(uint256 amount0, uint256 amount1) external onlyProvider nonReentrant {
+    // The provider transfers `amount0`/`amount1` here before calling; record them as idle inventory
+    // rather than minting into the pool. Deposits enter as idle at the current fair composition ratio
+    // (priced off-pool), then a later spot-gated compound() deploys them — this is what keeps share
+    // issuance free of the pool spot price. Assert the tokens really arrived so idle never exceeds the
+    // adapter's spendable balance (INV: idleTokenX <= balanceOf(this)).
+    if (amount0 > 0) idleToken0 += amount0;
+    if (amount1 > 0) idleToken1 += amount1;
+    if (idleToken0 > IERC20(TOKEN0).balanceOf(address(this))) revert InsufficientBalance();
+    if (idleToken1 > IERC20(TOKEN1).balanceOf(address(this))) revert InsufficientBalance();
+    emit IdleCredited(amount0, amount1);
+  }
+
+  /* ─────────────────────── manager / rebalance ────────────────────── */
+
+  /// @inheritdoc IV3DexAdapter
+  function setCenterRateThresholdBps(uint256 _centerRateThresholdBps) external onlyRole(MANAGER) {
+    if (_centerRateThresholdBps > BPS) revert InvalidThreshold();
+    centerRateThresholdBps = _centerRateThresholdBps;
+    emit CenterRateThresholdChanged(_centerRateThresholdBps);
+  }
+
+  /// @notice Set the max |pool spot − fair| price deviation (bps) tolerated when adding liquidity at the
+  ///         pool spot (compound + rebalance re-mint). 0 disables the gate. onlyRole MANAGER.
+  function setMaxSpotDeviationBps(uint256 _maxSpotDeviationBps) external onlyRole(MANAGER) {
+    if (_maxSpotDeviationBps > BPS) revert InvalidThreshold();
+    maxSpotDeviationBps = _maxSpotDeviationBps;
+    emit MaxSpotDeviationBpsChanged(_maxSpotDeviationBps);
+  }
+
+  /// @notice Max relative deviation (BPS) allowed between the live center rate and the BOT-supplied
+  ///         expectedCenterRate on rebalance. 0 disables the guard (default).
+  function setMaxCenterRateDeviationBps(uint256 _maxCenterRateDeviationBps) external onlyRole(MANAGER) {
+    if (_maxCenterRateDeviationBps > BPS) revert InvalidThreshold();
+    maxCenterRateDeviationBps = _maxCenterRateDeviationBps;
+    emit MaxCenterRateDeviationBpsChanged(_maxCenterRateDeviationBps);
+  }
+
+  /// @notice Whitelist (or remove) a swap venue the rebalance inventory conversion may call. Backend-built
+  ///         calldata can only target whitelisted venues.
+  /// @dev Defense-in-depth: a swap venue must never be a token / pool / NPM the adapter holds or trusts,
+  ///      else crafted swapData could move the adapter's own inventory (e.g. TOKEN0.transfer) or position.
+  function setSwapPairWhitelist(address swapPair, bool status) external onlyRole(MANAGER) {
+    if (swapPair == address(0)) revert ZeroAddress();
+    if (
+      status && (swapPair == TOKEN0 || swapPair == TOKEN1 || swapPair == POOL || swapPair == address(POSITION_MANAGER))
+    ) revert InvalidSwapPair();
+    swapPairWhitelist[swapPair] = status;
+    emit SwapPairWhitelistSet(swapPair, status);
+  }
+
+  /// @notice Set the per-swap rate-anchored loss cap for the rebalance conversion swap, in ppm
+  ///         (LOSS_DENOM = 1e6). onlyRole MANAGER.
+  function setMaxSwapLossBp(uint256 _maxSwapLossBp) external onlyRole(MANAGER) {
+    if (_maxSwapLossBp > LOSS_DENOM) revert InvalidParam();
+    maxSwapLossBp = _maxSwapLossBp;
+    emit MaxSwapLossBpChanged(_maxSwapLossBp);
+  }
+
+  /// @inheritdoc IV3DexAdapter
+  function rebalance(
+    uint256 minAmount0,
+    uint256 minAmount1,
+    uint256 minLiquidity,
+    uint160 targetSqrtPriceX96,
+    uint256 expectedCenterRate,
+    uint256 deadline,
+    bytes calldata swapData
+  ) external onlyProvider nonReentrant {
+    if (block.timestamp > deadline) revert DeadlineExpired();
+
+    // Rate-implied pairs recenter around the LST↔native rate; pure-TWAP pairs (rate == 0) recenter
+    // around the spot tick and skip the rate-drift guard / inventory conversion.
+    uint256 centerRate = _lstNativeRate();
+    bool rateImplied = centerRate != 0;
+    if (rateImplied) _requireCenterRateDeviation(centerRate);
+
+    // Assert the live rate still matches the BOT's expectedCenterRate; 0 keeps prior behavior.
+    if (rateImplied && expectedCenterRate != 0 && maxCenterRateDeviationBps != 0) {
+      uint256 delta = centerRate > expectedCenterRate
+        ? centerRate - expectedCenterRate
+        : expectedCenterRate - centerRate;
+      if ((delta * BPS) / expectedCenterRate > maxCenterRateDeviationBps) revert CenterRateDeviationTooHigh();
+    }
+
+    (int24 newTickLower, int24 newTickUpper) = _initialTickRange(centerRate);
+    int24 oldTickLower = tickLower;
+    int24 oldTickUpper = tickUpper;
+
+    // Short-circuit a pure no-op recenter: the recomputed range matches the live one AND the caller
+    // asked us to enforce nothing (no swap-based inventory conversion, no target-price assertion, no
+    // slippage / min-liquidity floors). In that case a burn/mint would just re-create the identical
+    // position at the cost of gas and rounding dust. Compound accrued fees + idle into the existing
+    // position instead (itself spot-deviation guarded) and return. When any of those is supplied — a
+    // swap to run, a price/slippage/liquidity floor to honor, or a genuinely different range — we fall
+    // through to the full path so that work still happens and the guards are enforced.
+    if (
+      tokenId != 0 &&
+      newTickLower == oldTickLower &&
+      newTickUpper == oldTickUpper &&
+      swapData.length == 0 &&
+      targetSqrtPriceX96 == 0 &&
+      minAmount0 == 0 &&
+      minAmount1 == 0 &&
+      minLiquidity == 0
+    ) {
+      _collectAndCompound(minAmount0, minAmount1);
+      if (rateImplied) {
+        uint256 oldRate = lastCenterRate;
+        lastCenterRate = centerRate;
+        emit LastCenterRateUpdated(oldRate, centerRate);
+      }
+      emit Rebalanced(oldTickLower, oldTickUpper, newTickLower, newTickUpper, tokenId);
+      return;
+    }
+
+    uint256 total0;
+    uint256 total1;
+    if (tokenId != 0) {
+      (total0, total1) = V3PositionLib.collectAll(POSITION_MANAGER, tokenId);
+    }
+    total0 += idleToken0;
+    total1 += idleToken1;
+    idleToken0 = 0;
+    idleToken1 = 0;
+
+    if (tokenId != 0) {
+      uint128 liquidity = _getPositionLiquidity();
+      if (liquidity > 0) {
+        V3PositionLib.decreaseLiquidity(POSITION_MANAGER, tokenId, liquidity, minAmount0, minAmount1);
+      }
+      (uint256 removed0, uint256 removed1) = V3PositionLib.collectAll(POSITION_MANAGER, tokenId);
+      total0 += removed0;
+      total1 += removed1;
+      V3PositionLib.burn(POSITION_MANAGER, tokenId);
+      tokenId = 0;
+    }
+
+    (total0, total1) = _convertToOptimalRatio(total0, total1, newTickLower, newTickUpper, centerRate, swapData);
+
+    tickLower = newTickLower;
+    tickUpper = newTickUpper;
+
+    uint128 mintedLiquidity;
+    if (total0 > 0 || total1 > 0) {
+      (uint256 newTokenId, uint128 liquidity, uint256 used0, uint256 used1) = V3PositionLib.mint(
+        POSITION_MANAGER,
+        TOKEN0,
+        TOKEN1,
+        FEE,
+        newTickLower,
+        newTickUpper,
+        total0,
+        total1,
+        0,
+        0
+      );
+      tokenId = newTokenId;
+      mintedLiquidity = liquidity;
+      idleToken0 = total0 - used0;
+      idleToken1 = total1 - used1;
+    } else {
+      idleToken0 = total0;
+      idleToken1 = total1;
+    }
+
+    if (uint256(mintedLiquidity) < minLiquidity) revert InsufficientLiquidityMinted();
+
+    // The minLiquidity floor alone can be satisfied by liquidity minted at a price manipulated around
+    // this call (then sandwiched on the back-swap). Bound the actual pool price after the swap+mint
+    // against the caller-supplied target: if the BOT's target != 0 (and the gate is enabled) the spot
+    // must be within maxSpotDeviationBps of it, so a price that was moved off the BOT's expectation
+    // reverts. target == 0 opts out (e.g. recenter with no price assertion).
+    if (targetSqrtPriceX96 != 0 && maxSpotDeviationBps != 0) {
+      if (!_priceWithinDeviation(spotSqrtPriceX96(), targetSqrtPriceX96, maxSpotDeviationBps))
+        revert SpotDeviationTooHigh();
+    }
+
+    if (rateImplied) {
+      uint256 oldCenterRate = lastCenterRate;
+      lastCenterRate = centerRate;
+      emit LastCenterRateUpdated(oldCenterRate, centerRate);
+    }
+
+    emit Rebalanced(oldTickLower, oldTickUpper, newTickLower, newTickUpper, tokenId);
+  }
+
+  /* ───────────────────────── views (staticcall) ───────────────────── */
+
+  /// @inheritdoc IV3DexAdapter
+  function positionAmountsAt(uint160 sqrtPriceX96) public view returns (uint256 total0, uint256 total1) {
+    if (tokenId == 0) return (idleToken0, idleToken1);
+
+    (
+      ,
+      ,
+      ,
+      ,
+      ,
+      ,
+      ,
+      uint128 liquidity,
+      uint256 feeGrowthInside0Last,
+      uint256 feeGrowthInside1Last,
+      uint128 tokensOwed0,
+      uint128 tokensOwed1
+    ) = POSITION_MANAGER.positions(tokenId);
+
+    (uint256 amount0, uint256 amount1) = LiquidityAmounts.getAmountsForLiquidity(
+      sqrtPriceX96,
+      TickMath.getSqrtRatioAtTick(tickLower),
+      TickMath.getSqrtRatioAtTick(tickUpper),
+      liquidity
+    );
+
+    // `tokensOwed{0,1}` only reflect fees checkpointed at the last NPM poke (mint/increase/decrease/
+    // collect). Fees earned in the pool since then are NOT in tokensOwed, so add the live pending amount
+    // (simulated from feeGrowthInside deltas) — otherwise every valuation built on this view (totalAssets,
+    // oracle peek, health checks, liquidations, slisBNBx) systematically under-values the collateral.
+    (uint256 pending0, uint256 pending1) = _pendingFees(liquidity, feeGrowthInside0Last, feeGrowthInside1Last);
+
+    total0 = amount0 + uint256(tokensOwed0) + pending0 + idleToken0;
+    total1 = amount1 + uint256(tokensOwed1) + pending1 + idleToken1;
+  }
+
+  /// @dev Uncollected fees earned since the position's last checkpoint, mirroring Uniswap V3's
+  ///      Tick.getFeeGrowthInside + Position.update. Uses the pool's CURRENT tick and cumulative fee
+  ///      growth (a pool fact, not spot-price-manipulable for value extraction), so it only ever
+  ///      corrects a stale under-count. All fee-growth arithmetic wraps by design (unchecked), exactly
+  ///      as the reference libraries compiled under Solidity <0.8.
+  function _pendingFees(
+    uint128 liquidity,
+    uint256 feeGrowthInside0Last,
+    uint256 feeGrowthInside1Last
+  ) internal view returns (uint256 pending0, uint256 pending1) {
+    if (liquidity == 0) return (0, 0);
+
+    (, int24 tickCurrent) = IV3PoolMinimal(POOL).slot0();
+    uint256 fgGlobal0 = IV3PoolMinimal(POOL).feeGrowthGlobal0X128();
+    uint256 fgGlobal1 = IV3PoolMinimal(POOL).feeGrowthGlobal1X128();
+    (, , uint256 lowerOutside0, uint256 lowerOutside1) = IV3PoolMinimal(POOL).ticks(tickLower);
+    (, , uint256 upperOutside0, uint256 upperOutside1) = IV3PoolMinimal(POOL).ticks(tickUpper);
+
+    unchecked {
+      uint256 below0;
+      uint256 below1;
+      uint256 above0;
+      uint256 above1;
+      if (tickCurrent >= tickLower) {
+        below0 = lowerOutside0;
+        below1 = lowerOutside1;
+      } else {
+        below0 = fgGlobal0 - lowerOutside0;
+        below1 = fgGlobal1 - lowerOutside1;
+      }
+      if (tickCurrent < tickUpper) {
+        above0 = upperOutside0;
+        above1 = upperOutside1;
+      } else {
+        above0 = fgGlobal0 - upperOutside0;
+        above1 = fgGlobal1 - upperOutside1;
+      }
+      uint256 inside0 = fgGlobal0 - below0 - above0;
+      uint256 inside1 = fgGlobal1 - below1 - above1;
+      pending0 = FullMath.mulDiv(inside0 - feeGrowthInside0Last, liquidity, Q128);
+      pending1 = FullMath.mulDiv(inside1 - feeGrowthInside1Last, liquidity, Q128);
+    }
+  }
+
+  /// @inheritdoc IV3DexAdapter
+  function amountsForLiquidity(
+    uint128 liquidity,
+    uint160 sqrtPriceX96
+  ) external view returns (uint256 amount0, uint256 amount1) {
+    return
+      LiquidityAmounts.getAmountsForLiquidity(
+        sqrtPriceX96,
+        TickMath.getSqrtRatioAtTick(tickLower),
+        TickMath.getSqrtRatioAtTick(tickUpper),
+        liquidity
+      );
+  }
+
+  /// @inheritdoc IV3DexAdapter
+  function totalLiquidity() external view returns (uint128) {
+    return _getPositionLiquidity();
+  }
+
+  /// @inheritdoc IV3DexAdapter
+  /// @dev Rate-implied (manipulation-resistant) when the subclass supplies a non-zero LST↔native
+  ///      rate via _lstNativeRate(); otherwise falls back to the pool TWAP.
+  function fairSqrtPriceX96() public view virtual returns (uint160) {
+    uint256 rate = _lstNativeRate();
+    if (rate == 0) return TickMath.getSqrtRatioAtTick(_twapTick());
+    return _sqrtPriceX96FromRate(rate);
+  }
+
+  /// @inheritdoc IV3DexAdapter
+  function spotSqrtPriceX96() public view returns (uint160 sqrtPriceX96) {
+    // Decode only sqrtPriceX96/tick (width-agnostic to feeProtocol uint8/uint32; see IV3PoolMinimal).
+    (sqrtPriceX96, ) = IV3PoolMinimal(POOL).slot0();
+  }
+
+  /// @inheritdoc IV3DexAdapter
+  function centerRate() external view returns (uint256) {
+    return _lstNativeRate();
+  }
+
+  /// @dev True when the pool spot price is within `maxSpotDeviationBps` (bps of price) of the fair price.
+  ///      Prices are compared in Q96 space (price = sqrtPriceX96^2 / 2^96) via FullMath, overflow-safe.
+  ///      `maxSpotDeviationBps == 0` disables the gate. `fair` is rate-anchored (flash-loan-immune for the
+  ///      LST pairs), so this refuses adding liquidity at a spot a flash-loan skewed away from fair.
+  function _spotWithinFair() internal view returns (bool) {
+    uint256 dev = maxSpotDeviationBps;
+    if (dev == 0) return true;
+    return _priceWithinDeviation(spotSqrtPriceX96(), fairSqrtPriceX96(), dev);
+  }
+
+  /// @dev True iff `aSqrt`'s price is within ±`dev` bps of `bSqrt`'s price (both sqrtPriceX96, Q96).
+  ///      Compared in price space (sqrt²) via overflow-safe mulDiv.
+  function _priceWithinDeviation(uint160 aSqrt, uint160 bSqrt, uint256 dev) internal pure returns (bool) {
+    uint256 priceA = FullMath.mulDiv(uint256(aSqrt), uint256(aSqrt), 1 << 96);
+    uint256 priceB = FullMath.mulDiv(uint256(bSqrt), uint256(bSqrt), 1 << 96);
+    uint256 lo = FullMath.mulDiv(priceB, BPS - dev, BPS);
+    uint256 hi = FullMath.mulDiv(priceB, BPS + dev, BPS);
+    return priceA >= lo && priceA <= hi;
+  }
+
+  /// @inheritdoc IV3DexAdapter
+  function previewAddLiquidity(
+    uint256 amount0Desired,
+    uint256 amount1Desired
+  ) external view returns (uint128 liquidity, uint256 amount0, uint256 amount1) {
+    uint160 sqrtPriceX96 = spotSqrtPriceX96();
+    uint160 sqrtLower = TickMath.getSqrtRatioAtTick(tickLower);
+    uint160 sqrtUpper = TickMath.getSqrtRatioAtTick(tickUpper);
+    liquidity = LiquidityAmounts.getLiquidityForAmounts(
+      sqrtPriceX96,
+      sqrtLower,
+      sqrtUpper,
+      amount0Desired,
+      amount1Desired
+    );
+    (amount0, amount1) = LiquidityAmounts.getAmountsForLiquidity(sqrtPriceX96, sqrtLower, sqrtUpper, liquidity);
+  }
+
+  /// @inheritdoc IV3DexAdapter
+  function previewRemoveLiquidity(
+    uint256 shares,
+    uint256 totalShares
+  ) external view returns (uint256 amount0, uint256 amount1) {
+    if (totalShares == 0 || shares == 0) return (0, 0);
+    // Pro-rata of the spot composition incl. pending fees + idle — matches removeLiquidity's actual
+    // (spot-priced) delivery, which the old formula understated by the uncollected fees. Spot (not fair)
+    // so the preview tracks the real burn; callers size minAmount from it.
+    (uint256 total0, uint256 total1) = positionAmountsAt(spotSqrtPriceX96());
+    amount0 = (total0 * shares) / totalShares;
+    amount1 = (total1 * shares) / totalShares;
+  }
+
+  /// @notice TWAP tick over TWAP_PERIOD seconds.
+  function getTwapTick() external view returns (int24) {
+    return _twapTick();
+  }
+
+  /* ─────────────────────────── internals ──────────────────────────── */
+
+  function _collectAndCompound(uint256 amount0Min, uint256 amount1Min) internal {
+    if (tokenId == 0) return;
+
+    (uint256 fees0, uint256 fees1) = V3PositionLib.collectAll(POSITION_MANAGER, tokenId);
+
+    uint256 toCompound0 = fees0 + idleToken0;
+    uint256 toCompound1 = fees1 + idleToken1;
+    if (toCompound0 == 0 && toCompound1 == 0) return;
+
+    // Defense-in-depth: the caller (BOT-gated compound / rebalance) supplies amount0Min/amount1Min as
+    // the primary slippage guard, but also never add liquidity at a manipulated pool spot. fair is
+    // rate-anchored, so if spot deviates from it we SKIP the re-add (hold as idle for a later compound
+    // when spot ~= fair) rather than deploy at a bad ratio.
+    if (!_spotWithinFair()) {
+      idleToken0 = toCompound0;
+      idleToken1 = toCompound1;
+      emit CompoundSkippedSpotDeviated(spotSqrtPriceX96(), fairSqrtPriceX96());
+      return;
+    }
+
+    // One-sided inventory yields zero addable liquidity, which would revert inside pool.mint
+    // (require(amount > 0)). Park it as idle instead; a later compound or rebalance deploys it.
+    // Compound only — the rebalance re-mint has no such guard, so an empty-swapData recenter on
+    // one-sided inventory reverts bare out of pool.mint; pass swapData or a non-zero minLiquidity.
+    uint128 addable = LiquidityAmounts.getLiquidityForAmounts(
+      spotSqrtPriceX96(),
+      TickMath.getSqrtRatioAtTick(tickLower),
+      TickMath.getSqrtRatioAtTick(tickUpper),
+      toCompound0,
+      toCompound1
+    );
+    if (addable == 0) {
+      idleToken0 = toCompound0;
+      idleToken1 = toCompound1;
+      emit CompoundSkippedNoLiquidity(toCompound0, toCompound1);
+      return;
+    }
+
+    (uint128 liquidityAdded, uint256 used0, uint256 used1) = V3PositionLib.increaseLiquidity(
+      POSITION_MANAGER,
+      TOKEN0,
+      TOKEN1,
+      tokenId,
+      toCompound0,
+      toCompound1,
+      amount0Min,
+      amount1Min
+    );
+
+    idleToken0 = toCompound0 - used0;
+    idleToken1 = toCompound1 - used1;
+
+    // Emit the amounts actually consumed by increaseLiquidity, not the raw inputs — the leftover
+    // (toCompound - used) is held as idle, so the raw figures would overstate what was compounded.
+    emit Compounded(used0, used1, liquidityAdded);
+  }
+
+  function _getPositionLiquidity() internal view returns (uint128 liquidity) {
+    if (tokenId == 0) return 0;
+    (, , , , , , , liquidity, , , , ) = POSITION_MANAGER.positions(tokenId);
+  }
+
+  function _twapTick() internal view returns (int24 twapTick) {
+    uint32[] memory secondsAgos = new uint32[](2);
+    secondsAgos[0] = TWAP_PERIOD;
+    secondsAgos[1] = 0;
+    (int56[] memory tickCumulatives, ) = IListaV3Pool(POOL).observe(secondsAgos);
+    // Match Uniswap's OracleLibrary.consult: the cumulative-tick subtraction is expected to wrap (the
+    // reference compiled under Solidity <0.8 with implicit wrap-around), so compute the TWAP tick in an
+    // unchecked block — otherwise a wrapped int56 delta would spuriously revert under 0.8 checked math.
+    unchecked {
+      int56 delta = tickCumulatives[1] - tickCumulatives[0];
+      twapTick = int24(delta / int56(uint56(TWAP_PERIOD)));
+      if (delta < 0 && (delta % int56(uint56(TWAP_PERIOD)) != 0)) twapTick--;
+    }
+  }
+
+  /// @dev Send `token` to `to`, unwrapping the wrapped-native token to native coin.
+  function _sendToken(address token, uint256 amount, address payable to) internal {
+    if (token == WRAPPED_NATIVE) {
+      IWBNB(WRAPPED_NATIVE).withdraw(amount);
+      (bool ok, ) = to.call{ value: amount }("");
+      if (!ok) revert BnbTransferFailed();
+    } else {
+      IERC20(token).safeTransfer(to, amount);
+    }
+  }
+
+  /// @dev Accepts native coin from the wrapped-native unwrap, or from a whitelisted swap venue that
+  ///      settles the wrapped-native leg as the native coin (e.g. a StakeManager instant-redeem). The
+  ///      rebalance swap wraps that native back into the wrapped-native token (see {SwapInventoryLib}).
+  receive() external payable virtual {
+    if (msg.sender != WRAPPED_NATIVE && !swapPairWhitelist[msg.sender]) revert NotWrappedNative();
+  }
+
+  /* ─────────────────── rate-centering math (shared) ────────────────── */
+
+  /// @dev Tick range for the position. Rate-implied (centerRate != 0): ±INITIAL_RANGE_BPS around the
+  ///      rate-derived price. Pure-TWAP (centerRate == 0): ±FALLBACK_HALF_RANGE_TICKS around spot.
+  function _initialTickRange(
+    uint256 centerRate
+  ) internal view returns (int24 initialTickLower, int24 initialTickUpper) {
+    int24 tickSpacing = IListaV3Pool(POOL).tickSpacing();
+
+    if (centerRate != 0) {
+      (initialTickLower, initialTickUpper) = _tickRangeForRate(centerRate, tickSpacing);
+    } else {
+      (, int24 currentTick) = IV3PoolMinimal(POOL).slot0();
+      initialTickLower = _floorTick(currentTick - FALLBACK_HALF_RANGE_TICKS, tickSpacing);
+      initialTickUpper = _ceilTick(currentTick + FALLBACK_HALF_RANGE_TICKS, tickSpacing);
+    }
+
+    // _floorTick / _ceilTick can push an aligned tick just past the usable range (and TickMath /
+    // pool.mint would then revert). Clamp both bounds back into [MIN_TICK, MAX_TICK].
+    int24 minUsable = _ceilTick(TickMath.MIN_TICK, tickSpacing);
+    int24 maxUsable = _floorTick(TickMath.MAX_TICK, tickSpacing);
+    if (initialTickLower < minUsable) initialTickLower = minUsable;
+    if (initialTickUpper > maxUsable) initialTickUpper = maxUsable;
+
+    if (initialTickLower >= initialTickUpper) {
+      initialTickLower = maxUsable - tickSpacing;
+      initialTickUpper = maxUsable;
+    }
+  }
+
+  function _tickRangeForRate(
+    uint256 centerRate,
+    int24 tickSpacing
+  ) internal view returns (int24 initialTickLower, int24 initialTickUpper) {
+    uint256 lowerRate = (centerRate * (BPS - INITIAL_RANGE_BPS)) / BPS;
+    uint256 upperRate = (centerRate * (BPS + INITIAL_RANGE_BPS)) / BPS;
+    initialTickLower = _floorTick(_tickAtSqrtRatio(_sqrtPriceX96FromRate(lowerRate)), tickSpacing);
+    initialTickUpper = _ceilTick(_tickAtSqrtRatio(_sqrtPriceX96FromRate(upperRate)), tickSpacing);
+  }
+
+  function _requireCenterRateDeviation(uint256 centerRate) internal view {
+    uint256 thresholdBps = centerRateThresholdBps;
+    uint256 previousCenterRate = lastCenterRate;
+    if (thresholdBps == 0 || previousCenterRate == 0) return;
+    uint256 delta = centerRate > previousCenterRate ? centerRate - previousCenterRate : previousCenterRate - centerRate;
+    if ((delta * BPS) / previousCenterRate < thresholdBps) revert RateDeviationBelowThreshold();
+  }
+
+  /// @dev Convert an exchange `rate` — token1-per-token0 scaled by 1e18 (1e18 ⇒ 1 WHOLE token0 is worth
+  ///      1 WHOLE token1; subclasses return it in these human/whole-token terms) — into the pool
+  ///      sqrtPriceX96, which encodes the RAW (smallest-unit) price token1/token0. The two tokens may have
+  ///      different decimals (the wrapped-native is 18; the paired token need not be), so adjust by the
+  ///      decimal difference:  token1_raw/token0_raw = (rate / 1e18) · 10^(DECIMALS1 − DECIMALS0).
+  function _sqrtPriceX96FromRate(uint256 rate) internal view returns (uint160) {
+    uint256 priceX192; // (token1_raw / token0_raw) · 2^192
+    if (DECIMALS1 >= DECIMALS0) {
+      priceX192 = FullMath.mulDiv(rate * (uint256(10) ** (DECIMALS1 - DECIMALS0)), 1 << 192, 1e18);
+    } else {
+      priceX192 = FullMath.mulDiv(rate, 1 << 192, 1e18 * (uint256(10) ** (DECIMALS0 - DECIMALS1)));
+    }
+    return uint160(Math.sqrt(priceX192));
+  }
+
+  function _tickAtSqrtRatio(uint160 sqrtPriceX96) internal pure returns (int24) {
+    int24 low = TickMath.MIN_TICK;
+    int24 high = TickMath.MAX_TICK;
+    while (low < high) {
+      int24 mid = int24((int256(low) + int256(high) + 1) / 2);
+      if (TickMath.getSqrtRatioAtTick(mid) <= sqrtPriceX96) {
+        low = mid;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return low;
+  }
+
+  function _floorTick(int24 tick, int24 tickSpacing) internal pure returns (int24) {
+    int24 compressed = tick / tickSpacing;
+    if (tick < 0 && tick % tickSpacing != 0) compressed--;
+    return compressed * tickSpacing;
+  }
+
+  function _ceilTick(int24 tick, int24 tickSpacing) internal pure returns (int24) {
+    int24 compressed = tick / tickSpacing;
+    if (tick > 0 && tick % tickSpacing != 0) compressed++;
+    return compressed * tickSpacing;
+  }
+
+  /* ────────────────────────── extension hooks ─────────────────────── */
+
+  /// @dev LST↔native exchange rate (native per LST, 1e18). 0 ⇒ no rate (pure-TWAP pair): the base
+  ///      uses pool TWAP for the fair price and a spot-centered range. Rate-implied subclasses
+  ///      (slisBNB via StakeManager, wstETH via stEthPerToken) override this.
+  function _lstNativeRate() internal view virtual returns (uint256) {
+    return 0;
+  }
+
+  /// @dev DEX-agnostic, backend-built rebalance inventory conversion, shared by all rate-implied pairs
+  ///      (slisBNB/WBNB, wstETH/WETH, wbETH/WETH). `swapData` (when non-empty) ABI-encodes
+  ///      (address swapPair, bool sellToken0, uint256 amountIn, uint256 amountOutMin, bool nativeIn,
+  ///      bytes innerSwapData): the adapter requires `swapPair` whitelisted and forwards `innerSwapData`
+  ///      via a low-level call, bounding the swap by the backend's `amountOutMin` (see {SwapInventoryLib}).
+  ///      `nativeIn` ⇒ a native-input venue (the wrapped-native leg is unwrapped + sent as msg.value, e.g.
+  ///      StakeManager.deposit). Empty swapData ⇒ recenter without converting (also the TWAP-pair default).
+  function _convertToOptimalRatio(
+    uint256 total0,
+    uint256 total1,
+    int24 /* targetTickLower */,
+    int24 /* targetTickUpper */,
+    uint256 rate,
+    bytes calldata swapData
+  ) internal virtual returns (uint256, uint256) {
+    if (swapData.length == 0) return (total0, total1);
+    (address swapPair, bool sellToken0, uint256 amountIn, uint256 amountOutMin, bool nativeIn, bytes memory inner) = abi
+      .decode(swapData, (address, bool, uint256, uint256, bool, bytes));
+    if (!swapPairWhitelist[swapPair]) revert NotWhitelistedPair();
+    (uint256 newTotal0, uint256 newTotal1) = SwapInventoryLib.swap(
+      swapPair,
+      TOKEN0,
+      TOKEN1,
+      sellToken0,
+      amountIn,
+      amountOutMin,
+      inner,
+      total0,
+      total1,
+      WRAPPED_NATIVE,
+      nativeIn
+    );
+    // Bound the swap's execution loss against the LST↔native rate (not pool spot, not the BOT's
+    // amountOutMin), so a compromised BOT cannot realize more than `maxSwapLossBp` on the converted leg.
+    // NB: any subclass overriding this hook MUST preserve an equivalent guard.
+    _requireSwapLossWithinCap(sellToken0, total0, total1, newTotal0, newTotal1, rate);
+    return (newTotal0, newTotal1);
+  }
+
+  /// @dev Rate-anchored per-swap loss guard. `rate` is token1-per-token0 in whole-token terms (1e18);
+  ///      skipped when `rate == 0` (pure-TWAP pair, no rate reference) or nothing was swapped.
+  function _requireSwapLossWithinCap(
+    bool sellToken0,
+    uint256 total0,
+    uint256 total1,
+    uint256 newTotal0,
+    uint256 newTotal1,
+    uint256 rate
+  ) internal view {
+    if (rate == 0) return;
+    uint256 spent;
+    uint256 received;
+    uint256 fairOut;
+    if (sellToken0) {
+      spent = total0 - newTotal0;
+      received = newTotal1 - total1;
+      if (spent == 0) return;
+      fairOut = _fairAmount1ForAmount0(spent, rate);
+    } else {
+      spent = total1 - newTotal1;
+      received = newTotal0 - total0;
+      if (spent == 0) return;
+      fairOut = _fairAmount0ForAmount1(spent, rate);
+    }
+    if (received * LOSS_DENOM < fairOut * (LOSS_DENOM - maxSwapLossBp)) revert SwapLossTooHigh();
+  }
+
+  /// @dev Fair raw TOKEN1 obtainable for `amount0` raw TOKEN0 at `rate`, decimal-adjusted.
+  function _fairAmount1ForAmount0(uint256 amount0, uint256 rate) internal view returns (uint256) {
+    if (DECIMALS1 >= DECIMALS0) {
+      return FullMath.mulDiv(amount0, rate * (uint256(10) ** (DECIMALS1 - DECIMALS0)), 1e18);
+    }
+    return FullMath.mulDiv(amount0, rate, 1e18 * (uint256(10) ** (DECIMALS0 - DECIMALS1)));
+  }
+
+  /// @dev Fair raw TOKEN0 obtainable for `amount1` raw TOKEN1 at `rate`, decimal-adjusted.
+  function _fairAmount0ForAmount1(uint256 amount1, uint256 rate) internal view returns (uint256) {
+    if (DECIMALS0 >= DECIMALS1) {
+      return FullMath.mulDiv(amount1, uint256(1e18) * (uint256(10) ** (DECIMALS0 - DECIMALS1)), rate);
+    }
+    return FullMath.mulDiv(amount1, 1e18, rate * (uint256(10) ** (DECIMALS1 - DECIMALS0)));
+  }
+
+  function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+}

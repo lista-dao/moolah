@@ -1,0 +1,1093 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.34;
+
+import "forge-std/Test.sol";
+import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+import { SlisBNBV3Provider } from "../../src/provider/v3/SlisBNBV3Provider.sol";
+import { SlisBNBV3DexAdapter } from "../../src/provider/v3/SlisBNBV3DexAdapter.sol";
+import { SlisBNBV3ProviderOracle } from "../../src/provider/v3/SlisBNBV3ProviderOracle.sol";
+import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
+import { V3Liquidator } from "../../src/liquidator/V3Liquidator.sol";
+import { LiquidationVault } from "../../src/liquidator/LiquidationVault.sol";
+import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
+import { Moolah } from "../../src/moolah/Moolah.sol";
+import { IMoolah, MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
+import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
+import { IOracle, TokenConfig } from "moolah/interfaces/IOracle.sol";
+import { IStakeManager } from "../../src/provider/interfaces/IStakeManager.sol";
+
+import { MockOneInch } from "./mocks/MockOneInch.sol";
+
+/// @dev Minimal resilient-oracle mock: 8-decimal USD prices, settable per token.
+contract MockOracle is IOracle {
+  mapping(address => uint256) public price;
+
+  function setPrice(address token, uint256 value) external {
+    price[token] = value;
+  }
+
+  function peek(address token) external view returns (uint256) {
+    return price[token];
+  }
+
+  function getTokenConfig(address) external pure returns (TokenConfig memory c) {
+    return c;
+  }
+}
+
+/// @dev Strict 1inch-like mock: a native swap requires msg.value == amountIn EXACTLY (no >=, no refund),
+///      matching real aggregators. Used to prove the native leg sends the encoded (min) amount, not the
+///      variable actual redeemed amount (which would mismatch and revert the whole liquidation).
+contract MockOneInchStrict is Test {
+  address constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+
+  function swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin) external payable {
+    if (tokenIn == BNB_ADDRESS) {
+      require(msg.value == amountIn, "MSG_VALUE_NEQ_AMOUNTIN");
+    } else {
+      require(msg.value == 0, "MSG_VALUE_MUST_BE_0");
+      IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
+    }
+    if (tokenOut == BNB_ADDRESS) {
+      deal(address(this), amountOutMin);
+      (bool s, ) = msg.sender.call{ value: amountOutMin }("");
+      require(s, "BNB_TRANSFER_FAILED");
+    } else {
+      deal(tokenOut, address(this), amountOutMin);
+      IERC20(tokenOut).transfer(msg.sender, amountOutMin);
+    }
+  }
+}
+
+/// @dev Native swap venue that consumes only part of the forwarded value and refunds the rest, so the
+///      measured input differs from the requested amountIn.
+contract MockRefundingNativeSwap is Test {
+  function swap(address tokenOut, uint256 consume, uint256 amountOut) external payable {
+    require(msg.value >= consume, "VALUE_LT_CONSUME");
+    deal(tokenOut, address(this), amountOut);
+    IERC20(tokenOut).transfer(msg.sender, amountOut);
+    if (msg.value > consume) {
+      (bool s, ) = msg.sender.call{ value: msg.value - consume }("");
+      require(s, "REFUND_FAILED");
+    }
+  }
+}
+
+contract V3LiquidatorTest is Test {
+  using MarketParamsLib for MarketParams;
+
+  /* ─────────────────── PancakeSwap V3 BSC mainnet ─────────────────── */
+  address constant POOL = 0xe1B404Aaf60eEc5c8A1FEDE7dcDC0EAb9C69662F; // SLISBNB/WBNB
+  address constant NPM = 0x46A15B0b27311cedF172AB29E4f4766fbE7F4364;
+  uint24 constant FEE = 100;
+
+  /* ───────────────────────────── tokens ───────────────────────────── */
+  address constant SLISBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B; // token0
+  address constant WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c; // token1
+  address constant LISUSD = 0x0782b6d8c4551B9760e74c0545a9bCD90bdc41E5;
+  address constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+
+  /* ──────────────────────── Moolah ecosystem ──────────────────────── */
+  address constant MOOLAH_PROXY = 0x8F73b65B4caAf64FBA2aF91cC5D4a2A1318E5D8C;
+  address constant TIMELOCK = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253;
+  address constant OPERATOR = 0xd7e38800201D6a42C408Bf79d8723740C4E7f631;
+  address constant MANAGER_ADDR = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
+  address constant STAKE_MANAGER = 0x1adB950d8bB3dA4bE104211D5AB038628e477fE6;
+  address constant IRM = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
+
+  uint32 constant TWAP_PERIOD = 1800;
+  uint256 constant LLTV = 70 * 1e16;
+  uint256 constant BNB_USD = 600e8; // 8-dec mock BNB/USD
+
+  /* ───────────────────────── test contracts ───────────────────────── */
+  Moolah moolah;
+  SlisBNBV3DexAdapter adapter;
+  SlisBNBV3Provider provider;
+  SlisBNBV3ProviderOracle providerOracle;
+  V3Liquidator liquidator;
+  MockOneInch mockSwap;
+  MockOracle oracle;
+  MarketParams marketParams;
+  Id marketId;
+
+  /* ───────────────────────── test accounts ────────────────────────── */
+  address admin = makeAddr("admin");
+  address manager = makeAddr("manager");
+  address bot = makeAddr("bot");
+  address user = makeAddr("user");
+
+  /* ────────────────────────────── setUp ───────────────────────────── */
+
+  function setUp() public {
+    vm.createSelectFork(vm.envString("BSC_RPC"), 60541406);
+
+    // Upgrade Moolah to the latest local implementation.
+    address newImpl = address(new Moolah());
+    vm.prank(TIMELOCK);
+    UUPSUpgradeable(MOOLAH_PROXY).upgradeToAndCall(newImpl, bytes(""));
+    moolah = Moolah(MOOLAH_PROXY);
+
+    // Resilient-oracle mock: WBNB = BNB price; slisBNB = BNB price × StakeManager rate; lisUSD ≈ $1.
+    oracle = new MockOracle();
+    uint256 rate = IStakeManager(STAKE_MANAGER).convertSnBnbToBnb(1e18);
+    oracle.setPrice(WBNB, BNB_USD);
+    oracle.setPrice(BNB_ADDRESS, BNB_USD);
+    oracle.setPrice(SLISBNB, (BNB_USD * rate) / 1e18);
+    oracle.setPrice(LISUSD, 1e8);
+
+    // Deploy the heavy 3-contract topology EARLY (adapter → provider → oracle) to avoid
+    // forge setUp gas-forwarding issues with large code deposits.
+
+    // 1) DEX adapter: sole NFT custodian + all NPM/pool writes.
+    SlisBNBV3DexAdapter adapterImpl = new SlisBNBV3DexAdapter(NPM, SLISBNB, WBNB, FEE, TWAP_PERIOD);
+    adapter = SlisBNBV3DexAdapter(
+      payable(new ERC1967Proxy(address(adapterImpl), abi.encodeCall(SlisBNBV3DexAdapter.initialize, (admin, manager))))
+    );
+
+    // 2) Provider / vault: ERC-4626 shares = Moolah collateral. accountingAsset = WBNB.
+    SlisBNBV3Provider implP = new SlisBNBV3Provider(MOOLAH_PROXY, address(adapter));
+    provider = SlisBNBV3Provider(
+      payable(
+        new ERC1967Proxy(
+          address(implP),
+          abi.encodeCall(
+            SlisBNBV3Provider.initialize,
+            (admin, manager, bot, address(oracle), WBNB, "V3LP SLISBNB/WBNB", "v3LP")
+          )
+        )
+      )
+    );
+
+    // 3) Wire the adapter to the vault (one-time, admin).
+    vm.prank(admin);
+    adapter.setProvider(address(provider));
+
+    // 4) Oracle: Moolah market.oracle; prices the share off the adapter's fair view.
+    SlisBNBV3ProviderOracle oracleImpl = new SlisBNBV3ProviderOracle(
+      address(adapter),
+      address(provider),
+      SLISBNB,
+      WBNB
+    );
+    providerOracle = SlisBNBV3ProviderOracle(
+      payable(
+        new ERC1967Proxy(
+          address(oracleImpl),
+          abi.encodeCall(V3ProviderOracle.initialize, (admin, manager, address(oracle), uint256(0)))
+        )
+      )
+    );
+
+    // Deploy V3Liquidator.
+    V3Liquidator implL = new V3Liquidator(MOOLAH_PROXY);
+    liquidator = V3Liquidator(
+      payable(
+        new ERC1967Proxy(address(implL), abi.encodeCall(V3Liquidator.initialize, (admin, manager, bot, address(0))))
+      )
+    );
+
+    mockSwap = new MockOneInch();
+
+    // Build Moolah market: collateral = provider shares, oracle = providerOracle.
+    marketParams = MarketParams({
+      loanToken: LISUSD,
+      collateralToken: address(provider),
+      oracle: address(providerOracle),
+      irm: IRM,
+      lltv: LLTV
+    });
+    marketId = marketParams.id();
+
+    vm.prank(OPERATOR);
+    moolah.createMarket(marketParams);
+
+    vm.prank(MANAGER_ADDR);
+    moolah.setProvider(marketId, address(provider), true);
+
+    // Seed lisUSD liquidity so borrows can succeed.
+    deal(LISUSD, address(this), 1_000_000 ether);
+    IERC20(LISUSD).approve(MOOLAH_PROXY, 1_000_000 ether);
+    moolah.supply(marketParams, 1_000_000 ether, 0, address(this), "");
+
+    // Configure liquidator whitelists.
+    vm.startPrank(manager);
+    liquidator.setTokenWhitelist(SLISBNB, true);
+    liquidator.setTokenWhitelist(LISUSD, true);
+    liquidator.setTokenWhitelist(BNB_ADDRESS, true);
+    liquidator.setMarketWhitelist(Id.unwrap(marketId), true);
+    liquidator.setPairWhitelist(address(mockSwap), true);
+    liquidator.setV3ProviderWhitelist(address(provider), true);
+    vm.stopPrank();
+  }
+
+  /* ──────────────────────── helper fns ───────────────────────────── */
+
+  function _deposit(
+    address _user,
+    uint256 amount0,
+    uint256 amount1
+  ) internal returns (uint256 shares, uint256 used0, uint256 used1) {
+    deal(SLISBNB, _user, amount0);
+    deal(WBNB, _user, amount1);
+    (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(amount0, amount1);
+    vm.startPrank(_user);
+    IERC20(SLISBNB).approve(address(provider), amount0);
+    IERC20(WBNB).approve(address(provider), amount1);
+    (shares, used0, used1) = provider.deposit(
+      marketParams,
+      amount0,
+      amount1,
+      (exp0 * 999) / 1000,
+      (exp1 * 999) / 1000,
+      0,
+      _user
+    );
+    vm.stopPrank();
+  }
+
+  function _collateral(address _user) internal view returns (uint256) {
+    (, , uint256 col) = moolah.position(marketId, _user);
+    return col;
+  }
+
+  /// @dev Borrow 60% of user's collateral value — healthy, but mocking oracle to 0 makes it unhealthy.
+  function _borrowAgainstCollateral(address _user) internal returns (uint256 borrowed) {
+    (, , uint128 col) = moolah.position(marketId, _user);
+    uint256 sharePrice = providerOracle.peek(address(provider));
+    uint256 loanPrice = providerOracle.peek(LISUSD);
+    borrowed = (uint256(col) * sharePrice * 60) / (loanPrice * 100);
+    vm.prank(_user);
+    moolah.borrow(marketParams, borrowed, 0, _user, _user);
+  }
+
+  /// @dev Mock collateral oracle to zero, making any indebted position liquidatable.
+  function _makeUnhealthy() internal {
+    vm.mockCall(
+      address(providerOracle),
+      abi.encodeWithSelector(IOracle.peek.selector, address(provider)),
+      abi.encode(uint256(0))
+    );
+  }
+
+  /// @dev Mock collateral oracle to `bps`/10000 of its real price — unhealthy (borrowed at 60% LTV vs a
+  ///      70% LLTV survives only down to ~86% of original price) but, unlike `_makeUnhealthy` (price=0),
+  ///      leaves `seizedAssetsQuoted` (and thus `repaidAssets`) genuinely positive so tests can exercise
+  ///      the NoProfit profitability check on a real repayment amount instead of a trivial ~0 one.
+  function _makeUnhealthyPartial(uint256 bps) internal {
+    uint256 originalPrice = providerOracle.peek(address(provider));
+    vm.mockCall(
+      address(providerOracle),
+      abi.encodeWithSelector(IOracle.peek.selector, address(provider)),
+      abi.encode((originalPrice * bps) / 10_000)
+    );
+  }
+
+  /* ─────────────────── whitelist management ───────────────────────── */
+
+  function test_setTokenWhitelist_togglesAndReverts() public {
+    vm.prank(manager);
+    liquidator.setTokenWhitelist(WBNB, true);
+    assertTrue(liquidator.tokenWhitelist(WBNB));
+
+    vm.prank(manager);
+    vm.expectRevert(V3Liquidator.WhitelistSameStatus.selector);
+    liquidator.setTokenWhitelist(WBNB, true);
+
+    vm.prank(user);
+    vm.expectRevert();
+    liquidator.setTokenWhitelist(WBNB, false);
+  }
+
+  function test_setMarketWhitelist_toggles() public {
+    bytes32 id = Id.unwrap(marketId);
+
+    vm.prank(manager);
+    liquidator.setMarketWhitelist(id, false);
+    assertFalse(liquidator.marketWhitelist(id));
+
+    vm.prank(manager);
+    liquidator.setMarketWhitelist(id, true);
+    assertTrue(liquidator.marketWhitelist(id));
+  }
+
+  function test_batchSetMarketWhitelist_updatesAll() public {
+    bytes32[] memory ids = new bytes32[](1);
+    ids[0] = Id.unwrap(marketId);
+
+    vm.prank(manager);
+    liquidator.batchSetMarketWhitelist(ids, false);
+    assertFalse(liquidator.marketWhitelist(ids[0]));
+
+    vm.prank(manager);
+    liquidator.batchSetMarketWhitelist(ids, true);
+    assertTrue(liquidator.marketWhitelist(ids[0]));
+  }
+
+  function test_setPairWhitelist_togglesAndReverts() public {
+    address pair = makeAddr("pair");
+
+    vm.prank(manager);
+    liquidator.setPairWhitelist(pair, true);
+    assertTrue(liquidator.pairWhitelist(pair));
+
+    vm.prank(manager);
+    vm.expectRevert(V3Liquidator.WhitelistSameStatus.selector);
+    liquidator.setPairWhitelist(pair, true);
+  }
+
+  function test_setV3ProviderWhitelist_togglesAndReverts() public {
+    address prov = makeAddr("prov");
+
+    vm.prank(manager);
+    liquidator.setV3ProviderWhitelist(prov, true);
+    assertTrue(liquidator.v3Providers(prov));
+
+    vm.prank(manager);
+    vm.expectRevert(V3Liquidator.WhitelistSameStatus.selector);
+    liquidator.setV3ProviderWhitelist(prov, true);
+  }
+
+  function test_batchSetV3Providers_updatesAll() public {
+    address prov1 = makeAddr("prov1");
+    address prov2 = makeAddr("prov2");
+    address[] memory provs = new address[](2);
+    provs[0] = prov1;
+    provs[1] = prov2;
+
+    vm.prank(manager);
+    liquidator.batchSetV3Providers(provs, true);
+    assertTrue(liquidator.v3Providers(prov1));
+    assertTrue(liquidator.v3Providers(prov2));
+  }
+
+  /* ─────────────────── access control ─────────────────────────────── */
+
+  function test_liquidate_revertsIfNotBot() public {
+    vm.prank(user);
+    vm.expectRevert();
+    liquidator.liquidate(Id.unwrap(marketId), user, 1, 0);
+  }
+
+  function test_flashLiquidate_revertsIfNotBot() public {
+    V3Liquidator.FlashLiquidateParams memory params;
+    params.v3Provider = address(provider);
+
+    vm.prank(user);
+    vm.expectRevert();
+    liquidator.flashLiquidate(Id.unwrap(marketId), user, 1, params);
+  }
+
+  function test_redeemV3Shares_revertsIfNotBot() public {
+    vm.prank(user);
+    vm.expectRevert();
+    liquidator.redeemV3Shares(address(provider), 1, 0, 0, user);
+  }
+
+  function test_sellToken_revertsIfNotBot() public {
+    vm.prank(user);
+    vm.expectRevert();
+    liquidator.sellToken(address(mockSwap), SLISBNB, LISUSD, 1, 0, "");
+  }
+
+  /* ─────────────────── liquidate (pre-funded) ─────────────────────── */
+
+  function test_liquidate_prefunded_receivesShares() public {
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    _borrowAgainstCollateral(user);
+    _makeUnhealthy();
+
+    deal(LISUSD, address(liquidator), 1_000 ether);
+
+    vm.prank(bot);
+    liquidator.liquidate(Id.unwrap(marketId), user, shares, 0);
+
+    assertGt(provider.balanceOf(address(liquidator)), 0, "liquidator received shares");
+    assertEq(_collateral(user), 0, "borrower collateral seized");
+    assertEq(IERC20(LISUSD).allowance(address(liquidator), MOOLAH_PROXY), 0, "loanToken allowance cleared");
+  }
+
+  function test_liquidate_revertsIfMarketNotWhitelisted() public {
+    vm.prank(manager);
+    liquidator.setMarketWhitelist(Id.unwrap(marketId), false);
+
+    vm.prank(bot);
+    vm.expectRevert(V3Liquidator.NotWhitelisted.selector);
+    liquidator.liquidate(Id.unwrap(marketId), user, 1, 0);
+  }
+
+  /* ─────────────────── flashLiquidate ─────────────────────────────── */
+
+  function test_flashLiquidate_holdShares_noRedeem() public {
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    uint256 borrowed = _borrowAgainstCollateral(user);
+    _makeUnhealthy();
+
+    // Pre-fund with enough lisUSD: onMoolahLiquidate approves Moolah even when not redeeming.
+    deal(LISUSD, address(liquidator), borrowed * 2);
+
+    V3Liquidator.FlashLiquidateParams memory params = V3Liquidator.FlashLiquidateParams({
+      v3Provider: address(provider),
+      minToken0Amt: 0,
+      minToken1Amt: 0,
+      redeemShares: false,
+      token0Pair: address(0),
+      token0Spender: address(0),
+      token1Pair: address(0),
+      token1Spender: address(0),
+      swapToken0Data: "",
+      swapToken1Data: ""
+    });
+
+    vm.prank(bot);
+    liquidator.flashLiquidate(Id.unwrap(marketId), user, shares, params);
+
+    assertGt(provider.balanceOf(address(liquidator)), 0, "liquidator holds seized shares");
+    assertEq(_collateral(user), 0, "borrower collateral cleared");
+  }
+
+  function test_flashLiquidate_redeemAndSwap_coveredBySwapProfit() public {
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    uint256 borrowed = _borrowAgainstCollateral(user);
+    _makeUnhealthy();
+
+    // token0 (SLISBNB) swap: amountIn=0 so mock accepts any approval; produces borrowed*2 lisUSD.
+    // This ensures the NoProfit check passes without knowing the exact repaidAssets upfront.
+    bytes memory swap0Data = abi.encodeWithSelector(
+      mockSwap.swap.selector,
+      SLISBNB, // tokenIn
+      LISUSD, // tokenOut
+      uint256(0), // amountIn (mock pulls nothing; residual SLISBNB stays in liquidator)
+      borrowed * 2 // amountOutMin — enough to cover repayment
+    );
+
+    // token1 (WBNB) swap: SlisBNBV3Provider unwraps WBNB → native BNB, V3Liquidator sends it via call{value}.
+    // amountIn=0 so msg.value >= 0 always passes; MockOneInch refunds BNB to liquidator, gives 0 lisUSD.
+    bytes memory swap1Data = abi.encodeWithSelector(
+      mockSwap.swap.selector,
+      BNB_ADDRESS, // tokenIn (native BNB path)
+      LISUSD,
+      uint256(0), // amountIn
+      uint256(0) // no extra lisUSD needed from this leg
+    );
+
+    V3Liquidator.FlashLiquidateParams memory params = V3Liquidator.FlashLiquidateParams({
+      v3Provider: address(provider),
+      minToken0Amt: 0,
+      minToken1Amt: 0,
+      redeemShares: true,
+      token0Pair: address(mockSwap),
+      token0Spender: address(0),
+      token1Pair: address(mockSwap),
+      token1Spender: address(0),
+      swapToken0Data: swap0Data,
+      swapToken1Data: swap1Data
+    });
+
+    vm.prank(bot);
+    liquidator.flashLiquidate(Id.unwrap(marketId), user, shares, params);
+
+    assertEq(provider.balanceOf(address(liquidator)), 0, "shares redeemed in callback");
+    assertEq(_collateral(user), 0, "borrower collateral seized");
+    // Excess lisUSD (borrowed*2 - repaidAssets ≈ borrowed) remains in liquidator.
+    assertGt(IERC20(LISUSD).balanceOf(address(liquidator)), 0, "excess lisUSD in liquidator");
+  }
+
+  /// @dev The native (BNB) leg must send msg.value == the encoded (min) amount the bot's swapData was
+  ///      built for — NOT the variable actual redeemed amount. Against a strict aggregator (real 1inch,
+  ///      msg.value == amountIn exactly) sending the actual amount reverts and fails the whole flash
+  ///      liquidation. Uses a strict mock: passes with the fix, reverts without it.
+  function test_flashLiquidate_nativeLeg_sendsEncodedMinAmount() public {
+    MockOneInchStrict strictSwap = new MockOneInchStrict();
+    vm.prank(manager);
+    liquidator.setPairWhitelist(address(strictSwap), true);
+
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    uint256 borrowed = _borrowAgainstCollateral(user);
+    _makeUnhealthy();
+
+    // Bot commits the native swapData to this exact input; the actual redeemed BNB is far larger, so
+    // sending the actual amount (pre-fix) would make msg.value != amountIn and the strict mock revert.
+    uint256 minBnb = 0.01 ether;
+
+    // token0 (SLISBNB, ERC20) → covers repayment; strict mock requires msg.value == 0 for ERC20.
+    bytes memory swap0 = abi.encodeWithSelector(strictSwap.swap.selector, SLISBNB, LISUSD, uint256(0), borrowed * 2);
+    // token1 (WBNB → native BNB) → strict mock requires msg.value == amountIn == minBnb.
+    bytes memory swap1 = abi.encodeWithSelector(strictSwap.swap.selector, BNB_ADDRESS, LISUSD, minBnb, uint256(0));
+
+    V3Liquidator.FlashLiquidateParams memory params = V3Liquidator.FlashLiquidateParams({
+      v3Provider: address(provider),
+      minToken0Amt: 0,
+      minToken1Amt: minBnb, // the msg.value the native swapData is built for
+      redeemShares: true,
+      token0Pair: address(strictSwap),
+      token0Spender: address(0),
+      token1Pair: address(strictSwap),
+      token1Spender: address(0),
+      swapToken0Data: swap0,
+      swapToken1Data: swap1
+    });
+
+    vm.prank(bot);
+    liquidator.flashLiquidate(Id.unwrap(marketId), user, shares, params); // reverts pre-fix (sends actual != minBnb)
+
+    assertEq(_collateral(user), 0, "borrower collateral seized");
+  }
+
+  /// @dev The V3Liquidation event must report the amounts actually redeemed in the callback, not the
+  ///      hardcoded 0 / 0 it previously logged. Both legs (SLISBNB, WBNB→native) are non-zero here.
+  function test_flashLiquidate_eventReportsRedeemedAmounts() public {
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    uint256 borrowed = _borrowAgainstCollateral(user);
+    _makeUnhealthy();
+
+    bytes memory swap0Data = abi.encodeWithSelector(mockSwap.swap.selector, SLISBNB, LISUSD, uint256(0), borrowed * 2);
+    bytes memory swap1Data = abi.encodeWithSelector(
+      mockSwap.swap.selector,
+      BNB_ADDRESS,
+      LISUSD,
+      uint256(0),
+      uint256(0)
+    );
+
+    V3Liquidator.FlashLiquidateParams memory params = V3Liquidator.FlashLiquidateParams({
+      v3Provider: address(provider),
+      minToken0Amt: 0,
+      minToken1Amt: 0,
+      redeemShares: true,
+      token0Pair: address(mockSwap),
+      token0Spender: address(0),
+      token1Pair: address(mockSwap),
+      token1Spender: address(0),
+      swapToken0Data: swap0Data,
+      swapToken1Data: swap1Data
+    });
+
+    vm.recordLogs();
+    vm.prank(bot);
+    liquidator.flashLiquidate(Id.unwrap(marketId), user, shares, params);
+
+    Vm.Log[] memory logs = vm.getRecordedLogs();
+    bool found;
+    for (uint256 i = 0; i < logs.length; i++) {
+      if (logs[i].topics[0] == V3Liquidator.V3Liquidation.selector) {
+        (uint256 seized, uint256 repaid, uint256 amount0, uint256 amount1) = abi.decode(
+          logs[i].data,
+          (uint256, uint256, uint256, uint256)
+        );
+        seized;
+        repaid;
+        assertGt(amount0, 0, "event reports redeemed token0");
+        assertGt(amount1, 0, "event reports redeemed token1");
+        found = true;
+      }
+    }
+    assertTrue(found, "V3Liquidation event emitted");
+  }
+
+  /// @dev Regression: a stale absolute-balance check (`balanceOf(this) < repaidAssets`) lets an
+  ///      unprofitable flash liquidation settle against loanToken the liquidator already holds from
+  ///      unrelated prior activity, silently draining those reserves. Uses `_makeUnhealthyPartial` (not
+  ///      `_makeUnhealthy`'s price=0) so `repaidAssets` is a real, positive number — with price=0,
+  ///      `seizedAssetsQuoted` and hence `repaidAssets` round to ~0 and the check is trivially satisfied
+  ///      regardless of the fix, masking the bug. Pre-fund the liquidator with a reserve cushion large
+  ///      enough to cover repayment on its own, then run a flash liquidation whose swaps yield zero
+  ///      lisUSD. The fix (before/after delta check) must revert NoProfit regardless of the pre-existing
+  ///      balance, because THIS liquidation's redeem+swap produced no proceeds.
+  function test_flashLiquidate_revertsIfSwapUnprofitable_evenWithPreFundedReserves() public {
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    uint256 borrowed = _borrowAgainstCollateral(user);
+    _makeUnhealthyPartial(5_000); // 50% of real price — unhealthy (60% LTV vs 70% LLTV), repaidAssets > 0
+
+    // Reserve cushion from unrelated prior activity — comfortably covers repaidAssets by itself.
+    deal(LISUSD, address(liquidator), borrowed * 10);
+
+    // Both legs swap for zero lisUSD out — this liquidation's redeem+swap is a total loss.
+    bytes memory swap0Data = abi.encodeWithSelector(
+      mockSwap.swap.selector,
+      SLISBNB, // tokenIn
+      LISUSD, // tokenOut
+      uint256(0), // amountIn
+      uint256(0) // amountOutMin — zero proceeds from this leg
+    );
+    bytes memory swap1Data = abi.encodeWithSelector(
+      mockSwap.swap.selector,
+      BNB_ADDRESS, // tokenIn (native BNB path)
+      LISUSD,
+      uint256(0), // amountIn
+      uint256(0) // amountOutMin — zero proceeds from this leg
+    );
+
+    V3Liquidator.FlashLiquidateParams memory params = V3Liquidator.FlashLiquidateParams({
+      v3Provider: address(provider),
+      minToken0Amt: 0,
+      minToken1Amt: 0,
+      redeemShares: true,
+      token0Pair: address(mockSwap),
+      token0Spender: address(0),
+      token1Pair: address(mockSwap),
+      token1Spender: address(0),
+      swapToken0Data: swap0Data,
+      swapToken1Data: swap1Data
+    });
+
+    vm.prank(bot);
+    vm.expectRevert(V3Liquidator.NoProfit.selector);
+    liquidator.flashLiquidate(Id.unwrap(marketId), user, shares, params);
+  }
+
+  /// @dev Native analogue of the pre-funded-reserves test. When loanToken IS the wrapped-native, the
+  ///      profit check wraps the WHOLE native balance, so stray native held beforehand (an earlier
+  ///      redemption's unsold surplus, an un-reflowed redeemV3Shares, or a donation via receive()) would
+  ///      read as fresh profit and let a real shortfall pass. The snapshot must count it.
+  function test_flashLiquidate_strayNativeNotCountedAsProfit() public {
+    // WBNB-loan market so the wrapped-native branch of the profit check is taken.
+    MarketParams memory wbnbMp = MarketParams({
+      loanToken: WBNB,
+      collateralToken: address(provider),
+      oracle: address(providerOracle),
+      irm: IRM,
+      lltv: LLTV
+    });
+    Id wbnbId = wbnbMp.id();
+    vm.prank(OPERATOR);
+    moolah.createMarket(wbnbMp);
+    vm.prank(MANAGER_ADDR);
+    moolah.setProvider(wbnbId, address(provider), true);
+    vm.prank(manager);
+    liquidator.setMarketWhitelist(Id.unwrap(wbnbId), true);
+    vm.prank(manager);
+    liquidator.setTokenWhitelist(WBNB, true);
+
+    // Lender liquidity.
+    address lender = makeAddr("wbnbLender");
+    deal(WBNB, lender, 1_000 ether);
+    vm.startPrank(lender);
+    IERC20(WBNB).approve(address(moolah), type(uint256).max);
+    moolah.supply(wbnbMp, 500 ether, 0, lender, "");
+    vm.stopPrank();
+
+    // Collateral + borrow, then make it liquidatable with repaidAssets > 0.
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    vm.prank(user);
+    provider.withdrawShares(marketParams, shares, user, user);
+    vm.prank(user);
+    provider.supplyShares(wbnbMp, shares, user);
+    (, , uint128 col) = moolah.position(wbnbId, user);
+    uint256 borrowed = (uint256(col) * providerOracle.peek(address(provider)) * 60) / (providerOracle.peek(WBNB) * 100);
+    vm.prank(user);
+    moolah.borrow(wbnbMp, borrowed, 0, user, user);
+    _makeUnhealthyPartial(5_000);
+
+    // Stray native from prior activity — on its own it would cover the repayment.
+    vm.deal(address(liquidator), 100 ether);
+
+    // Both legs yield zero WBNB: THIS liquidation produces nothing.
+    bytes memory swap0Data = abi.encodeWithSelector(mockSwap.swap.selector, SLISBNB, WBNB, uint256(0), uint256(0));
+
+    V3Liquidator.FlashLiquidateParams memory params = V3Liquidator.FlashLiquidateParams({
+      v3Provider: address(provider),
+      minToken0Amt: 0,
+      minToken1Amt: 0,
+      redeemShares: true,
+      token0Pair: address(mockSwap),
+      token0Spender: address(0),
+      token1Pair: address(0), // token1 IS the loan token (WBNB) — no swap
+      token1Spender: address(0),
+      swapToken0Data: swap0Data,
+      swapToken1Data: ""
+    });
+
+    vm.prank(bot);
+    vm.expectRevert(V3Liquidator.NoProfit.selector);
+    liquidator.flashLiquidate(Id.unwrap(wbnbId), user, shares, params);
+  }
+
+  function test_flashLiquidate_revertsIfMarketNotWhitelisted() public {
+    vm.prank(manager);
+    liquidator.setMarketWhitelist(Id.unwrap(marketId), false);
+
+    V3Liquidator.FlashLiquidateParams memory params;
+    params.v3Provider = address(provider);
+
+    vm.prank(bot);
+    vm.expectRevert(V3Liquidator.NotWhitelisted.selector);
+    liquidator.flashLiquidate(Id.unwrap(marketId), user, 1, params);
+  }
+
+  function test_flashLiquidate_revertsIfProviderNotWhitelisted() public {
+    vm.prank(manager);
+    liquidator.setV3ProviderWhitelist(address(provider), false);
+
+    V3Liquidator.FlashLiquidateParams memory params;
+    params.v3Provider = address(provider);
+
+    vm.prank(bot);
+    vm.expectRevert(V3Liquidator.NotWhitelisted.selector);
+    liquidator.flashLiquidate(Id.unwrap(marketId), user, 1, params);
+  }
+
+  function test_flashLiquidate_revertsIfProviderMarketMismatch() public {
+    // Register a second provider that is not the collateral for this market.
+    address fakeProvider = makeAddr("fakeProvider");
+    vm.prank(manager);
+    liquidator.setV3ProviderWhitelist(fakeProvider, true);
+
+    V3Liquidator.FlashLiquidateParams memory params;
+    params.v3Provider = fakeProvider;
+
+    vm.prank(bot);
+    vm.expectRevert("provider/market mismatch");
+    liquidator.flashLiquidate(Id.unwrap(marketId), user, 1, params);
+  }
+
+  /* ─────────────────── redeemV3Shares ─────────────────────────────── */
+
+  function test_redeemV3Shares_redemeesSharesToTokens() public {
+    // Acquire shares via pre-funded liquidation.
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    _borrowAgainstCollateral(user);
+    _makeUnhealthy();
+    deal(LISUSD, address(liquidator), 1_000 ether);
+    vm.prank(bot);
+    liquidator.liquidate(Id.unwrap(marketId), user, shares, 0);
+
+    uint256 heldShares = provider.balanceOf(address(liquidator));
+    assertGt(heldShares, 0, "setup: liquidator holds shares");
+
+    (uint256 exp0, uint256 exp1) = provider.previewRedeemUnderlying(heldShares);
+
+    vm.prank(bot);
+    (uint256 out0, uint256 out1) = liquidator.redeemV3Shares(
+      address(provider),
+      heldShares,
+      (exp0 * 999) / 1000,
+      (exp1 * 999) / 1000,
+      address(liquidator)
+    );
+
+    assertEq(provider.balanceOf(address(liquidator)), 0, "shares burned after redeem");
+    assertGt(out0 + out1, 0, "tokens received");
+    assertEq(IERC20(SLISBNB).balanceOf(address(liquidator)), out0, "SLISBNB received");
+    assertEq(address(liquidator).balance, out1, "BNB received (WBNB unwrapped)");
+  }
+
+  function test_redeemV3Shares_revertsIfProviderNotWhitelisted() public {
+    vm.prank(manager);
+    liquidator.setV3ProviderWhitelist(address(provider), false);
+
+    vm.prank(bot);
+    vm.expectRevert(V3Liquidator.NotWhitelisted.selector);
+    liquidator.redeemV3Shares(address(provider), 1, 0, 0, address(liquidator));
+  }
+
+  /// @dev With a shared pool configured, an external receiver would bypass the reflow accounting, so it
+  ///      is rejected — vault-funded redemptions must land here and flow back through _reflow.
+  function test_redeemV3Shares_revertsOnExternalReceiverWithFundSource() public {
+    // Hold real seized shares, so without the guard this redeem would SUCCEED and pay the external
+    // address — the guard is what stops it, not a lack of balance.
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    _borrowAgainstCollateral(user);
+    _makeUnhealthy();
+    deal(LISUSD, address(liquidator), 1_000 ether);
+    vm.prank(bot);
+    liquidator.liquidate(Id.unwrap(marketId), user, shares, 0);
+    uint256 held = provider.balanceOf(address(liquidator));
+    assertGt(held, 0, "setup: liquidator holds shares");
+
+    LiquidationVault vault = _deployVault(true);
+    vm.prank(manager);
+    liquidator.setFundSource(address(vault));
+
+    vm.prank(bot);
+    vm.expectRevert(V3Liquidator.ReceiverNotSelf.selector);
+    liquidator.redeemV3Shares(address(provider), held, 0, 0, makeAddr("externalReceiver"));
+
+    // Same call into this contract still works.
+    vm.prank(bot);
+    liquidator.redeemV3Shares(address(provider), held, 0, 0, address(liquidator));
+    assertEq(provider.balanceOf(address(liquidator)), 0, "shares redeemed to self");
+  }
+
+  /// @dev Legacy (no shared pool): an external receiver stays allowed — the guard is scoped to fundSource.
+  function test_redeemV3Shares_externalReceiverAllowedWithoutFundSource() public {
+    assertEq(liquidator.fundSource(), address(0), "no fund source by default");
+
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    _borrowAgainstCollateral(user);
+    _makeUnhealthy();
+    deal(LISUSD, address(liquidator), 1_000 ether);
+    vm.prank(bot);
+    liquidator.liquidate(Id.unwrap(marketId), user, shares, 0);
+
+    uint256 held = provider.balanceOf(address(liquidator));
+    address receiver = makeAddr("externalReceiver");
+    uint256 before = IERC20(SLISBNB).balanceOf(receiver);
+
+    vm.prank(bot);
+    (uint256 out0, ) = liquidator.redeemV3Shares(address(provider), held, 0, 0, receiver);
+
+    assertEq(IERC20(SLISBNB).balanceOf(receiver) - before, out0, "external receiver paid");
+  }
+
+  /* ─────────────────── sell token ─────────────────────────────────── */
+
+  function test_sellToken_erc20_swapsAndClearsAllowance() public {
+    uint256 amountIn = 100 ether;
+    uint256 amountOut = 50 ether;
+    deal(SLISBNB, address(liquidator), amountIn);
+
+    bytes memory swapData = abi.encodeWithSelector(mockSwap.swap.selector, SLISBNB, LISUSD, amountIn, amountOut);
+
+    vm.prank(bot);
+    liquidator.sellToken(address(mockSwap), SLISBNB, LISUSD, amountIn, amountOut, swapData);
+
+    assertEq(IERC20(LISUSD).balanceOf(address(liquidator)), amountOut, "received lisUSD");
+    assertEq(IERC20(SLISBNB).balanceOf(address(liquidator)), 0, "SLISBNB consumed");
+    assertEq(IERC20(SLISBNB).allowance(address(liquidator), address(mockSwap)), 0, "allowance cleared");
+  }
+
+  function test_sellToken_revertsIfTokenNotWhitelisted() public {
+    deal(WBNB, address(liquidator), 1 ether);
+
+    vm.prank(bot);
+    vm.expectRevert(V3Liquidator.NotWhitelisted.selector);
+    liquidator.sellToken(address(mockSwap), WBNB, LISUSD, 1 ether, 0, "");
+  }
+
+  function test_sellToken_revertsIfPairNotWhitelisted() public {
+    address fakePair = makeAddr("fakePair");
+    deal(SLISBNB, address(liquidator), 1 ether);
+
+    vm.prank(bot);
+    vm.expectRevert(V3Liquidator.NotWhitelisted.selector);
+    liquidator.sellToken(fakePair, SLISBNB, LISUSD, 1 ether, 0, "");
+  }
+
+  function test_sellToken_revertsIfAmountExceedsBalance() public {
+    deal(SLISBNB, address(liquidator), 50 ether);
+
+    vm.prank(bot);
+    vm.expectRevert(V3Liquidator.ExceedAmount.selector);
+    liquidator.sellToken(address(mockSwap), SLISBNB, LISUSD, 100 ether, 0, "");
+  }
+
+  function test_sellBNB_swapsNativeBNB() public {
+    uint256 amountIn = 1 ether;
+    uint256 amountOut = 500 ether;
+    deal(address(liquidator), amountIn);
+
+    bytes memory swapData = abi.encodeWithSelector(mockSwap.swap.selector, BNB_ADDRESS, LISUSD, amountIn, amountOut);
+
+    vm.prank(bot);
+    liquidator.sellBNB(address(mockSwap), LISUSD, amountIn, amountOut, swapData);
+
+    assertEq(IERC20(LISUSD).balanceOf(address(liquidator)), amountOut, "received lisUSD");
+    assertEq(address(liquidator).balance, 0, "BNB consumed");
+  }
+
+  /// @dev SellToken reports the MEASURED native input, matching the ERC20 path. A venue that refunds part
+  ///      of the forwarded value must not be logged as if the full amountIn was sold.
+  function test_sellBNB_emitsMeasuredInputOnRefund() public {
+    MockRefundingNativeSwap venue = new MockRefundingNativeSwap();
+    vm.prank(manager);
+    liquidator.setPairWhitelist(address(venue), true);
+
+    uint256 amountIn = 1 ether;
+    uint256 consumed = 0.6 ether; // venue refunds 0.4
+    uint256 amountOut = 300 ether;
+    deal(address(liquidator), amountIn);
+
+    bytes memory swapData = abi.encodeWithSelector(venue.swap.selector, LISUSD, consumed, amountOut);
+
+    vm.expectEmit(true, true, true, true);
+    emit V3Liquidator.SellToken(address(venue), address(venue), BNB_ADDRESS, LISUSD, consumed, amountOut);
+    vm.prank(bot);
+    liquidator.sellBNB(address(venue), LISUSD, amountIn, amountOut, swapData);
+
+    assertEq(address(liquidator).balance, amountIn - consumed, "refund retained");
+  }
+
+  /* ─────────────────── withdrawals ────────────────────────────────── */
+
+  function test_withdrawERC20_sendsToManager() public {
+    uint256 amount = 100 ether;
+    deal(LISUSD, address(liquidator), amount);
+
+    vm.prank(manager);
+    liquidator.withdrawERC20(LISUSD, amount);
+
+    assertEq(IERC20(LISUSD).balanceOf(manager), amount);
+    assertEq(IERC20(LISUSD).balanceOf(address(liquidator)), 0);
+  }
+
+  function test_withdrawETH_sendsToManager() public {
+    uint256 amount = 1 ether;
+    deal(address(liquidator), amount);
+
+    vm.prank(manager);
+    liquidator.withdrawETH(amount);
+
+    assertEq(manager.balance, amount);
+    assertEq(address(liquidator).balance, 0);
+  }
+
+  function test_withdrawERC20_revertsIfNotManager() public {
+    vm.prank(user);
+    vm.expectRevert();
+    liquidator.withdrawERC20(LISUSD, 1);
+  }
+
+  /* ─────────────────── LiquidationVault integration ──────────────────── */
+
+  /// @dev Deploy a LiquidationVault proxy and (optionally) register this liquidator as a fund source.
+  function _deployVault(bool register) internal returns (LiquidationVault vault) {
+    address vaultImpl = address(new LiquidationVault());
+    vault = LiquidationVault(
+      payable(new ERC1967Proxy(vaultImpl, abi.encodeCall(LiquidationVault.initialize, (admin, manager, manager, bot))))
+    );
+    if (register) {
+      vm.prank(manager);
+      vault.setLiquidator(address(liquidator), true);
+    }
+  }
+
+  /// @dev setFundSource must reject a non-contract and a vault that has not registered this liquidator,
+  ///      accept a registered vault, and allow 0 (rollback to legacy pre-funded behavior).
+  function test_setFundSource_validatesRegistration() public {
+    LiquidationVault vault = _deployVault(false); // not registered yet
+
+    vm.prank(manager);
+    vm.expectRevert(V3Liquidator.InvalidFundSource.selector);
+    liquidator.setFundSource(makeAddr("eoa")); // no code
+
+    vm.prank(manager);
+    vm.expectRevert(V3Liquidator.InvalidFundSource.selector);
+    liquidator.setFundSource(address(vault)); // contract, but not registered
+
+    vm.prank(manager);
+    vault.setLiquidator(address(liquidator), true);
+    vm.prank(manager);
+    liquidator.setFundSource(address(vault));
+    assertEq(liquidator.fundSource(), address(vault), "fundSource set");
+
+    vm.prank(manager);
+    liquidator.setFundSource(address(0)); // disable → legacy
+    assertEq(liquidator.fundSource(), address(0), "fundSource cleared");
+
+    vm.prank(user);
+    vm.expectRevert();
+    liquidator.setFundSource(address(vault)); // not manager
+  }
+
+  /// @dev withdraw* is callable by MANAGER and by the registered fundSource (the vault's collect*),
+  ///      and reverts for anyone else. Transfer target is msg.sender, so the vault collects into itself.
+  function test_withdraw_authorizedForVaultAndManager() public {
+    LiquidationVault vault = _deployVault(true);
+    vm.prank(manager);
+    liquidator.setFundSource(address(vault));
+
+    deal(LISUSD, address(liquidator), 3 ether);
+
+    vm.prank(user); // random caller
+    vm.expectRevert(V3Liquidator.NotAuthorized.selector);
+    liquidator.withdrawERC20(LISUSD, 1 ether);
+
+    vm.prank(address(vault)); // fundSource path — lands on the vault
+    liquidator.withdrawERC20(LISUSD, 1 ether);
+    assertEq(IERC20(LISUSD).balanceOf(address(vault)), 1 ether, "vault collected");
+
+    vm.prank(manager); // manager path
+    liquidator.withdrawERC20(LISUSD, 1 ether);
+    assertEq(IERC20(LISUSD).balanceOf(manager), 1 ether, "manager withdrew");
+  }
+
+  /// @dev With a fund pool set, a non-redeeming liquidate() pulls the exact repayment shortfall from the
+  ///      vault inside onMoolahLiquidate — the liquidator need hold no loanToken of its own.
+  function test_liquidate_pullsShortfallFromVault() public {
+    LiquidationVault vault = _deployVault(true);
+    vm.prank(manager);
+    liquidator.setFundSource(address(vault));
+
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    _borrowAgainstCollateral(user);
+    _makeUnhealthyPartial(5_000); // 50% price → liquidatable, full seize repays < debt (positive repaidAssets)
+
+    // Fund the vault; the liquidator itself holds NO loanToken.
+    deal(LISUSD, address(vault), 1_000_000 ether);
+    assertEq(IERC20(LISUSD).balanceOf(address(liquidator)), 0, "liquidator unfunded");
+    uint256 vaultBefore = IERC20(LISUSD).balanceOf(address(vault));
+
+    vm.prank(bot);
+    liquidator.liquidate(Id.unwrap(marketId), user, shares, 0);
+
+    assertEq(_collateral(user), 0, "borrower collateral seized");
+    assertGt(vaultBefore - IERC20(LISUSD).balanceOf(address(vault)), 0, "vault funded the repayment");
+    // Exact shortfall pulled, Moolah took repaidAssets → nothing left over on the liquidator.
+    assertEq(IERC20(LISUSD).balanceOf(address(liquidator)), 0, "no residual loanToken on liquidator");
+    assertGt(provider.balanceOf(address(liquidator)), 0, "seized shares held (to be redeemed later)");
+  }
+
+  /// @dev With a fund pool set, flashLiquidate reflows the arb residue (loanToken profit + leftover legs)
+  ///      to the vault instead of leaving it on the liquidator.
+  function test_flashLiquidate_reflowsResidueToVault() public {
+    LiquidationVault vault = _deployVault(true);
+    vm.prank(manager);
+    liquidator.setFundSource(address(vault));
+
+    (uint256 shares, , ) = _deposit(user, 10 ether, 10 ether);
+    uint256 borrowed = _borrowAgainstCollateral(user);
+    _makeUnhealthy();
+
+    bytes memory swap0Data = abi.encodeWithSelector(mockSwap.swap.selector, SLISBNB, LISUSD, uint256(0), borrowed * 2);
+    bytes memory swap1Data = abi.encodeWithSelector(
+      mockSwap.swap.selector,
+      BNB_ADDRESS,
+      LISUSD,
+      uint256(0),
+      uint256(0)
+    );
+
+    V3Liquidator.FlashLiquidateParams memory params = V3Liquidator.FlashLiquidateParams({
+      v3Provider: address(provider),
+      minToken0Amt: 0,
+      minToken1Amt: 0,
+      redeemShares: true,
+      token0Pair: address(mockSwap),
+      token0Spender: address(0),
+      token1Pair: address(mockSwap),
+      token1Spender: address(0),
+      swapToken0Data: swap0Data,
+      swapToken1Data: swap1Data
+    });
+
+    vm.prank(bot);
+    liquidator.flashLiquidate(Id.unwrap(marketId), user, shares, params);
+
+    assertEq(_collateral(user), 0, "borrower collateral seized");
+    // Residue reflowed: liquidator drained, vault received the loanToken profit.
+    assertEq(IERC20(LISUSD).balanceOf(address(liquidator)), 0, "liquidator loanToken reflowed");
+    assertGt(IERC20(LISUSD).balanceOf(address(vault)), 0, "vault received arb profit");
+  }
+
+  /// @dev initialize wires an optional fund pool directly (no registration check — the vault registers
+  ///      this liquidator only after the proxy exists); a non-contract fundSource reverts.
+  function test_initialize_setsFundSource() public {
+    LiquidationVault vault = _deployVault(false);
+    V3Liquidator implL = new V3Liquidator(MOOLAH_PROXY);
+
+    // Non-contract fundSource → revert.
+    vm.expectRevert(V3Liquidator.InvalidFundSource.selector);
+    new ERC1967Proxy(address(implL), abi.encodeCall(V3Liquidator.initialize, (admin, manager, bot, makeAddr("eoa"))));
+
+    // Contract fundSource → set at init (registration in the vault happens afterwards).
+    V3Liquidator liq = V3Liquidator(
+      payable(
+        new ERC1967Proxy(address(implL), abi.encodeCall(V3Liquidator.initialize, (admin, manager, bot, address(vault))))
+      )
+    );
+    assertEq(liq.fundSource(), address(vault), "fundSource set at init");
+  }
+}
