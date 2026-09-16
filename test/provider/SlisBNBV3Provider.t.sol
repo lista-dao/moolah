@@ -2635,6 +2635,85 @@ contract SlisBNBV3ProviderTest is Test {
     adapter.setMaxSpotDeviationBps(50);
   }
 
+  /* ───────────────── Idle-share ceiling (maxIdleBps) ───────────────── */
+
+  /// @dev 8-decimal USD value of a leg pair at the mock resilient oracle's prices — the same arithmetic
+  ///      the adapter's own valuation uses, so idleValueBps can be checked against it directly.
+  function _usd8(uint256 amount0, uint256 amount1) internal view returns (uint256) {
+    return (amount0 * oracle.peek(SLISBNB)) / 1e18 + (amount1 * oracle.peek(WBNB)) / 1e18;
+  }
+
+  function test_maxIdleBps_defaultsToDisabled() public view {
+    assertEq(adapter.maxIdleBps(), 0, "idle ceiling off by default");
+  }
+
+  function test_setMaxIdleBps_accessAndCaps() public {
+    vm.prank(manager);
+    adapter.setMaxIdleBps(2_000);
+    assertEq(adapter.maxIdleBps(), 2_000);
+
+    vm.prank(manager);
+    vm.expectRevert(V3DexAdapter.InvalidThreshold.selector);
+    adapter.setMaxIdleBps(10_001); // > BPS
+
+    vm.expectRevert(); // non-manager
+    adapter.setMaxIdleBps(100);
+  }
+
+  /// @dev idleValueBps is the idle inventory's fair-priced share of NAV — check it against the same
+  ///      composition the oracle prices, not against a re-derivation of the adapter's internals.
+  function test_idleValueBps_matchesFairComposition() public {
+    _deposit(user, 100 ether, 100 ether); // opens the position
+    _deposit(user2, 100 ether, 100 ether); // subsequent deposits park as idle
+
+    (uint256 t0, uint256 t1) = adapter.positionAmountsAt(adapter.fairSqrtPriceX96());
+    uint256 expected = (_usd8(adapter.idleToken0(), adapter.idleToken1()) * 10_000) / _usd8(t0, t1);
+
+    assertGt(adapter.idleValueBps(), 0, "the second deposit parked idle");
+    assertEq(adapter.idleValueBps(), expected, "idleValueBps == idle / fair NAV in bps");
+  }
+
+  /// @dev Deposits land as idle and only a BOT compound deploys them, so the ceiling has to bite on the
+  ///      deposit credit itself.
+  function test_maxIdleBps_blocksDepositOverTheCeiling() public {
+    _deposit(user, 100 ether, 100 ether);
+
+    vm.prank(manager);
+    adapter.setMaxIdleBps(100); // 1% of NAV
+
+    // Inlined rather than via _deposit: that helper calls the lens previews first, and expectRevert
+    // binds to the very next call.
+    deal(SLISBNB, user2, 100 ether);
+    deal(WBNB, user2, 100 ether);
+    vm.startPrank(user2);
+    IERC20(SLISBNB).approve(address(provider), 100 ether);
+    IERC20(WBNB).approve(address(provider), 100 ether);
+    vm.expectRevert(V3DexAdapter.IdleCapExceeded.selector);
+    provider.deposit(marketParams, 100 ether, 100 ether, 0, 0, 0, user2);
+    vm.stopPrank();
+  }
+
+  function test_maxIdleBps_zeroDoesNotBlock() public {
+    _deposit(user, 100 ether, 100 ether);
+
+    vm.prank(manager);
+    adapter.setMaxIdleBps(0);
+
+    _deposit(user2, 100 ether, 100 ether); // must not revert
+    assertGt(adapter.idleValueBps(), 100, "idle is well past the ceiling this test disabled");
+  }
+
+  /// @dev A deposit that leaves idle at or under the ceiling still goes through.
+  function test_maxIdleBps_allowsDepositUnderTheCeiling() public {
+    _deposit(user, 100 ether, 100 ether);
+
+    vm.prank(manager);
+    adapter.setMaxIdleBps(10_000); // 100% — the loosest non-disabled setting
+
+    _deposit(user2, 100 ether, 100 ether);
+    assertLe(adapter.idleValueBps(), 10_000, "idle stays within the ceiling");
+  }
+
   /// @dev Give the adapter idle inventory to compound (mirrors test_deposit_afterIdle…).
   function _injectIdle(uint256 idle0, uint256 idle1) internal {
     deal(SLISBNB, address(adapter), IERC20(SLISBNB).balanceOf(address(adapter)) + idle0);

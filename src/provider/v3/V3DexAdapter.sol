@@ -129,8 +129,15 @@ abstract contract V3DexAdapter is
   uint256 public rangeLowerBps;
   uint256 public rangeUpperBps;
 
+  /// @dev Ceiling on the idle inventory's fair-priced share of NAV, in BPS; enforced when a deposit is
+  ///      credited as idle. 0 disables. Deposits land as idle and only a BOT compound deploys them, so
+  ///      without a ceiling the vault can drift into mostly un-deployed, price-insensitive inventory.
+  ///      NB: new base variables go HERE, above __gap — anything appended after it shifts every
+  ///      subclass's storage.
+  uint256 public maxIdleBps;
+
   /// @dev Reserved storage for future base variables (keep subclass storage stable on upgrade).
-  uint256[42] private __gap;
+  uint256[41] private __gap;
 
   /* ───────────────────────────── events ───────────────────────────── */
 
@@ -146,6 +153,7 @@ abstract contract V3DexAdapter is
   event MaxSpotDeviationBpsChanged(uint256 maxSpotDeviationBps);
   event RangeBpsChanged(uint256 rangeLowerBps, uint256 rangeUpperBps);
   event MaxCenterRateDeviationBpsChanged(uint256 maxCenterRateDeviationBps);
+  event MaxIdleBpsChanged(uint256 maxIdleBps);
   event CompoundSkippedSpotDeviated(uint160 spotSqrtPriceX96, uint160 fairSqrtPriceX96);
   event CompoundSkippedNoLiquidity(uint256 idleToken0, uint256 idleToken1);
   event IdleCredited(uint256 amount0, uint256 amount1);
@@ -176,6 +184,7 @@ abstract contract V3DexAdapter is
   error SpotDeviationTooHigh();
   error CenterRateDeviationTooHigh();
   error ZeroAmount();
+  error IdleCapExceeded();
 
   /* ─────────────────────────── constructor ────────────────────────── */
 
@@ -408,6 +417,10 @@ abstract contract V3DexAdapter is
     if (amount1 > 0) idleToken1 += amount1;
     if (idleToken0 > IERC20(TOKEN0).balanceOf(address(this))) revert InsufficientBalance();
     if (idleToken1 > IERC20(TOKEN1).balanceOf(address(this))) revert InsufficientBalance();
+    // Idle-share ceiling: checked AFTER crediting, so it bounds where this deposit leaves the vault,
+    // not where it started. 0 disables. Un-priceable NAV (oracle down) reports 0 and never trips it.
+    uint256 idleCap = maxIdleBps;
+    if (idleCap != 0 && idleValueBps() > idleCap) revert IdleCapExceeded();
     emit IdleCredited(amount0, amount1);
   }
 
@@ -426,6 +439,13 @@ abstract contract V3DexAdapter is
     if (_maxSpotDeviationBps > BPS) revert InvalidThreshold();
     maxSpotDeviationBps = _maxSpotDeviationBps;
     emit MaxSpotDeviationBpsChanged(_maxSpotDeviationBps);
+  }
+
+  /// @inheritdoc IV3DexAdapter
+  function setMaxIdleBps(uint256 _maxIdleBps) external onlyRole(MANAGER) {
+    if (_maxIdleBps > BPS) revert InvalidThreshold();
+    maxIdleBps = _maxIdleBps;
+    emit MaxIdleBpsChanged(_maxIdleBps);
   }
 
   /// @notice Set the range margins below / above the rate-derived center (BPS). onlyRole MANAGER.
@@ -770,6 +790,14 @@ abstract contract V3DexAdapter is
     (uint256 keep0, uint256 keep1) = _capToEntitledValue(amount0, amount1, _fairEntitledValue(shares, totalShares));
     amount0 -= keep0;
     amount1 -= keep1;
+  }
+
+  /// @inheritdoc IV3DexAdapter
+  function idleValueBps() public view returns (uint256) {
+    (uint256 total0, uint256 total1) = positionAmountsAt(fairSqrtPriceX96());
+    uint256 totalValue = _valueUsd(total0, total1);
+    if (totalValue == 0) return 0; // empty, or unpriceable (see _valueUsd)
+    return (_valueUsd(idleToken0, idleToken1) * BPS) / totalValue;
   }
 
   /// @dev Fair-priced 8-decimal USD value the `shares/totalShares` slice of the position is entitled to.

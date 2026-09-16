@@ -153,6 +153,16 @@ interface IV3DexAdapter {
   /// @notice Set the spot-vs-fair deviation gate (onlyRole MANAGER; bps of price, 0 disables).
   function setMaxSpotDeviationBps(uint256 maxSpotDeviationBps) external;
 
+  /// @notice Ceiling on the idle inventory's fair-priced share of NAV (bps), enforced when a deposit is
+  ///         credited as idle. 0 disables.
+  function maxIdleBps() external view returns (uint256);
+
+  /// @notice Set the idle-share ceiling (onlyRole MANAGER; bps of fair-priced NAV, 0 disables).
+  function setMaxIdleBps(uint256 maxIdleBps) external;
+
+  /// @notice Idle inventory as a share of the fair-priced NAV, in bps. 0 when the NAV cannot be priced.
+  function idleValueBps() external view returns (uint256);
+
   /// @notice Max |live center rate − BOT-supplied expectedCenterRate| deviation (bps) tolerated on
   ///         rebalance (0 disables the guard).
   function maxCenterRateDeviationBps() external view returns (uint256);
