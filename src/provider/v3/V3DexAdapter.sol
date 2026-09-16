@@ -39,6 +39,7 @@ import { IV3PoolMinimal } from "../interfaces/IV3PoolMinimal.sol";
  *
  * Extension points (rate-implied subclasses override):
  *   - _lstNativeRate(): the LST↔native exchange rate — the range center and the fair-price anchor.
+ *     Has NO base implementation, so a subclass cannot forget it.
  *   - fairSqrtPriceX96(): the valuation price (rate-implied by default; wstETH/wbETH clamp the pool TWAP
  *     to the rate). receive() may also be overridden to widen accepted native senders.
  */
@@ -72,8 +73,6 @@ abstract contract V3DexAdapter is
   uint256 internal constant WAD = 1e18;
   /// @dev Denominator for `maxSwapLossBp` — parts-per-million (ppm).
   uint256 internal constant LOSS_DENOM = 1e6;
-  /// @dev Fallback half-range (ticks) around spot for non-rate (TWAP) pairs.
-  int24 internal constant FALLBACK_HALF_RANGE_TICKS = 500;
   /// @dev Fixed-point 2^128, the denominator of Uniswap V3 fee-growth (feeGrowthInside/Global) values.
   uint256 internal constant Q128 = 1 << 128;
 
@@ -980,20 +979,14 @@ abstract contract V3DexAdapter is
 
   /* ─────────────────── rate-centering math (shared) ────────────────── */
 
-  /// @dev Tick range for the position. Rate-implied (centerRate != 0): rangeLowerBps/rangeUpperBps around the
-  ///      rate-derived price. Pure-TWAP (centerRate == 0): ±FALLBACK_HALF_RANGE_TICKS around spot.
+  /// @dev Tick range for the position: rangeLowerBps/rangeUpperBps around the rate-derived price. Always
+  ///      rate-implied — `_lstNativeRate()` has no base implementation, so every adapter supplies one.
   function _initialTickRange(
     uint256 centerRate
   ) internal view returns (int24 initialTickLower, int24 initialTickUpper) {
     int24 tickSpacing = IListaV3Pool(POOL).tickSpacing();
 
-    if (centerRate != 0) {
-      (initialTickLower, initialTickUpper) = _tickRangeForRate(centerRate, tickSpacing);
-    } else {
-      (, int24 currentTick) = IV3PoolMinimal(POOL).slot0();
-      initialTickLower = _floorTick(currentTick - FALLBACK_HALF_RANGE_TICKS, tickSpacing);
-      initialTickUpper = _ceilTick(currentTick + FALLBACK_HALF_RANGE_TICKS, tickSpacing);
-    }
+    (initialTickLower, initialTickUpper) = _tickRangeForRate(centerRate, tickSpacing);
 
     // _floorTick / _ceilTick can push an aligned tick just past the usable range (and TickMath /
     // pool.mint would then revert). Clamp both bounds back into [MIN_TICK, MAX_TICK].
@@ -1069,12 +1062,11 @@ abstract contract V3DexAdapter is
 
   /* ────────────────────────── extension hooks ─────────────────────── */
 
-  /// @dev LST↔native exchange rate (native per LST, 1e18). 0 ⇒ no rate (pure-TWAP pair): the base
-  ///      uses pool TWAP for the fair price and a spot-centered range. Rate-implied subclasses
-  ///      (slisBNB via StakeManager, wstETH via stEthPerToken) override this.
-  function _lstNativeRate() internal view virtual returns (uint256) {
-    return 0;
-  }
+  /// @dev LST↔native exchange rate (native per LST, 1e18) — the range center and the fair-price anchor.
+  ///      Deliberately UNIMPLEMENTED: every adapter must supply a manipulation-resistant rate (slisBNB
+  ///      via StakeManager, wstETH via stEthPerToken, wbETH via exchangeRate), and the compiler now
+  ///      enforces that rather than letting a new subclass silently inherit a spot-centered fallback.
+  function _lstNativeRate() internal view virtual returns (uint256);
 
   /// @dev DEX-agnostic, backend-built rebalance inventory conversion, shared by all rate-implied pairs
   ///      (slisBNB/WBNB, wstETH/WETH, wbETH/WETH). `swapData` (when non-empty) ABI-encodes

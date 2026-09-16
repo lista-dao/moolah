@@ -14,6 +14,12 @@ contract DecimalProbeAdapter is V3DexAdapter {
   function sqrtPriceFromRate(uint256 rate) external view returns (uint160) {
     return _sqrtPriceX96FromRate(rate);
   }
+
+  /// @dev The base declares this without an implementation, so every adapter — including this probe —
+  ///      has to supply one. Unused here: the tests below only exercise the pure rate→sqrtPrice math.
+  function _lstNativeRate() internal pure override returns (uint256) {
+    return 1e18;
+  }
 }
 
 /// @notice Unit tests for V3DexAdapter._sqrtPriceX96FromRate's decimal handling, against real Uniswap V3
