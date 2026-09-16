@@ -34,18 +34,19 @@ contract DeployYieldAccount is DeployBase {
   // clisBNB is held in the CDP today. CONFIRM THIS ADDRESS before running.
   address delegatee = 0xD57E5321e67607Fab38347D96394e0E58509C506;
 
-  // skim destination for collateral value above principal. MANAGER-settable afterwards.
-  address treasury = 0x8d388136d578dCD791D081c6042284CED6d9B0c6; // B0c6
+  // skim destination for collateral value above principal, same address the CDP harvests its own
+  // surplus to, so both sides of the appreciation land together. MANAGER-settable afterwards.
+  address treasury = 0x34B504A5CF0fF41F8A480580533b6Dda687fa3Da;
 
   // skims below this BNB value are skipped; a full exit force-skims regardless
   uint256 minSkimBnb = 0.005 ether;
 
-  // market: lisUSD / slisBNB, multiOracle, alphaIrm, LLTV 85%
+  // market: lisUSD / slisBNB, multiOracle, alphaIrm, LLTV 86.5%
   address lisUSD = 0x0782b6d8c4551B9760e74c0545a9bCD90bdc41E5;
   address slisBNB = 0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B;
   address multiOracle = 0xf3afD82A4071f272F403dC176916141f44E6c750;
   address alphaIrm = 0x5F9f9173B405C6CEAfa7f98d09e4B8447e9797E6;
-  uint256 lltv85 = 85 * 1e16;
+  uint256 lltv865 = 865 * 1e15;
 
   address[] receivers;
 
@@ -62,7 +63,7 @@ contract DeployYieldAccount is DeployBase {
       collateralToken: slisBNB,
       oracle: multiOracle,
       irm: alphaIrm,
-      lltv: lltv85
+      lltv: lltv865
     });
     console.log("Market id: ");
     console.logBytes32(Id.unwrap(params.id()));
@@ -72,8 +73,14 @@ contract DeployYieldAccount is DeployBase {
 
     vm.startBroadcast(deployerPrivateKey);
 
-    // the owner is baked into the implementation: one implementation per account
-    YieldAccount impl = new YieldAccount(moolah, provider, owner);
+    // the owner is baked into the implementation, and the market is not, so an implementation
+    // already deployed for this owner can back a proxy on a different market. Set YIELD_ACCOUNT_IMPL
+    // to reuse one; leave it unset to deploy a fresh implementation.
+    address existing = vm.envOr("YIELD_ACCOUNT_IMPL", address(0));
+    YieldAccount impl = existing == address(0) ? new YieldAccount(moolah, provider, owner) : YieldAccount(existing);
+    require(impl.OWNER() == owner, "impl owner");
+    require(address(impl.MOOLAH()) == moolah, "impl moolah");
+    require(address(impl.PROVIDER()) == provider, "impl provider");
     console.log("YieldAccount implementation: ", address(impl));
 
     // initialize rides in the proxy constructor: no block where this proxy is uninitialized
@@ -81,10 +88,14 @@ contract DeployYieldAccount is DeployBase {
       address(impl),
       abi.encodeCall(
         YieldAccount.initialize,
-        (admin, manager, pauser, params, treasury, minSkimBnb, delegatee, receivers)
+        (deployer, manager, pauser, params, treasury, minSkimBnb, delegatee, receivers)
       )
     );
     console.log("YieldAccount proxy: ", address(proxy));
+
+    // DEFAULT_ADMIN starts on the deployer so bring-up needs no 24h proposal, then the TimeLock is
+    // granted the same role. Both hold it until the deployer's copy is revoked after bring-up.
+    YieldAccount(address(proxy)).grantRole(bytes32(0), admin);
 
     vm.stopBroadcast();
 
@@ -107,10 +118,11 @@ contract DeployYieldAccount is DeployBase {
     require(account.hasRole(account.MANAGER(), manager), "manager");
     require(account.hasRole(account.PAUSER(), pauser), "pauser");
     require(account.OWNER() == owner, "owner");
-    require(account.getRoleMemberCount(account.DEFAULT_ADMIN_ROLE()) == 1, "admin count");
+    require(account.getRoleMemberCount(account.DEFAULT_ADMIN_ROLE()) == 2, "admin count");
     require(account.getRoleMemberCount(account.MANAGER()) == 1, "manager count");
     require(account.getRoleMemberCount(account.PAUSER()) == 1, "pauser count");
-    require(!account.hasRole(account.DEFAULT_ADMIN_ROLE(), deployer), "deployer is admin");
+    // deliberately retained for bring-up; revoke once the rollout is done
+    require(account.hasRole(account.DEFAULT_ADMIN_ROLE(), deployer), "deployer admin retained");
     require(!account.hasRole(account.MANAGER(), deployer), "deployer is manager");
     // so a leaked pauser key can be revoked without a 24h proposal
     require(account.getRoleAdmin(account.PAUSER()) == account.MANAGER(), "pauser role admin");

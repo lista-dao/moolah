@@ -2,6 +2,7 @@
 pragma solidity 0.8.34;
 
 import "forge-std/Test.sol";
+import { VmSafe } from "forge-std/Vm.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
@@ -35,6 +36,9 @@ contract PositionMigratorYieldAccountTest is Test {
   address constant YIELD_ACCOUNT_OWNER = 0x0966602E47F6a3CA5692529F1D54EcD1d9B09175;
   address constant TIMELOCK = 0x07D274a68393E8b8a2CCf19A2ce4Ba3518735253;
   address constant B0C6 = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
+  address constant MAINNET_MIGRATOR = 0x2B3E5b695722756130A553E9Bb5A45E16d21D0A4;
+  address constant BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
+  address constant BTCB_USER = 0xC5Ca77e168FE2cdbaDe44A9B2ea51B99D8962587;
   address constant PROXY_ADMIN = 0x1Fa3E4718168077975fF4039304CC2e19Ae58c4C;
 
   MarketParams params;
@@ -247,14 +251,14 @@ contract PositionMigratorYieldAccountTest is Test {
     assertEq(migrator.migrationDeadline(), 0);
     vm.prank(bot);
     vm.expectRevert("deadline not set");
-    migrator.forceMigrate(params, 0);
+    migrator.forceMigrate(YIELD_ACCOUNT_OWNER, params, true, 0);
 
     vm.prank(TIMELOCK);
     migrator.setMigrationDeadline(block.timestamp + 30 days);
 
     vm.prank(bot);
     vm.expectRevert("migration window open");
-    migrator.forceMigrate(params, 0);
+    migrator.forceMigrate(YIELD_ACCOUNT_OWNER, params, true, 0);
   }
 
   function test_forceMigrate_afterDeadline_withoutOwnerTx() public {
@@ -271,7 +275,7 @@ contract PositionMigratorYieldAccountTest is Test {
 
     // the owner sends no transaction here — the bot does the whole thing
     vm.prank(bot);
-    migrator.forceMigrate(params, 0);
+    migrator.forceMigrate(YIELD_ACCOUNT_OWNER, params, true, 0);
 
     Position memory accountPos = MOOLAH.position(id, address(account));
     assertGt(accountPos.collateral, 0);
@@ -295,11 +299,11 @@ contract PositionMigratorYieldAccountTest is Test {
 
     vm.prank(YIELD_ACCOUNT_OWNER);
     vm.expectRevert();
-    migrator.forceMigrate(params, 0);
+    migrator.forceMigrate(YIELD_ACCOUNT_OWNER, params, true, 0);
 
     vm.prank(manager);
     vm.expectRevert();
-    migrator.forceMigrate(params, 0);
+    migrator.forceMigrate(YIELD_ACCOUNT_OWNER, params, true, 0);
   }
 
   function test_forceMigrate_stillNeedsAccountAuthorization() public {
@@ -312,7 +316,7 @@ contract PositionMigratorYieldAccountTest is Test {
 
     vm.prank(bot);
     vm.expectRevert("account not authorized");
-    migrator.forceMigrate(params, 0);
+    migrator.forceMigrate(YIELD_ACCOUNT_OWNER, params, true, 0);
 
     // MANAGER can restore it without the owner, since the address is TimeLock-chosen
     vm.prank(manager);
@@ -320,7 +324,7 @@ contract PositionMigratorYieldAccountTest is Test {
     migrator.INTERACTION().drip(migrator.cdpBnbCollateral());
     _fundMarket(migrator.INTERACTION().borrowed(migrator.cdpBnbCollateral(), YIELD_ACCOUNT_OWNER) * 2);
     vm.prank(bot);
-    migrator.forceMigrate(params, 0);
+    migrator.forceMigrate(YIELD_ACCOUNT_OWNER, params, true, 0);
     assertGt(MOOLAH.position(id, address(account)).collateral, 0);
   }
 
@@ -450,7 +454,7 @@ contract PositionMigratorYieldAccountTest is Test {
 
     vm.prank(bot);
     vm.expectRevert("deadline not set");
-    migrator.forceMigrate(params, 0);
+    migrator.forceMigrate(YIELD_ACCOUNT_OWNER, params, true, 0);
   }
 
   /// @dev an extension has to reopen the window; nudging an already-passed deadline forward only
@@ -470,7 +474,169 @@ contract PositionMigratorYieldAccountTest is Test {
     migrator.extendMigrationDeadline(block.timestamp + 5 days);
     vm.prank(bot);
     vm.expectRevert("migration window open");
-    migrator.forceMigrate(params, 0);
+    migrator.forceMigrate(YIELD_ACCOUNT_OWNER, params, true, 0);
+  }
+
+  /* ----------------------------- forced migration, other accounts ----------------------------- */
+
+  /// @dev the widened signature has to thread `onBehalf` through to the CDP read. A whitelisted
+  ///      account with no CDP debt stops at its own empty position; with the old hardcoded
+  ///      YIELD_ACCOUNT_OWNER this would have read the whale's position and proceeded.
+  function test_forceMigrate_readsTheGivenAccountsCdp() public {
+    address other = makeAddr("otherCdpUser");
+    address[] memory wl = new address[](1);
+    wl[0] = other;
+    vm.prank(manager);
+    migrator.updateWhitelist(wl, true);
+
+    vm.prank(TIMELOCK);
+    migrator.setMigrationDeadline(block.timestamp + 1);
+    vm.warp(block.timestamp + 2);
+
+    // the whale does have debt, so reverting here can only mean `other` was the account read
+    address cdpBnb = migrator.cdpBnbCollateral();
+    assertGt(migrator.INTERACTION().borrowed(cdpBnb, YIELD_ACCOUNT_OWNER), 0, "whale has no debt");
+    assertEq(migrator.INTERACTION().borrowed(cdpBnb, other), 0, "other should be empty");
+
+    vm.prank(bot);
+    vm.expectRevert("no debt to migrate");
+    migrator.forceMigrate(other, params, true, 0);
+  }
+
+  /// @dev Exercises the real deployed migrator proxy, upgraded to this build, instead of the test's
+  ///      own instance. The non-BNB path needs that: `Interaction.withdrawFor` reads `migrator()`
+  ///      with an internal call, so setUp's `vm.mockCall` cannot redirect it and only the real
+  ///      migrator address is accepted. This also mirrors what the mainnet upgrade actually does.
+  function _realMigrator() internal returns (PositionMigrator real) {
+    address interactionProxy = address(migrator.INTERACTION());
+    address newImpl = address(new PositionMigrator());
+
+    vm.startPrank(TIMELOCK);
+    // setUp downgraded Interaction to the lib source, whose `migrator()` is still a `pure` stub
+    // returning 0; put the deployed implementation back
+    IProxyAdmin(PROXY_ADMIN).upgrade(interactionProxy, 0xCe338985A4B241605955Dd77C917aA040E110ED3);
+    PositionMigrator(MAINNET_MIGRATOR).upgradeToAndCall(newImpl, "");
+    vm.stopPrank();
+
+    real = PositionMigrator(MAINNET_MIGRATOR);
+    bytes32 botRole = real.BOT();
+    vm.prank(TIMELOCK);
+    real.grantRole(botRole, bot);
+  }
+
+  function _btcbMarket() internal pure returns (MarketParams memory) {
+    return
+      MarketParams({
+        loanToken: 0x0782b6d8c4551B9760e74c0545a9bCD90bdc41E5,
+        collateralToken: BTCB,
+        oracle: 0xf3afD82A4071f272F403dC176916141f44E6c750,
+        irm: 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c,
+        lltv: 86 * 1e16
+      });
+  }
+
+  /// @dev the widened signature's real purpose: a non-routed account with a BTCB CDP position is
+  ///      force-migrated into its own Moolah position, keeping the collateral. The lisUSD/BTCB 86%
+  ///      market has no broker and no provider — the branch BTCB must take.
+  /// @dev the account must have authorized the migrator on Moolah first: without a YieldAccount
+  ///      there is nothing the protocol can authorize on its behalf, so this is only half-forced.
+  function test_forceMigrate_btcbLandsInOwnPosition() public {
+    PositionMigrator real = _realMigrator();
+    MarketParams memory btcbParams = _btcbMarket();
+    Id btcbId = btcbParams.id();
+    assertEq(MOOLAH.brokers(btcbId), address(0), "market must have no broker");
+    assertTrue(real.isWhitelisted(BTCB_USER), "user already whitelisted on mainnet");
+
+    real.INTERACTION().drip(BTCB);
+    uint256 debt = real.INTERACTION().borrowed(BTCB, BTCB_USER);
+    uint256 locked = real.INTERACTION().locked(BTCB, BTCB_USER);
+    assertGt(debt, 0, "picked account has no BTCB debt at this block");
+
+    // the account's own opt-in; the protocol cannot supply this for a plain position
+    vm.prank(BTCB_USER);
+    MOOLAH.setAuthorization(address(real), true);
+
+    vm.prank(TIMELOCK);
+    real.setMigrationDeadline(block.timestamp + 1);
+    vm.warp(block.timestamp + 2);
+
+    vm.prank(bot);
+    real.forceMigrate(BTCB_USER, btcbParams, false, 0);
+
+    // landed on the account itself, not any YieldAccount
+    Position memory own = MOOLAH.position(btcbId, BTCB_USER);
+    assertApproxEqAbs(own.collateral, locked, 1, "collateral did not land on the account");
+    assertGt(own.borrowShares, 0, "no debt was carried over");
+
+    // CDP emptied, nothing stranded in the migrator
+    assertEq(real.INTERACTION().borrowed(BTCB, BTCB_USER), 0, "CDP debt remains");
+    assertEq(real.INTERACTION().locked(BTCB, BTCB_USER), 0, "CDP collateral remains");
+    assertEq(LISUSD.balanceOf(address(real)), 0);
+    assertEq(IERC20(BTCB).balanceOf(address(real)), 0);
+  }
+
+  /// @dev without the account's own Moolah authorization the borrow leg cannot run
+  function test_forceMigrate_otherAccountNeedsMoolahAuthorization() public {
+    PositionMigrator real = _realMigrator();
+    MarketParams memory btcbParams = _btcbMarket();
+
+    vm.prank(TIMELOCK);
+    real.setMigrationDeadline(block.timestamp + 1);
+    vm.warp(block.timestamp + 2);
+
+    assertFalse(MOOLAH.isAuthorized(BTCB_USER, address(real)), "precondition: not authorized");
+    vm.prank(bot);
+    vm.expectRevert(bytes("unauthorized"));
+    real.forceMigrate(BTCB_USER, btcbParams, false, 0);
+  }
+
+  function test_forceMigrate_rejectsNonWhitelisted() public {
+    address stranger = makeAddr("strangerCdpUser");
+    vm.prank(TIMELOCK);
+    migrator.setMigrationDeadline(block.timestamp + 1);
+    vm.warp(block.timestamp + 2);
+
+    vm.prank(bot);
+    vm.expectRevert("not whitelisted");
+    migrator.forceMigrate(stranger, params, true, 0);
+  }
+
+  /// @dev widening the signature must not open a slisBNB-ilk route for the routed account
+  function test_forceMigrate_routedAccountStillRequiresBnb() public {
+    vm.prank(TIMELOCK);
+    migrator.setMigrationDeadline(block.timestamp + 1);
+    vm.warp(block.timestamp + 2);
+
+    vm.prank(bot);
+    vm.expectRevert("routed migration must be bnb");
+    migrator.forceMigrate(YIELD_ACCOUNT_OWNER, params, false, 0);
+  }
+
+  /// @dev the event has to name the account now that more than one can be forced
+  function test_forceMigrate_eventNamesTheAccount() public {
+    address cdpBnb = migrator.cdpBnbCollateral();
+    migrator.INTERACTION().drip(cdpBnb);
+    uint256 debt = migrator.INTERACTION().borrowed(cdpBnb, YIELD_ACCOUNT_OWNER);
+    _fundMarket(debt * 2);
+
+    vm.prank(TIMELOCK);
+    migrator.setMigrationDeadline(block.timestamp + 1);
+    vm.warp(block.timestamp + 2);
+
+    vm.recordLogs();
+    vm.prank(bot);
+    migrator.forceMigrate(YIELD_ACCOUNT_OWNER, params, true, 0);
+
+    VmSafe.Log[] memory logs = vm.getRecordedLogs();
+    bool seen;
+    for (uint256 i = 0; i < logs.length; ++i) {
+      if (logs[i].topics[0] == PositionMigrator.ForcedMigration.selector) {
+        seen = true;
+        assertEq(address(uint160(uint256(logs[i].topics[1]))), bot, "bot");
+        assertEq(address(uint160(uint256(logs[i].topics[2]))), YIELD_ACCOUNT_OWNER, "onBehalf");
+      }
+    }
+    assertTrue(seen, "ForcedMigration not emitted");
   }
 
   function _otherMarket() internal view returns (MarketParams memory) {
