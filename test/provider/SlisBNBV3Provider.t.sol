@@ -968,24 +968,25 @@ contract SlisBNBV3ProviderTest is Test {
     assertGe(used1, min1, "used1 >= min1");
   }
 
-  function test_previewDeposit_belowRangeSpot_usesFairCompositionBothLegs() public {
+  /// @dev preview (and deposit) bind to the composition the vault holds right now — the same one
+  ///      removeLiquidity hands back — so below the range only the token0 leg is consumed.
+  function test_previewDeposit_belowRangeSpot_usesLiveComposition() public {
     _deposit(user, 10 ether, 10 ether);
-    _pushPriceBelowRange(); // manipulate SPOT below range
+    _pushPriceBelowRange();
 
-    // preview (and deposit) bind to the FAIR composition — rate-implied for slisBNB, which stays
-    // ~in-range — so both legs are consumed regardless of where the manipulable pool spot sits.
     (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(10 ether, 10 ether);
-    assertGt(exp0, 0, "fair composition consumes token0 regardless of spot");
-    assertGt(exp1, 0, "fair composition consumes token1 regardless of spot");
+    assertGt(exp0, 0, "live composition consumes token0");
+    assertEq(exp1, 0, "live composition holds no token1 below the range");
   }
 
-  function test_previewDeposit_aboveRangeSpot_usesFairCompositionBothLegs() public {
+  /// @dev Mirror above the range: only the token1 leg is consumed.
+  function test_previewDeposit_aboveRangeSpot_usesLiveComposition() public {
     _deposit(user, 10 ether, 10 ether);
-    _pushPriceAboveRange(); // manipulate SPOT above range
+    _pushPriceAboveRange();
 
     (, uint256 exp0, uint256 exp1) = provider.previewDepositAmounts(10 ether, 10 ether);
-    assertGt(exp0, 0, "fair composition consumes token0 regardless of spot");
-    assertGt(exp1, 0, "fair composition consumes token1 regardless of spot");
+    assertEq(exp0, 0, "live composition holds no token0 above the range");
+    assertGt(exp1, 0, "live composition consumes token1");
   }
 
   /* ───────────── deposit crediting: min(fair, spot) shares ───────────── */
@@ -1076,14 +1077,14 @@ contract SlisBNBV3ProviderTest is Test {
     vm.stopPrank();
   }
 
-  function test_previewDepositForToken_pairsLegsAtFairComposition() public {
+  function test_previewDepositForToken_pairsLegsAtLiveComposition() public {
     _deposit(user, 10 ether, 10 ether);
 
-    (uint256 t0, uint256 t1) = provider.getFairComposition();
-    assertGt(t0, 0, "fair composition token0 > 0");
-    assertGt(t1, 0, "fair composition token1 > 0");
+    (uint256 t0, uint256 t1) = provider.getTotalAmounts();
+    assertGt(t0, 0, "live composition token0 > 0");
+    assertGt(t1, 0, "live composition token1 > 0");
 
-    // token0 -> matching token1 at the fair ratio.
+    // token0 -> matching token1 at the live ratio deposit() binds to.
     uint256 a0 = 5 ether;
     uint256 a1 = provider.previewDepositForToken0(a0);
     assertEq(a1, (a0 * t1) / t0, "previewDepositForToken0 = a0 * T1 / T0");
@@ -1313,21 +1314,33 @@ contract SlisBNBV3ProviderTest is Test {
   // When the price is outside the range only one token is valid.
   // Supplying the correct token succeeds; supplying the wrong token reverts.
 
-  function test_deposit_oneSided_token0Only_revertsUnderProportional() public {
-    // Deposits must match the FAIR composition (rate-implied for slisBNB, always ~in-range and
-    // therefore two-sided). A one-sided token0-only deposit binds the composition fraction to the empty
-    // token1 leg -> frac 0 -> 0 shares -> revert. (Manipulating spot out of range does not change this,
-    // because the composition is measured at fair, not spot.)
+  /// @dev Deposits bind to the composition the vault actually holds. Below the range that composition
+  ///      has no token1 leg, so a token0-only deposit is the proportional shape and is accepted — and it
+  ///      must still be value-neutral: an immediate exit returns no more than went in. In range the same
+  ///      one-sided shape reverts (see test_deposit_oneSided_token0Only_inRange_reverts).
+  function test_deposit_oneSided_token0Only_belowRangeIsProportional() public {
     _deposit(user, 10 ether, 10 ether);
     _pushPriceBelowRange();
 
-    uint256 amount0 = 10 ether;
+    (uint256 s0, uint256 s1) = adapter.positionAmountsAt(adapter.spotSqrtPriceX96());
+    assertEq(s1, 0, "below range: live composition holds no token1");
+    assertGt(s0, 0, "below range: live composition holds token0");
+
+    uint256 amount0 = s0 / 10;
     deal(SLISBNB, user2, amount0);
     vm.startPrank(user2);
     IERC20(SLISBNB).approve(address(provider), amount0);
-    vm.expectRevert(); // ZeroShares
-    provider.deposit(marketParams, amount0, 0, 0, 0, 0, user2);
+    (uint256 shares, uint256 u0, uint256 u1) = provider.deposit(marketParams, amount0, 0, 0, 0, 0, user2);
     vm.stopPrank();
+
+    assertGt(shares, 0, "proportional one-sided deposit mints");
+    assertEq(u1, 0, "no token1 consumed");
+
+    vm.prank(user2);
+    provider.withdrawShares(marketParams, shares, user2, user2);
+    vm.prank(user2);
+    (uint256 back0, uint256 back1) = provider.redeemShares(shares, 0, 0, user2);
+    assertLe(_valueUSD(back0, back1), _valueUSD(u0, u1), "one-sided entry must not extract value");
   }
 
   function test_deposit_oneSided_token1Only_belowRange_reverts() public {
@@ -1344,18 +1357,31 @@ contract SlisBNBV3ProviderTest is Test {
     vm.stopPrank();
   }
 
-  function test_deposit_oneSided_token1Only_revertsUnderProportional() public {
-    // Symmetric to the token0-only case: a token1-only deposit binds frac to the empty token0 leg -> 0.
+  /// @dev Mirror of the token0-only case: above the range the live composition has no token0 leg, so a
+  ///      token1-only deposit is the proportional shape, is accepted, and extracts no value.
+  function test_deposit_oneSided_token1Only_aboveRangeIsProportional() public {
     _deposit(user, 10 ether, 10 ether);
     _pushPriceAboveRange();
 
-    uint256 amount1 = 10 ether;
+    (uint256 s0, uint256 s1) = adapter.positionAmountsAt(adapter.spotSqrtPriceX96());
+    assertEq(s0, 0, "above range: live composition holds no token0");
+    assertGt(s1, 0, "above range: live composition holds token1");
+
+    uint256 amount1 = s1 / 10;
     deal(WBNB, user2, amount1);
     vm.startPrank(user2);
     IERC20(WBNB).approve(address(provider), amount1);
-    vm.expectRevert(); // ZeroShares
-    provider.deposit(marketParams, 0, amount1, 0, 0, 0, user2);
+    (uint256 shares, uint256 u0, uint256 u1) = provider.deposit(marketParams, 0, amount1, 0, 0, 0, user2);
     vm.stopPrank();
+
+    assertGt(shares, 0, "proportional one-sided deposit mints");
+    assertEq(u0, 0, "no token0 consumed");
+
+    vm.prank(user2);
+    provider.withdrawShares(marketParams, shares, user2, user2);
+    vm.prank(user2);
+    (uint256 back0, uint256 back1) = provider.redeemShares(shares, 0, 0, user2);
+    assertLe(_valueUSD(back0, back1), _valueUSD(u0, u1), "one-sided entry must not extract value");
   }
 
   function test_deposit_oneSided_token0Only_aboveRange_reverts() public {
@@ -2724,7 +2750,7 @@ contract SlisBNBV3ProviderTest is Test {
     _deposit(user, 10 ether, 10 ether); // establish supply > 0
 
     uint256 supplyBefore = provider.totalSupply();
-    (uint256 t0, uint256 t1) = adapter.positionAmountsAt(adapter.fairSqrtPriceX96());
+    (uint256 t0, uint256 t1) = adapter.positionAmountsAt(adapter.spotSqrtPriceX96());
 
     uint256 d0 = 7 ether;
     uint256 d1 = 5 ether; // deliberately imbalanced so t*frac/WAD has a remainder

@@ -391,13 +391,14 @@ contract SlisBNBV3ProviderRateTest is Test {
     provider.rebalance(0, 0, type(uint256).max, 0, 0, block.timestamp, "");
   }
 
-  /* ────────── fair drifted past tickUpper: deposits closed until recenter ────────── */
+  /* ────────── fair drifted past tickUpper: deposits stay open on the live composition ────────── */
 
-  /// @dev Once fair sits at/above tickUpper the fair composition has no token0 leg, so the pinned
-  ///      zero-token0 consumption prices to 0 on the spot leg and shares = min(fair, spot) = 0. Every
-  ///      deposit shape reverts, including the token1-only one, and a BOT recenter is the only exit.
-  ///      Pins the behaviour previewDepositForToken0's natspec documents.
-  function test_deposit_closedWhileFairAboveRange_untilRecenter() public {
+  /// @dev Once fair sits at/above tickUpper the FAIR composition loses its token0 leg, but deposits bind
+  ///      to the composition the vault actually holds, which is still two-sided while spot sits inside
+  ///      the old range. Deposits therefore stay open and stay pro-rata; the rate drift is a signal for
+  ///      the BOT to recenter, not a deposit outage. The share ORACLE still reads the fair composition,
+  ///      so it saturates one-sided in this state — that gap is what haircutBps carries.
+  function test_deposit_staysOpenWhileFairAboveRange() public {
     _deposit(10 ether, 10 ether);
 
     // Push the rate 1% up so fair clears the +0.5% range edge; spot stays inside the old range.
@@ -407,31 +408,33 @@ contract SlisBNBV3ProviderRateTest is Test {
 
     (uint256 t0, ) = provider.getFairComposition();
     assertEq(t0, 0, "fair token0 leg gone");
-    assertEq(provider.previewDepositShares(10 ether, 10 ether), 0, "preview quotes 0");
-    vm.expectRevert(V3Provider.ZeroAmounts.selector);
-    provider.previewDepositForToken0(1 ether);
 
-    // Every shape reverts, including the token1-only one.
-    deal(SLISBNB, user, 10 ether);
-    deal(WBNB, user, 10 ether);
+    (uint256 s0, uint256 s1) = provider.getTotalAmounts();
+    assertGt(s0, 0, "live composition still holds token0");
+    assertGt(s1, 0, "live composition still holds token1");
+
+    uint256 supplyBefore = provider.totalSupply();
+    uint256 credited = provider.previewDepositShares(s0 / 10, s1 / 10);
+    assertApproxEqRel(credited, supplyBefore / 10, 1e12, "credit stays pro-rata of the live composition");
+    assertGt(provider.previewDepositForToken0(1 ether), 0, "pairing still available");
+
+    // A pro-rata deposit lands and mints the pro-rata credit.
+    deal(SLISBNB, user, s0 / 10);
+    deal(WBNB, user, s1 / 10);
     vm.startPrank(user);
     IERC20(SLISBNB).approve(address(provider), type(uint256).max);
     IERC20(WBNB).approve(address(provider), type(uint256).max);
-    vm.expectRevert(V3Provider.ZeroShares.selector);
-    provider.deposit(marketParams, 10 ether, 10 ether, 0, 0, 0, user);
-    vm.expectRevert(V3Provider.ZeroShares.selector);
-    provider.deposit(marketParams, 0, 10 ether, 0, 0, 0, user);
-    vm.expectRevert(V3Provider.ZeroShares.selector);
-    provider.deposit(marketParams, 10 ether, 0, 0, 0, 0, user);
+    (uint256 shares, , ) = provider.deposit(marketParams, s0 / 10, s1 / 10, 0, 0, 0, user);
     vm.stopPrank();
+    assertApproxEqRel(shares, supplyBefore / 10, 1e12, "minted credit is pro-rata");
 
-    // Withdraw still works, so the vault can only shrink while in this state.
+    // Withdraw still works.
     assertGt(provider.balanceOf(user) + _collateralOf(user), 0, "holder still exits");
 
-    // A BOT recenter reopens deposits.
+    // A BOT recenter leaves deposits open.
     vm.prank(bot);
     provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
-    assertGt(provider.previewDepositShares(10 ether, 10 ether), 0, "deposits reopen");
+    assertGt(provider.previewDepositShares(1 ether, 1 ether), 0, "deposits still open after recenter");
   }
 
   function _collateralOf(address who) internal view returns (uint256 col) {

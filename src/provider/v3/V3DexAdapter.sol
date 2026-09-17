@@ -122,7 +122,8 @@ abstract contract V3DexAdapter is
 
   /// @dev Range margins below / above the rate-derived center, in BPS; set at deploy. Split because the
   ///      sides do different jobs: lower must cover the LST's structural discount; upper is the drift
-  ///      budget and bounds the min(fair,spot) deposit haircut, which grows as discount/(upper + discount).
+  ///      budget. It also bounds the deposit-at-fair / exit-at-edge round trip, whose gain over a full
+  ///      traverse of the band is (upper + lower)/8 of the position value.
   uint256 public rangeLowerBps;
   uint256 public rangeUpperBps;
 
@@ -380,7 +381,7 @@ abstract contract V3DexAdapter is
   /// @inheritdoc IV3DexAdapter
   function creditIdle(uint256 amount0, uint256 amount1) external onlyProvider nonReentrant {
     // The provider transfers `amount0`/`amount1` here before calling; record them as idle inventory
-    // rather than minting into the pool. Deposits enter as idle at the current fair composition ratio
+    // rather than minting into the pool. Deposits enter as idle at the current live composition ratio
     // (priced off-pool), then a later spot-gated compound() deploys them — this is what keeps share
     // issuance free of the pool spot price. Assert the tokens really arrived so idle never exceeds the
     // adapter's spendable balance (INV: idleTokenX <= balanceOf(this)).
