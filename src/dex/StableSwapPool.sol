@@ -281,7 +281,7 @@ contract StableSwapPool is
   function add_liquidity(
     uint256[N_COINS] calldata amounts,
     uint256 min_mint_amount
-  ) external payable whenNotPaused nonReentrant {
+  ) external payable nonReentrant {
     //Amounts is amounts of c-tokens
     if (!support_BNB) {
       require(msg.value == 0, "Inconsistent quantity"); // Avoid sending BNB by mistake.
@@ -542,7 +542,7 @@ contract StableSwapPool is
   function remove_liquidity_imbalance(
     uint256[N_COINS] calldata amounts,
     uint256 max_burn_amount
-  ) external whenNotPaused nonReentrant {
+  ) external nonReentrant {
     uint256 token_supply = IStableSwapLP(token).totalSupply();
     require(token_supply > 0, "dev: zero total supply");
     uint256 _fee = (fee * N_COINS) / (4 * (N_COINS - 1));
@@ -679,7 +679,7 @@ contract StableSwapPool is
     uint256 _token_amount,
     uint256 i,
     uint256 min_amount
-  ) external whenNotPaused nonReentrant {
+  ) external nonReentrant {
     // Remove `_token_amount` of liquidity all in a form of coin i
     (uint256 dy, uint256 dy_fee) = _calc_withdraw_one_coin(_token_amount, i);
     require(dy >= min_amount, "Not enough coins removed");
