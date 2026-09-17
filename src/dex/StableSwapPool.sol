@@ -542,7 +542,7 @@ contract StableSwapPool is
   function remove_liquidity_imbalance(
     uint256[N_COINS] calldata amounts,
     uint256 max_burn_amount
-  ) external nonReentrant {
+  ) external whenNotPaused nonReentrant {
     uint256 token_supply = IStableSwapLP(token).totalSupply();
     require(token_supply > 0, "dev: zero total supply");
     uint256 _fee = (fee * N_COINS) / (4 * (N_COINS - 1));
@@ -679,7 +679,7 @@ contract StableSwapPool is
     uint256 _token_amount,
     uint256 i,
     uint256 min_amount
-  ) external nonReentrant {
+  ) external whenNotPaused nonReentrant {
     // Remove `_token_amount` of liquidity all in a form of coin i
     (uint256 dy, uint256 dy_fee) = _calc_withdraw_one_coin(_token_amount, i);
     require(dy >= min_amount, "Not enough coins removed");
@@ -806,7 +806,7 @@ contract StableSwapPool is
   }
 
   /// @dev donate admin fees as pool reserves
-  function donate_admin_fees() external onlyRole(MANAGER) {
+  function donate_admin_fees() external whenNotPaused onlyRole(MANAGER) {
     for (uint256 i = 0; i < N_COINS; i++) {
       if (coins[i] == BNB_ADDRESS) {
         balances[i] = address(this).balance;
