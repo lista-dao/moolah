@@ -38,9 +38,23 @@ library V3ProviderLib {
     return _amountsValueUsd(c, amount0, amount1);
   }
 
-  /// @notice The shares a deposit mints and the amounts it consumes — the min(fair, spot) credit.
-  /// @dev Consumed amounts are pinned to the FAIR composition and rounded UP (favouring holders); the
-  ///      SPOT composition then re-prices those same amounts, and the lower of the two credits wins.
+  /// @notice The shares a deposit mints and the amounts it consumes — pro-rata of the live composition.
+  /// @dev Both the consumed amounts and the share credit come from the composition the vault holds at the
+  ///      CURRENT pool price — the same composition `removeLiquidity` hands back on the way out. Issuance
+  ///      and redemption therefore share one basis, so a deposit followed by an immediate exit cancels and
+  ///      the pool price cannot tax an entry. Amounts round UP, leaving the rounding surplus with the
+  ///      existing holders.
+  ///
+  ///      A credit taken from the FAIR composition instead would put issuance and redemption on two
+  ///      different bases, and the gap between them is exactly the deposit-withdraw cycle Bailsec raised
+  ///      (Issue_05). Capping the credit with a spot-composition `min()` does not close that gap either:
+  ///      the per-leg fraction is first order in the spot-vs-fair deviation, so it taxes an ordinary
+  ///      deposit far harder than the second-order leak it was meant to remove.
+  ///
+  ///      The pool price stays out of the *collateral valuation* path: {V3ProviderOracle} still prices the
+  ///      share off the rate-anchored fair composition. That is not a second basis an attacker can
+  ///      arbitrage — it mints and burns nothing — and by LP convexity a redemption at any spot returns at
+  ///      least the oracle's fair value, so the oracle errs conservative. `haircutBps` carries that gap.
   function quoteDeposit(
     Ctx memory c,
     uint256 supplyBefore,
@@ -48,19 +62,13 @@ library V3ProviderLib {
     uint256 amount1Desired
   ) external view returns (uint256 shares, uint256 amount0Used, uint256 amount1Used) {
     IV3DexAdapter adapter = IV3DexAdapter(c.adapter);
-    (uint256 t0, uint256 t1) = adapter.positionAmountsAt(adapter.fairSqrtPriceX96());
+    (uint256 t0, uint256 t1) = adapter.positionAmountsAt(adapter.spotSqrtPriceX96());
     if (_amountsValueUsd(c, t0, t1) == 0) revert ZeroShares();
 
     uint256 frac = _compositionFractionWad(amount0Desired, amount1Desired, t0, t1);
     amount0Used = (t0 * frac + WAD - 1) / WAD;
     amount1Used = (t1 * frac + WAD - 1) / WAD;
-
-    uint256 sharesFair = (supplyBefore * frac) / WAD;
-    (uint256 s0, uint256 s1) = adapter.positionAmountsAt(adapter.spotSqrtPriceX96());
-    uint256 sharesSpot = (s0 == 0 && s1 == 0)
-      ? type(uint256).max // degenerate spot composition: do not let it lower the credit
-      : (supplyBefore * _compositionFractionWad(amount0Used, amount1Used, s0, s1)) / WAD;
-    shares = sharesFair < sharesSpot ? sharesFair : sharesSpot;
+    shares = (supplyBefore * frac) / WAD;
   }
 
   function _amountsValueUsd(Ctx memory c, uint256 amount0, uint256 amount1) internal view returns (uint256) {
