@@ -154,6 +154,12 @@ interface IV3DexAdapter {
   ///         rebalance (0 disables the guard).
   function maxCenterRateDeviationBps() external view returns (uint256);
 
+  function rangeLowerBps() external view returns (uint256);
+
+  function rangeUpperBps() external view returns (uint256);
+
+  function setRangeBps(uint256 rangeLowerBps, uint256 rangeUpperBps) external;
+
   /// @notice Set the center-rate deviation gate (onlyRole MANAGER; bps, 0 disables).
   function setMaxCenterRateDeviationBps(uint256 maxCenterRateDeviationBps) external;
 

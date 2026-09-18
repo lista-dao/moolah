@@ -17,6 +17,7 @@ import { IOracle } from "moolah/interfaces/IOracle.sol";
 import { IWBNB } from "../interfaces/IWBNB.sol";
 import { IV3Provider } from "../interfaces/IV3Provider.sol";
 import { IV3DexAdapter } from "../interfaces/IV3DexAdapter.sol";
+import { V3ProviderLib } from "../libraries/V3ProviderLib.sol";
 
 /**
  * @title V3Provider
@@ -90,8 +91,12 @@ abstract contract V3Provider is
   /// @dev Cumulative rebalance loss (8-decimal USD) recorded so far for `dailyLossDay`.
   uint256 public dailyLossAccum;
 
+  /// @dev Gate on the deposit entry point only. Disabled by default; flip on for a gated launch.
+  bool public depositWhitelistEnabled;
+  mapping(address => bool) public depositWhitelist;
+
   /// @dev Reserved storage for future base variables (keep subclass storage stable on upgrade).
-  uint256[46] private __gap;
+  uint256[44] private __gap;
 
   /* ───────────────────────────── events ───────────────────────────── */
 
@@ -115,6 +120,8 @@ abstract contract V3Provider is
   event SharesRedeemed(address indexed redeemer, uint256 shares, uint256 amount0, uint256 amount1, address receiver);
   event MaxRebalanceLossBpChanged(uint256 maxRebalanceLossBp);
   event MaxDailyLossUsdChanged(uint256 maxDailyLossUsd);
+  event DepositWhitelistEnabledChanged(bool enabled);
+  event DepositWhitelistChanged(address indexed account, bool allowed);
   event RebalanceDailyLossAccrued(uint256 indexed day, uint256 loss, uint256 accum);
 
   /* ───────────────────────────── errors ───────────────────────────── */
@@ -127,6 +134,7 @@ abstract contract V3Provider is
   error Unauthorized();
   error InsufficientShares();
   error OnlyMoolah();
+  error NotWhitelisted();
   error InvalidMarket();
   error StandardEntryDisabled();
   error BnbTransferFailed();
@@ -195,6 +203,21 @@ abstract contract V3Provider is
     emit MaxDailyLossUsdChanged(maxDailyLossUsd);
   }
 
+  /// @notice Turn the deposit whitelist on or off. onlyRole MANAGER.
+  function setDepositWhitelistEnabled(bool enabled) external onlyRole(MANAGER) {
+    depositWhitelistEnabled = enabled;
+    emit DepositWhitelistEnabledChanged(enabled);
+  }
+
+  /// @notice Allow or disallow an account on the deposit whitelist. onlyRole MANAGER.
+  /// @dev    Removing an account only closes new deposits — it never blocks that account's withdraw,
+  ///         redeem or liquidation. Batch through a multicall when listing several at once.
+  function setDepositWhitelist(address account, bool allowed) external onlyRole(MANAGER) {
+    if (account == address(0)) revert ZeroAddress();
+    depositWhitelist[account] = allowed;
+    emit DepositWhitelistChanged(account, allowed);
+  }
+
   /* ──────────────────── ERC20 transfer restrictions ───────────────── */
 
   /// @dev Only Moolah may transfer shares (prevents orphaning the position by moving collateral out).
@@ -229,6 +252,9 @@ abstract contract V3Provider is
   ) external payable nonReentrant returns (uint256 shares, uint256 amount0Used, uint256 amount1Used) {
     if (marketParams.collateralToken != address(this)) revert InvalidCollateralToken();
     if (onBehalf == address(0)) revert ZeroAddress();
+    // Check both: gating only msg.sender would let a whitelisted caller open a position for anyone.
+    if (depositWhitelistEnabled && (!depositWhitelist[msg.sender] || !depositWhitelist[onBehalf]))
+      revert NotWhitelisted();
 
     uint256 _amount0Desired = amount0Desired;
     uint256 _amount1Desired = amount1Desired;
@@ -385,6 +411,9 @@ abstract contract V3Provider is
     if (shares == 0) revert ZeroShares();
     if (receiver == address(0)) revert ZeroAddress();
     if (!_isSenderAuthorized(onBehalf)) revert Unauthorized();
+    // Reassigning collateral hands shares to an address the gate never saw; withdrawing to yourself
+    // stays open so a delisted holder is never trapped.
+    if (depositWhitelistEnabled && receiver != onBehalf) revert NotWhitelisted();
 
     // No inline compound — deploying liquidity is BOT-gated. The health check still counts pending fees:
     // the oracle prices the share via positionAmountsAt(fair), which is fee-inclusive.
@@ -401,6 +430,10 @@ abstract contract V3Provider is
     if (shares == 0) revert ZeroShares();
     if (onBehalf == address(0)) revert ZeroAddress();
     if (balanceOf(msg.sender) < shares) revert InsufficientShares();
+    // Opening a position is an entry, gated like deposit(). A delisted holder keeps their shares and
+    // can still redeemShares().
+    if (depositWhitelistEnabled && (!depositWhitelist[msg.sender] || !depositWhitelist[onBehalf]))
+      revert NotWhitelisted();
 
     // No inline compound — deploying liquidity is BOT-gated. The health check still counts pending fees:
     // the oracle prices the share via positionAmountsAt(fair), which is fee-inclusive.
@@ -560,12 +593,12 @@ abstract contract V3Provider is
 
   /// @dev Value token0/token1 amounts as 8-decimal USD through the resilient oracle.
   function _amountsValueUsd(uint256 amount0, uint256 amount1) internal view returns (uint256) {
-    uint256 price0 = IOracle(resilientOracle).peek(TOKEN0); // 8 decimals
-    uint256 price1 = IOracle(resilientOracle).peek(TOKEN1); // 8 decimals
-    // Fail closed: a broken feed on either leg (price 0) must revert, not silently value the position on
-    // one leg (which would under-price the collateral and enable unfair liquidation / over-borrow).
-    if (price0 == 0 || price1 == 0) revert OracleZero();
-    return (amount0 * price0) / (10 ** DECIMALS0) + (amount1 * price1) / (10 ** DECIMALS1);
+    return V3ProviderLib.amountsValueUsd(_quoteCtx(), amount0, amount1);
+  }
+
+  /// @dev The vault immutables the library needs; they are invisible to it under DELEGATECALL.
+  function _quoteCtx() internal view returns (V3ProviderLib.Ctx memory) {
+    return V3ProviderLib.Ctx(ADAPTER, resilientOracle, TOKEN0, TOKEN1, DECIMALS0, DECIMALS1);
   }
 
   /// @dev WAD-fraction of a composition covered by given amounts, on the binding (smaller) leg:
@@ -576,18 +609,6 @@ abstract contract V3Provider is
   /// @param comp0   token0 of the composition priced against.
   /// @param comp1   token1 of the composition priced against.
   /// @return WAD-scaled fraction (1e18 == the full composition).
-  function _compositionFractionWad(
-    uint256 amount0,
-    uint256 amount1,
-    uint256 comp0,
-    uint256 comp1
-  ) internal pure returns (uint256) {
-    if (comp0 == 0) return (amount1 * WAD) / comp1;
-    if (comp1 == 0) return (amount0 * WAD) / comp0;
-    uint256 frac0 = (amount0 * WAD) / comp0;
-    uint256 frac1 = (amount1 * WAD) / comp1;
-    return frac0 < frac1 ? frac0 : frac1;
-  }
 
   /// @dev Quote a subsequent deposit (supplyBefore > 0): consumed amounts pinned to the FAIR composition
   ///      (rounded up); shares = min(sharesFair, sharesSpot), the spot quote re-pricing the SAME consumed
@@ -604,19 +625,7 @@ abstract contract V3Provider is
     uint256 amount0Desired,
     uint256 amount1Desired
   ) internal view returns (uint256 shares, uint256 amount0Used, uint256 amount1Used) {
-    (uint256 t0, uint256 t1) = IV3DexAdapter(ADAPTER).positionAmountsAt(IV3DexAdapter(ADAPTER).fairSqrtPriceX96());
-    if (_amountsValueUsd(t0, t1) == 0) revert ZeroShares();
-
-    uint256 frac = _compositionFractionWad(amount0Desired, amount1Desired, t0, t1);
-    amount0Used = (t0 * frac + WAD - 1) / WAD;
-    amount1Used = (t1 * frac + WAD - 1) / WAD;
-
-    uint256 sharesFair = (supplyBefore * frac) / WAD;
-    (uint256 s0, uint256 s1) = IV3DexAdapter(ADAPTER).positionAmountsAt(IV3DexAdapter(ADAPTER).spotSqrtPriceX96());
-    uint256 sharesSpot = (s0 == 0 && s1 == 0)
-      ? type(uint256).max // degenerate spot composition: do not let it lower the credit
-      : (supplyBefore * _compositionFractionWad(amount0Used, amount1Used, s0, s1)) / WAD;
-    shares = sharesFair < sharesSpot ? sharesFair : sharesSpot;
+    return V3ProviderLib.quoteDeposit(_quoteCtx(), supplyBefore, amount0Desired, amount1Desired);
   }
 
   /// @dev Single-asset ERC-4626 entry is disabled — this is a two-token LP vault. Use the two-token

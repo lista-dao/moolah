@@ -135,6 +135,8 @@ contract SlisBNBV3ProviderRateTest is Test {
   address constant IRM = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
 
   uint32 constant TWAP_PERIOD = 1800;
+  uint256 constant RANGE_LOWER_BPS = 50;
+  uint256 constant RANGE_UPPER_BPS = 50;
   uint256 constant LLTV = 70 * 1e16;
   uint256 constant BNB_USD = 600e8; // mock BNB price, 8 decimals
 
@@ -183,7 +185,12 @@ contract SlisBNBV3ProviderRateTest is Test {
     // 1) DEX adapter (NFT custodian + rate/rebalance logic).
     SlisBNBV3DexAdapter adapterImpl = new SlisBNBV3DexAdapter(NPM, SLISBNB, WBNB, FEE, TWAP_PERIOD);
     adapter = SlisBNBV3DexAdapter(
-      payable(new ERC1967Proxy(address(adapterImpl), abi.encodeCall(SlisBNBV3DexAdapter.initialize, (admin, manager))))
+      payable(
+        new ERC1967Proxy(
+          address(adapterImpl),
+          abi.encodeCall(SlisBNBV3DexAdapter.initialize, (admin, manager, RANGE_LOWER_BPS, RANGE_UPPER_BPS))
+        )
+      )
     );
 
     // 2) Vault (ERC-4626 shares + Moolah wiring). accountingAsset = WBNB for these pools.

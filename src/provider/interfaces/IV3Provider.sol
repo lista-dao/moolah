@@ -25,6 +25,9 @@ interface IV3Provider is IProvider {
   /// @notice The DEX adapter holding the V3 NFT / idle inventory.
   function ADAPTER() external view returns (address);
 
+  /// @notice Resilient oracle pricing TOKEN0/TOKEN1 in 8-decimal USD.
+  function resilientOracle() external view returns (address);
+
   /// @notice Total token0/token1 backing the vault at the current pool spot (display/bots).
   function getTotalAmounts() external view returns (uint256 total0, uint256 total1);
 
@@ -103,4 +106,12 @@ interface IV3Provider is IProvider {
     uint256 minAmount1,
     address receiver
   ) external returns (uint256 amount0, uint256 amount1);
+
+  function depositWhitelistEnabled() external view returns (bool);
+
+  function depositWhitelist(address account) external view returns (bool);
+
+  function setDepositWhitelistEnabled(bool enabled) external;
+
+  function setDepositWhitelist(address account, bool allowed) external;
 }

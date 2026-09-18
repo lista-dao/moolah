@@ -58,15 +58,23 @@ contract WstETHV3DexAdapter is V3DexAdapter {
    * @param _admin   Default admin (upgrade / roles).
    * @param _manager Manager role (sets the clamp band + swap-pair whitelist).
    */
-  function initialize(address _admin, address _manager) external initializer {
-    uint256 initialCenterRate = _lstNativeRate();
-    (int24 initialTickLower, int24 initialTickUpper) = _initialTickRange(initialCenterRate);
-    __V3DexAdapter_init(_admin, _manager, initialTickLower, initialTickUpper);
+  function initialize(
+    address _admin,
+    address _manager,
+    uint256 _rangeLowerBps,
+    uint256 _rangeUpperBps,
+    uint256 _maxTwapDeviationBps
+  ) external initializer {
+    __V3DexAdapter_init(_admin, _manager, _rangeLowerBps, _rangeUpperBps);
 
-    lastCenterRate = initialCenterRate;
+    // Must stay below rangeUpperBps, or a top-of-band clamp lands past tickUpper and closes deposits.
+    if (_maxTwapDeviationBps > MAX_TWAP_DEVIATION_BPS || _maxTwapDeviationBps >= _rangeUpperBps)
+      revert InvalidDeviation();
+    maxTwapDeviationBps = _maxTwapDeviationBps;
+    emit MaxTwapDeviationChanged(_maxTwapDeviationBps);
+
+    lastCenterRate = _lstNativeRate();
     centerRateThresholdBps = 1;
-    maxTwapDeviationBps = INITIAL_RANGE_BPS; // default valuation clamp band = ±range width (±0.5%)
-    emit MaxTwapDeviationChanged(INITIAL_RANGE_BPS);
   }
 
   /* ───────────────────────── manager config ───────────────────────── */
@@ -74,6 +82,7 @@ contract WstETHV3DexAdapter is V3DexAdapter {
   /// @notice Set the TWAP-vs-rate clamp band (BPS) for the valuation price. 0 ⇒ pure rate-implied.
   function setMaxTwapDeviationBps(uint256 _maxTwapDeviationBps) external onlyRole(MANAGER) {
     if (_maxTwapDeviationBps > MAX_TWAP_DEVIATION_BPS) revert InvalidDeviation();
+    if (_maxTwapDeviationBps >= rangeUpperBps) revert InvalidDeviation();
     maxTwapDeviationBps = _maxTwapDeviationBps;
     emit MaxTwapDeviationChanged(_maxTwapDeviationBps);
   }
