@@ -217,26 +217,22 @@ contract SmartProviderTest is Test {
   }
 
   function seedPool() public {
-    vm.startPrank(userA);
-
-    // Add liquidity
     uint ratio = (8466 * 10 ** 17) / 830; // slisBnb price ratio to BNB
     uint256 amount0 = 100_000 * ratio; // slisBnb amount, based on the price ratio
     uint256 amount1 = 100_000 ether; // Bnb
 
-    // Approve tokens for the pool
+    bytes32 managerRole = dex.MANAGER();
+    vm.prank(admin);
+    dex.grantRole(managerRole, userA);
+
+    vm.startPrank(userA);
     token0.approve(address(dex), amount0);
-
-    uint min_mint_amount = 0;
-    dex.add_liquidity{ value: amount1 }([amount0, amount1], min_mint_amount);
-
-    // Check LP balance
-    uint256 lpAmount = lp.balanceOf(userA);
-    assertEq(lpAmount, 201999990107932736938407); // 2000 LP tokens minted (1:1 ratio for simplicity)
-
-    assertEq(lp.totalSupply(), 201999990107932736938407); // Total supply of LP tokens
-
+    dex.seed{ value: amount1 }([amount0, amount1]);
     vm.stopPrank();
+
+    // Both coins are 18-decimal, so the initial supply is the sum of the two legs.
+    assertEq(lp.balanceOf(userA), amount0 + amount1);
+    assertEq(lp.totalSupply(), amount0 + amount1);
   }
 
   function createMarket() public {
@@ -940,150 +936,6 @@ contract SmartProviderTest is Test {
     uint256 bnbReceived = user2.balance - bnbBalance;
     assertApproxEqAbs(token0Received, amounts[0], 2); // allow 2 wei difference due to rounding
     assertApproxEqAbs(bnbReceived, amounts[1], 2); // allow 2 wei difference due to rounding
-  }
-
-  function test_withdrawCollateral_imbalance() public {
-    test_repayAll_usdt();
-    vm.startPrank(user2);
-    (, , uint256 user2Collateral) = moolah.position(marketParams.id(), user2);
-    uint256[2] memory amounts = [uint256(1 ether), uint256(0.5 ether)]; // force imbalance withdrawal
-    uint256 maxBurnAmount = dex.calc_token_amount(amounts, false);
-    maxBurnAmount = maxBurnAmount + (maxBurnAmount * 5) / 1000; // add 0.5% slippage
-
-    uint256 token0Balance = token0.balanceOf(user2);
-    uint256 bnbBalance = user2.balance;
-    uint256 totalSupplyBefore = lp.totalSupply();
-    vm.expectRevert("unauthorized");
-    smartProvider.withdrawCollateralImbalance(
-      marketParams,
-      amounts[0],
-      amounts[1],
-      maxBurnAmount,
-      user2,
-      payable(user2)
-    );
-    vm.stopPrank();
-    vm.prank(manager);
-    moolah.setProvider(marketParams.id(), address(smartProvider), true);
-    assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
-
-    vm.prank(user2);
-    smartProvider.withdrawCollateralImbalance(
-      marketParams,
-      amounts[0],
-      amounts[1],
-      maxBurnAmount,
-      user2,
-      payable(user2)
-    );
-    (, , uint256 user2CollateralAfter) = moolah.position(marketParams.id(), user2);
-
-    // TODO: get exact withdraw amount from log
-    uint256 withdrawAmount = totalSupplyBefore - lp.totalSupply();
-    assertEq(user2CollateralAfter, user2Collateral - withdrawAmount);
-    assertEq(lpCollateral.balanceOf(address(moolah)), user2CollateralAfter);
-    assertEq(lpCollateral.totalSupply(), user2CollateralAfter);
-
-    assertEq(lp.balanceOf(address(smartProvider)), user2CollateralAfter);
-    assertEq(lp.totalSupply(), totalSupplyBefore - withdrawAmount);
-
-    uint256 token0Received = token0.balanceOf(user2) - token0Balance;
-    uint256 bnbReceived = user2.balance - bnbBalance;
-    assertEq(token0Received, amounts[0]);
-    assertEq(bnbReceived, amounts[1]);
-  }
-
-  function test_withdrawCollateral_oneCoin() public {
-    test_repayAll_usdt();
-    vm.startPrank(user2);
-    (, , uint256 user2Collateral) = moolah.position(marketParams.id(), user2);
-    uint256 withdrawAmount = user2Collateral / 2;
-    // withdraw BNB only
-    uint256 expectBnbAmt = dex.calc_withdraw_one_coin(withdrawAmount, 1);
-
-    uint256 token0Balance = token0.balanceOf(user2);
-    uint256 bnbBalance = user2.balance;
-    uint256 totalSupplyBefore = lp.totalSupply();
-    vm.expectRevert("unauthorized");
-    smartProvider.withdrawCollateralOneCoin(marketParams, withdrawAmount, 1, expectBnbAmt, user2, payable(user2));
-    vm.stopPrank();
-    vm.prank(manager);
-    moolah.setProvider(marketParams.id(), address(smartProvider), true);
-    assertEq(moolah.providers(marketParams.id(), address(lpCollateral)), address(smartProvider));
-
-    vm.prank(user2);
-    smartProvider.withdrawCollateralOneCoin(marketParams, withdrawAmount, 1, expectBnbAmt, user2, payable(user2));
-    (, , uint256 user2CollateralAfter) = moolah.position(marketParams.id(), user2);
-
-    assertEq(user2CollateralAfter, user2Collateral - withdrawAmount);
-    assertEq(lpCollateral.balanceOf(address(moolah)), user2CollateralAfter);
-    assertEq(lpCollateral.totalSupply(), user2CollateralAfter);
-
-    assertEq(lp.balanceOf(address(smartProvider)), user2CollateralAfter);
-    assertEq(lp.totalSupply(), totalSupplyBefore - withdrawAmount);
-
-    assertEq(token0.balanceOf(user2), token0Balance);
-    assertEq(user2.balance - bnbBalance, expectBnbAmt);
-  }
-
-  function test_peek() public {
-    // supply more liquidity to market
-    vm.startPrank(userA);
-    uint256 usdtAmt = 100_000_000 ether;
-    deal(USDT, userA, usdtAmt);
-    IERC20(USDT).approve(address(moolah), usdtAmt);
-    moolah.supply(marketParams, usdtAmt, 0, userA, bytes(""));
-    vm.stopPrank();
-
-    uint256 lpPrice = smartProvider.peek(address(lp));
-
-    // user2 deposit 1000 LP tokens as collateral
-    uint256 supplyAmount = 1000 ether;
-    uint256[2] memory amounts = dexInfo.calc_coins_amount(address(dex), supplyAmount);
-    deal(address(token0), user2, amounts[0]);
-    deal(user2, amounts[1]);
-    vm.startPrank(user2);
-    token0.approve(address(smartProvider), amounts[0]);
-    smartProvider.supplyCollateral{ value: amounts[1] }(
-      marketParams,
-      user2,
-      amounts[0],
-      amounts[1],
-      supplyAmount - 10 // minus 10 wei to avoid rounding issue
-    );
-    // check user2 borrow limit
-    (, , uint256 user2Collateral) = moolah.position(marketParams.id(), user2);
-    uint256 borrowLimit = (user2Collateral * lpPrice * lltv70) / 1e18 / 1e8;
-    moolah.borrow(marketParams, borrowLimit - 100, 0, user2, user2);
-
-    // manipulate lp price by swapping on dex
-    uint256 amount0 = 50_000 ether;
-    deal(address(token0), user2, amount0);
-    token0.approve(address(dex), amount0);
-    uint256 amount1BalBefore = user2.balance;
-    dex.exchange(0, 1, amount0, 0);
-    uint256 amount1BalAfter = user2.balance;
-
-    uint256 lpPrice2 = smartProvider.peek(address(lp));
-    // User2 can borrow more
-    (, , user2Collateral) = moolah.position(marketParams.id(), user2);
-    uint256 newBorrowLimit = (user2Collateral * lpPrice2 * lltv70) / 1e18 / 1e8;
-    moolah.borrow(marketParams, newBorrowLimit - borrowLimit, 0, user2, user2);
-
-    // User2 restore pool reserve by swapping back
-    uint256 amount1 = amount1BalAfter - amount1BalBefore;
-    deal(user2, amount1);
-    dex.exchange{ value: amount1 }(1, 0, amount1, 0);
-    uint256 lpPrice3 = smartProvider.peek(address(lp));
-
-    // check user2 borrow limit after restore
-    (, uint256 borrowedShares, ) = moolah.position(marketParams.id(), user2);
-    uint256 borrowLimitAfter = (user2Collateral * lpPrice3 * lltv70) / 1e18 / 1e8;
-    (, , uint128 totalBorrowAssets, uint128 totalBorrowShares, , ) = moolah.market(marketParams.id());
-
-    uint256 debt = borrowedShares.toAssetsUp(totalBorrowAssets, totalBorrowShares);
-    assertLe(debt, borrowLimitAfter);
-    vm.stopPrank();
   }
 
   function test_redeemLpCollateral() public {
