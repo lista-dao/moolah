@@ -41,9 +41,16 @@ library V3ProviderLib {
   /// @notice The shares a deposit mints and the amounts it consumes — pro-rata of the live composition.
   /// @dev Both the consumed amounts and the share credit come from the composition the vault holds at the
   ///      CURRENT pool price — the same composition `removeLiquidity` hands back on the way out. Issuance
-  ///      and redemption therefore share one basis, so a deposit followed by an immediate exit cancels and
-  ///      the pool price cannot tax an entry. Amounts round UP, leaving the rounding surplus with the
-  ///      existing holders.
+  ///      and redemption therefore share one basis, so a deposit followed by an immediate exit returns the
+  ///      principal (to the wei: amounts round UP and shares round DOWN, so any dust stays with the
+  ///      existing holders), and the price a depositor enters at is the price they can leave at.
+  ///
+  ///      This does NOT make an entry manipulation-proof. A third party can move the pool price before the
+  ///      deposit lands, which shifts the composition and so the ratio the deposit binds to; the depositor
+  ///      then buys a skewed basket that is worth less once the price reverts, up to the position's
+  ///      convexity span over the range. The credit stays fair FOR that price — nothing is over- or
+  ///      under-issued — so the guard is the caller's per-leg `amount0Min`/`amount1Min`, which reject the
+  ///      skewed ratio outright. An integration must never pass 0 for both.
   ///
   ///      A credit taken from the FAIR composition instead would put issuance and redemption on two
   ///      different bases, and the gap between them is exactly the deposit-withdraw cycle Bailsec raised

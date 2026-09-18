@@ -280,12 +280,10 @@ abstract contract V3Provider is
       IERC20(TOKEN1).safeTransferFrom(msg.sender, address(this), _amount1Desired);
     }
 
-    // No inline compound: positionAmountsAt(fair) below already includes pending fees (simulated from
-    // fee-growth deltas), so the composition snapshot is complete and existing holders keep their fees
-    // without deploying liquidity here. Fees are deployed only via the BOT-gated, slippage-bounded
-    // compound() / rebalance.
+    // No inline compound: the composition snapshot below already includes pending fees (simulated from
+    // fee-growth deltas), so it is complete and existing holders keep their fees without deploying
+    // liquidity here. Fees are deployed only via the BOT-gated, slippage-bounded compound() / rebalance.
     uint256 supplyBefore = totalSupply();
-    uint160 fairSqrtPriceX96 = IV3DexAdapter(ADAPTER).fairSqrtPriceX96();
 
     if (supplyBefore == 0) {
       // First deposit: no existing composition to match and no holders to dilute. Mint the initial NFT
@@ -293,10 +291,18 @@ abstract contract V3Provider is
       // spot-vs-fair over-crediting this path guards against needs pre-existing idle/holders, so it
       // cannot occur on the first deposit; the first-depositor inflation surface is a separate concern.
       //
+      // Fair is read ONLY inside this branch. A subsequent deposit binds to the live composition and
+      // never needs the fair price, so hoisting this read would make every deposit inherit a
+      // TWAP-clamped adapter's dependency on the pool's observation history — pool.observe() reverts
+      // 'OLD' on a low-cardinality pool, which an attacker can sustain, bricking deposits for no reason
+      // (Bailsec Issue_44) — and equally sensitive to a mid-flight setMaxTwapDeviationBps (Issue_43).
+      // The opening mint genuinely needs fair, so it alone pays that cost.
+      //
       // The addLiquidity refund is deliberately NOT sent to the depositor here (refundTo = this vault):
       // a native-BNB refund before shares are minted would expose a window where adapter NAV already
       // includes the new liquidity but totalSupply() is stale, letting a malicious depositor reenter and
       // read an inflated share price. The vault refunds the depositor only after _mint below.
+      uint160 fairSqrtPriceX96 = IV3DexAdapter(ADAPTER).fairSqrtPriceX96();
       if (_amount0Desired > 0) IERC20(TOKEN0).safeTransfer(ADAPTER, _amount0Desired);
       if (_amount1Desired > 0) IERC20(TOKEN1).safeTransfer(ADAPTER, _amount1Desired);
       uint128 liquidityAdded;
@@ -313,14 +319,19 @@ abstract contract V3Provider is
         shares = (_amountsValueUsd(added0, added1) * (10 ** uint256(accountingAssetDecimals))) / assetPrice;
       }
     } else {
-      // Subsequent deposit: issue shares purely proportional to the existing position
-      // composition — never from a pool-spot mint re-valued at fair. Snapshot the composition at the
-      // fair price (positionAmountsAt already includes idle inventory + collected fees), bind the deposit
-      // to that ratio, and park the consumed tokens as IDLE rather than minting into the pool. The pool
-      // spot price never enters share issuance, so the mint-at-spot / value-at-fair gap that let a
-      // depositor be over-credited (with idle present) is eliminated. Value-conserving: the depositor
-      // adds exactly `frac` of each composition leg and receives `frac` of the supply.
-      // Pro-rata credit against the live composition, the same basis the exit pays out (see _quoteDeposit).
+      // Subsequent deposit: issue shares purely proportional to the existing position composition,
+      // snapshotted at the LIVE pool price (positionAmountsAt already includes idle inventory +
+      // collected fees) — the same basis removeLiquidity pays out on the way out. Bind the deposit to
+      // that ratio and park the consumed tokens as IDLE rather than minting into the pool. Issuance and
+      // redemption therefore share one basis: the depositor adds exactly `frac` of each composition leg
+      // and receives `frac` of the supply, so the round trip returns the principal and the mint-at-spot
+      // / value-at-fair cycle (Bailsec Issue_05) is closed. See _quoteDeposit for why a fair-basis
+      // credit, or a min() against the spot composition, does not close it.
+      //
+      // A third party CAN still move the pool price between the depositor's quote and this call, which
+      // shifts the composition and therefore the ratio the deposit binds to. That is what
+      // amount0Min/amount1Min below are for — they are the guard against a manipulated entry, and an
+      // integration must never pass 0 for both.
       (shares, amount0Used, amount1Used) = _quoteDeposit(supplyBefore, _amount0Desired, _amount1Desired);
       // Repurposed slippage guard: amount0Min/amount1Min are now the minimum of each leg that must be
       // consumed (the rest is refunded), protecting the depositor from an unexpected composition ratio.
@@ -611,10 +622,10 @@ abstract contract V3Provider is
   /// @param comp1   token1 of the composition priced against.
   /// @return WAD-scaled fraction (1e18 == the full composition).
 
-  /// @dev Quote a subsequent deposit (supplyBefore > 0): consumed amounts pinned to the LIVE composition
-  ///      (rounded up); shares = min(sharesFair, sharesSpot), the spot quote re-pricing the SAME consumed
-  ///      amounts. Withdraw settles at spot, so the min caps the credit at what a spot exit can back
-  ///      (closes the deposit-withdraw cycle). Shared with previewDepositShares — preview can't drift.
+  /// @dev Quote a subsequent deposit (supplyBefore > 0): both the consumed amounts (rounded up) and
+  ///      `shares = frac * supplyBefore` (rounded down) come from the LIVE composition. Withdraw settles
+  ///      at the same live price, so issuance and redemption share one basis and the deposit-withdraw
+  ///      cycle is closed. Shared with previewDepositShares — preview can't drift from the mint.
   /// @param supplyBefore   share supply before this deposit.
   /// @param amount0Desired token0 offered by the depositor.
   /// @param amount1Desired token1 offered by the depositor.

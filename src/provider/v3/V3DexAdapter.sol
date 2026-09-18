@@ -381,9 +381,11 @@ abstract contract V3DexAdapter is
   /// @inheritdoc IV3DexAdapter
   function creditIdle(uint256 amount0, uint256 amount1) external onlyProvider nonReentrant {
     // The provider transfers `amount0`/`amount1` here before calling; record them as idle inventory
-    // rather than minting into the pool. Deposits enter as idle at the current live composition ratio
-    // (priced off-pool), then a later spot-gated compound() deploys them — this is what keeps share
-    // issuance free of the pool spot price. Assert the tokens really arrived so idle never exceeds the
+    // rather than minting into the pool. Deposits enter as idle at the current live composition ratio,
+    // then a later spot-gated compound() deploys them. Parking rather than minting is what keeps a
+    // deposit from touching the pool at all: no mint at a pushed price, so no impermanent loss realized
+    // on the whole position by a single depositor, and `pool.mint` stays reachable only from the
+    // BOT-gated compound() / rebalance. Assert the tokens really arrived so idle never exceeds the
     // adapter's spendable balance (INV: idleTokenX <= balanceOf(this)).
     if (amount0 > 0) idleToken0 += amount0;
     if (amount1 > 0) idleToken1 += amount1;
