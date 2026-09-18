@@ -257,9 +257,13 @@ abstract contract V3DexAdapter is
     if (_provider == address(0)) revert ZeroAddress();
     if (provider != address(0)) revert ProviderAlreadySet();
     if (IV3Provider(_provider).ADAPTER() != address(this)) revert ProviderAdapterMismatch();
+    _validateProvider(_provider);
     provider = _provider;
     emit ProviderSet(_provider);
   }
+
+  /// @dev Extra wiring checks for subclasses that share state with the vault. No-op by default.
+  function _validateProvider(address _provider) internal view virtual {}
 
   modifier onlyProvider() {
     if (msg.sender != provider) revert OnlyProvider();
