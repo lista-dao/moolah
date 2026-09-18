@@ -526,7 +526,7 @@ contract SlisBNBV3ProviderTest is Test {
   }
 
   function test_deposit_secondDeposit_doesNotDilute() public {
-    // Shares are issued proportional to the fair composition (value-conserving), not to raw
+    // Shares are issued proportional to the live composition (value-conserving), not to raw
     // token inputs — the first deposit refunds part of its WBNB at the spot mint ratio, so equal token
     // amounts are not equal value. The invariant that matters is that the mint never lowers the existing
     // per-share price, and a larger-value deposit yields more shares.
@@ -543,14 +543,14 @@ contract SlisBNBV3ProviderTest is Test {
   /// @dev minShares-floor counter-test. The minShares floor makes a deposit revert instead of
   ///      silently under-crediting the depositor when it would receive fewer shares than demanded — the
   ///      protection against a first-depositor inflation attack (a direct NPM.increaseLiquidity donation
-  ///      inflates the composition so a normal deposit rounds down) and against the fair composition
-  ///      drifting between the off-chain preview and execution. A minShares at fair passes; a higher one
-  ///      reverts.
+  ///      inflates the composition so a normal deposit rounds down) and against the live composition
+  ///      drifting between the off-chain preview and execution. A minShares at the quoted credit passes;
+  ///      a higher one reverts.
   function test_deposit_minShares_guardsShareSlippage() public {
     _deposit(user, 10 ether, 10 ether);
 
-    // previewDepositShares returns the exact min(fair, spot) credit deposit() will mint, so the floor
-    // below is measured against the real amount (not a fair-only estimate that a spot move could fail).
+    // previewDepositShares returns the exact pro-rata credit deposit() will mint, so the floor below is
+    // measured against the real amount.
     uint256 expectedShares = provider.previewDepositShares(10 ether, 10 ether);
 
     deal(SLISBNB, user2, 10 ether);
@@ -872,8 +872,9 @@ contract SlisBNBV3ProviderTest is Test {
   /// @dev Counter-test (deposit cannot be gamed via spot vs idle). With tracked idle inventory present AND the pool spot pushed far from
   ///      the fair (rate) price, the OLD deposit path minted liquidity at spot but valued it at fair,
   ///      over-crediting the new depositor and dropping existing holders' share price (dilution/theft).
-  ///      The deposit is proportional to the fair composition and parks to idle — the pool spot
-  ///      never enters share issuance — so a deposit under these exact conditions cannot dilute.
+  ///      The deposit is proportional to the LIVE composition and parks to idle rather than minting, so
+  ///      the amounts consumed and the shares credited are the same fraction of the same basket and a
+  ///      deposit under these exact conditions cannot dilute.
   function test_deposit_withIdleAndSkewedSpot_doesNotDilute() public {
     _deposit(user, 10 ether, 10 ether);
 
@@ -939,7 +940,7 @@ contract SlisBNBV3ProviderTest is Test {
   }
 
   /// @dev Subsequent-deposit branch (supply > 0): the preview must equal what deposit() consumes to the
-  ///      wei. Both round the fair composition UP, so a floor-rounded preview would under-report by 1 wei.
+  ///      wei. Both round the live composition UP, so a floor-rounded preview would under-report by 1 wei.
   function test_previewDeposit_amountsMatchActual_subsequentDeposit() public {
     _deposit(user, 100 ether, 100 ether); // seed so the frac branch is taken
 
@@ -989,7 +990,7 @@ contract SlisBNBV3ProviderTest is Test {
     assertGt(exp1, 0, "live composition consumes token1");
   }
 
-  /* ───────────── deposit crediting: min(fair, spot) shares ───────────── */
+  /* ─────────── deposit crediting: pro-rata of the live composition ─────────── */
 
   /// @dev Push the pool spot off the rate-anchored fair by selling WBNB (token1) into the pool.
   function _skewSpotUp(uint256 wbnbIn) internal {
@@ -998,9 +999,10 @@ contract SlisBNBV3ProviderTest is Test {
     sw.swapExactIn(POOL, false, wbnbIn);
   }
 
-  /// @dev At a skewed spot the SAME deposit is credited fewer shares than at fair — the spot quote (same
-  ///      consumed amounts) wins the min, capping the credit at what a spot exit can back. Pre-fix
-  ///      (fair-only issuance) the skew would not change the credited shares, so this fails pre-fix.
+  /// @dev At a skewed spot the SAME deposit is credited fewer shares than at fair. Skewing spot up moves
+  ///      the live composition towards token1, so a fixed (100, 100) basket covers a smaller fraction of
+  ///      it and binds on the token1 leg. Pre-fix (fair-only issuance) the skew would not change the
+  ///      credited shares at all, so this fails pre-fix.
   function test_deposit_skewedSpotCreditsFewerShares() public {
     _deposit(user, 100 ether, 100 ether); // seed
 
@@ -1011,7 +1013,7 @@ contract SlisBNBV3ProviderTest is Test {
     _skewSpotUp(300 ether);
     (uint256 sharesSkew, , ) = _deposit(user2, 100 ether, 100 ether);
 
-    assertLt(sharesSkew, sharesFair, "skewed spot must credit fewer shares (min fair/spot)");
+    assertLt(sharesSkew, sharesFair, "skewed spot must credit fewer shares (live composition basis)");
     assertGt(sharesSkew, 0, "still mints > 0");
   }
 
@@ -1030,7 +1032,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint256 preview2 = provider.previewDepositShares(100 ether, 100 ether);
     (uint256 actual2, , ) = _deposit(user2, 100 ether, 100 ether);
     assertEq(preview2, actual2, "preview matches mint (skewed spot)");
-    assertLt(preview2, preview1, "skew lowers the previewed shares (min = spot quote)");
+    assertLt(preview2, preview1, "skew lowers the previewed shares (live composition basis)");
   }
 
   /// @dev The deposit->withdraw cycle at a skewed spot is no longer profitable: the exiter cannot walk
@@ -2817,7 +2819,7 @@ contract SlisBNBV3ProviderTest is Test {
     assertApproxEqAbs(pend1, col1 - owed1, 2, "simulated pending1 == actual collectable minus checkpointed");
   }
 
-  /// @dev previewRemoveLiquidity pro-rates the fee-inclusive fair composition, so it no longer
+  /// @dev previewRemoveLiquidity pro-rates the fee-inclusive live (spot) composition, so it no longer
   ///      under-reports by pending fees (was: spot principal + idle only).
   function test_previewRemoveLiquidity_includesPendingFees() public {
     (uint256 shares, , ) = _deposit(user, 100 ether, 100 ether);

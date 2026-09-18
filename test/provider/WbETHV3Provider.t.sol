@@ -254,10 +254,10 @@ contract WbETHV3ProviderTest is Test {
     assertEq(adapter.maxTwapDeviationBps(), 0, "clamp band settable to 0 (pure rate)");
   }
 
-  /* ─────────── deposit crediting: min(fair, spot) shares (deposit-withdraw cycle) ───────────
+  /* ─────── deposit crediting: pro-rata of the live composition (deposit-withdraw cycle) ───────
 
-     WbETHV3Provider does not override V3Provider.deposit, so these exercise the SAME min(fair,spot)
-     credit path proven for slisBNB/wstETH — here against the wbETH topology (exchangeRate-anchored fair).
+     WbETHV3Provider does not override V3Provider.deposit, so these exercise the SAME pro-rata credit
+     path proven for slisBNB/wstETH — here against the wbETH topology (exchangeRate-anchored fair).
      The only wbETH/WETH pool is empty, so the first deposit bootstraps it with our own liquidity; pure-rate
      mode + a wide center band let that seed land despite the pool's un-arbitraged slot0. */
 
@@ -293,8 +293,8 @@ contract WbETHV3ProviderTest is Test {
     swapper.swapExactIn(POOL, false, amountIn); // token1 (WETH) in → price up
   }
 
-  /// @dev A spot pushed further from the rate-anchored fair credits fewer shares for the same deposit —
-  ///      the spot quote wins the min, capping the credit at what a spot exit can back.
+  /// @dev A spot pushed further from the rate-anchored fair credits fewer shares for the same deposit:
+  ///      the live composition shifts towards token1, so a fixed basket covers a smaller fraction of it.
   function test_deposit_skewedSpotCreditsFewerShares() public {
     _bootstrap();
     _swapPoolUp(20 ether); // push spot clearly above fair
