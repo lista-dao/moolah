@@ -49,8 +49,12 @@ library V3ProviderLib {
   ///      deposit lands, which shifts the composition and so the ratio the deposit binds to; the depositor
   ///      then buys a skewed basket that is worth less once the price reverts, up to the position's
   ///      convexity span over the range. The credit stays fair FOR that price — nothing is over- or
-  ///      under-issued — so the guard is the caller's per-leg `amount0Min`/`amount1Min`, which reject the
-  ///      skewed ratio outright. An integration must never pass 0 for both.
+  ///      under-issued — so the guard is the caller's per-leg `amount0Min`/`amount1Min`. Those are a
+  ///      tolerance, not a switch: they reject any shift that starves a leg past its floor and permit
+  ///      every shift below it, so what they leave the depositor exposed to is exactly the tolerance the
+  ///      caller chose. Size them off a fresh `previewDepositAmounts` quote with a tight band — at the
+  ///      configured +/-50 bps range the composition is hypersensitive, and a 3 bps price nudge already
+  ///      moves the starved leg to 84% of its quote — and pass a non-zero `minShares` alongside them.
   ///
   ///      A credit taken from the FAIR composition instead would put issuance and redemption on two
   ///      different bases, and the gap between them is exactly the deposit-withdraw cycle Bailsec raised

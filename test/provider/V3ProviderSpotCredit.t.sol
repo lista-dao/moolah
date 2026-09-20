@@ -76,7 +76,9 @@ contract SelfFinancedEntrant {
 ///      deposit and an immediate redeem cancel. That does NOT make an entry manipulation-proof: a third
 ///      party can still move the pool price first, which shifts the composition the deposit binds to. The
 ///      credit stays fair for that price — nothing is over-issued — and the guard against the skewed ratio
-///      is the caller's per-leg amount0Min / amount1Min. Both halves are pinned below.
+///      is the caller's per-leg amount0Min / amount1Min, which bounds the loss to the tolerance the caller
+///      chose rather than removing it. Every part of that is pinned below: the residual, the shifts a
+///      tight floor rejects in either direction, and what a loose floor lets through.
 contract V3ProviderSpotCreditTest is SlisBNBV3ProviderTest {
   PoolSwapper swapper;
   address entrant = makeAddr("entrant");
@@ -283,7 +285,10 @@ contract V3ProviderSpotCreditTest is SlisBNBV3ProviderTest {
   /// this because the audited code issued on the rate-anchored fair composition, which no swap can move.
   /// Pinned here so the residual is measured rather than assumed, and bounded so it cannot grow silently.
   ///
-  /// Both arms start from spot ON the rate, so the only difference between them is the sandwich.
+  /// Both arms start from spot ON the rate, so the only difference between them is the sandwich. What is
+  /// measured is the VICTIM's realized loss. The attacker's side is not priced here — the swaps that walk
+  /// the pool come from a separately funded swapper — so this says nothing about whether the sandwich pays
+  /// for itself; test_selfFinancedManipulationCycle_isNotProfitable is the cycle charged for its own swaps.
   function test_zeroMinDeposit_canBeSandwichedByIncumbentHolder() public {
     _deposit(user, 100 ether, 100 ether); // the incumbent holder / attacker
     _walkSpotTo(0);
@@ -302,21 +307,36 @@ contract V3ProviderSpotCreditTest is SlisBNBV3ProviderTest {
     assertLe(sandwichedLossBps, 100, "sandwich cost to a zero-min depositor must stay bounded");
   }
 
-  /// @dev Deposit with zero mins while spot sits `frontRunBps` above fair, then redeem once spot is back
-  ///      on the rate. Returns the victim's realized loss in bps of what the deposit consumed.
+  /// @dev Deposit with zero mins while spot sits `frontRunBps` off the rate, then redeem once spot is
+  ///      back on it. Returns the victim's realized loss in bps of what the deposit consumed.
   function _depositRedeemLossBps(int256 frontRunBps) internal returns (uint256) {
+    (uint256 paid, uint256 returned) = _depositRedeemCycle(frontRunBps, 0);
+    return _lossBps(paid, returned);
+  }
+
+  /// @dev The sandwich cycle. `minPct` is the per-leg floor as a percentage of the honest quote taken
+  ///      BEFORE the front-run — what an integration actually has to work with; 0 passes zero mins.
+  ///      Returns the oracle value the deposit consumed and the value the redemption returned.
+  function _depositRedeemCycle(int256 frontRunBps, uint256 minPct) internal returns (uint256, uint256) {
+    uint256 min0;
+    uint256 min1;
+    if (minPct != 0) {
+      (, uint256 quote0, uint256 quote1) = provider.previewDepositAmounts(100 ether, 100 ether);
+      min0 = (quote0 * minPct) / 100;
+      min1 = (quote1 * minPct) / 100;
+    }
     if (frontRunBps != 0) _walkSpotTo(frontRunBps);
-    (uint256 shares, uint256 used0, uint256 used1) = _depositWithMin(entrant, 100 ether, 100 ether, 0, 0);
+    (uint256 shares, uint256 used0, uint256 used1) = _depositWithMin(entrant, 100 ether, 100 ether, min0, min1);
     if (frontRunBps != 0) _walkSpotTo(0);
 
     vm.prank(entrant);
     provider.withdrawShares(marketParams, shares, entrant, entrant);
     vm.prank(entrant);
     (uint256 back0, uint256 back1) = provider.redeemShares(shares, 0, 0, entrant);
-    return _lossBps(_valueUSD(used0, used1), _valueUSD(back0, back1));
+    return (_valueUSD(used0, used1), _valueUSD(back0, back1));
   }
 
-  /// The guard. Per-leg mins sized off an honest preview reject the skewed ratio outright. A composition
+  /// The guard, at a tight tolerance. Per-leg mins sized off an honest preview reject the shift. A composition
   /// shift always starves a leg: the leg that becomes binding consumes all of its desired amount, and the
   /// other consumes t_i · frac, which falls on both factors. Skewing spot up makes token1 binding, so
   /// token0 is the starved leg and amount0Min is what reverts.
@@ -340,6 +360,66 @@ contract V3ProviderSpotCreditTest is SlisBNBV3ProviderTest {
     vm.expectRevert(V3Provider.InsufficientAmount.selector);
     provider.deposit(marketParams, 100 ether, 100 ether, min0, min1, 0, entrant);
     vm.stopPrank();
+  }
+
+  /// The same guard, in the other direction. A composition shift always starves a leg, and which leg it
+  /// starves follows the direction of the shift: skewing spot DOWN makes token0 binding, so token1 is the
+  /// starved leg and amount1Min is what reverts. Without this arm the guard is only pinned for one
+  /// direction of manipulation.
+  function test_nonZeroAmountMins_rejectTheDownSkewedRatio() public {
+    _deposit(user, 100 ether, 100 ether);
+    _walkSpotTo(0);
+
+    // Quote the honest ratio first, exactly as an integration would before broadcasting.
+    (, uint256 expect0, uint256 expect1) = provider.previewDepositAmounts(100 ether, 100 ether);
+    uint256 min0 = (expect0 * 99) / 100;
+    uint256 min1 = (expect1 * 99) / 100;
+    assertGt(min0, 0, "setup: token0 leg is quoted");
+    assertGt(min1, 0, "setup: token1 leg is quoted");
+
+    _walkSpotTo(-45); // the front-run, the other way
+
+    deal(SLISBNB, entrant, 100 ether);
+    deal(WBNB, entrant, 100 ether);
+    vm.startPrank(entrant);
+    IERC20(SLISBNB).approve(address(provider), 100 ether);
+    IERC20(WBNB).approve(address(provider), 100 ether);
+    vm.expectRevert(V3Provider.InsufficientAmount.selector);
+    provider.deposit(marketParams, 100 ether, 100 ether, min0, min1, 0, entrant);
+    vm.stopPrank();
+  }
+
+  /// What the guard is NOT. A min is a tolerance, not an on/off switch, so the same manipulation either
+  /// trips it or slips under it depending only on where the caller set the dial. The composition of a
+  /// +/-50 bps position is hypersensitive: a 3 bps nudge, well inside ordinary pool noise, already moves
+  /// the starved leg to 84% of its honest quote. Floors at 99% of the quote reject that deposit; floors
+  /// at 80% are equally non-zero, let the identical deposit through, and the depositor eats the skew.
+  /// The requirement is therefore not "pass non-zero mins" — it is "size them off a fresh preview with a
+  /// tight tolerance", with minShares as the backstop.
+  function test_looseNonZeroMins_doNotPreventTheSandwich() public {
+    _deposit(user, 100 ether, 100 ether);
+    _walkSpotTo(0);
+
+    (, uint256 quote0, uint256 quote1) = provider.previewDepositAmounts(100 ether, 100 ether);
+
+    // A tight floor rejects the front-run outright.
+    uint256 snap = vm.snapshotState();
+    _walkSpotTo(3);
+    deal(SLISBNB, entrant, 100 ether);
+    deal(WBNB, entrant, 100 ether);
+    vm.startPrank(entrant);
+    IERC20(SLISBNB).approve(address(provider), 100 ether);
+    IERC20(WBNB).approve(address(provider), 100 ether);
+    vm.expectRevert(V3Provider.InsufficientAmount.selector);
+    provider.deposit(marketParams, 100 ether, 100 ether, (quote0 * 99) / 100, (quote1 * 99) / 100, 0, entrant);
+    vm.stopPrank();
+    vm.revertToState(snap);
+
+    // A loose floor — still non-zero — lets the identical deposit through, at a cost.
+    (uint256 paid, uint256 returned) = _depositRedeemCycle(3, 80);
+    emit log_named_uint("value consumed", paid);
+    emit log_named_uint("value returned", returned);
+    assertLt(returned, paid, "a loose min must not be mistaken for protection");
   }
 
   function _lossBps(uint256 paid, uint256 returned) internal pure returns (uint256) {

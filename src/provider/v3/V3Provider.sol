@@ -291,12 +291,14 @@ abstract contract V3Provider is
       // spot-vs-fair over-crediting this path guards against needs pre-existing idle/holders, so it
       // cannot occur on the first deposit; the first-depositor inflation surface is a separate concern.
       //
-      // Fair is read ONLY inside this branch. A subsequent deposit binds to the live composition and
-      // never needs the fair price, so hoisting this read would make every deposit inherit a
-      // TWAP-clamped adapter's dependency on the pool's observation history — pool.observe() reverts
-      // 'OLD' on a low-cardinality pool, which an attacker can sustain, bricking deposits for no reason
-      // (Bailsec Issue_44) — and equally sensitive to a mid-flight setMaxTwapDeviationBps (Issue_43).
-      // The opening mint genuinely needs fair, so it alone pays that cost.
+      // Fair is read ONLY inside this branch. The share math of a subsequent deposit binds to the live
+      // composition and never needs the fair price, so hoisting this read would make every deposit
+      // inherit a TWAP-clamped adapter's dependency on the pool's observation history — pool.observe()
+      // reverts 'OLD' on a low-cardinality pool, which an attacker can sustain, bricking deposits for no
+      // reason (Bailsec Issue_44) — and equally sensitive to a mid-flight setMaxTwapDeviationBps
+      // (Issue_43). The opening mint genuinely needs fair, so it alone pays that cost. A subclass hook
+      // can still reach fair on a subsequent deposit — SlisBNBV3Provider does, through the slisBNBx
+      // minter — but only on a rate-implied adapter, where fairSqrtPriceX96() never calls pool.observe().
       //
       // The addLiquidity refund is deliberately NOT sent to the depositor here (refundTo = this vault):
       // a native-BNB refund before shares are minted would expose a window where adapter NAV already
@@ -330,8 +332,9 @@ abstract contract V3Provider is
       //
       // A third party CAN still move the pool price between the depositor's quote and this call, which
       // shifts the composition and therefore the ratio the deposit binds to. That is what
-      // amount0Min/amount1Min below are for — they are the guard against a manipulated entry, and an
-      // integration must never pass 0 for both.
+      // amount0Min/amount1Min below are for. They are a tolerance, not a switch: any shift that leaves
+      // both legs above their floors passes, so the depositor's residual exposure equals the tolerance
+      // they chose. An integration must size them off a fresh quote with a tight band, plus minShares.
       (shares, amount0Used, amount1Used) = _quoteDeposit(supplyBefore, _amount0Desired, _amount1Desired);
       // Repurposed slippage guard: amount0Min/amount1Min are now the minimum of each leg that must be
       // consumed (the rest is refunded), protecting the depositor from an unexpected composition ratio.
