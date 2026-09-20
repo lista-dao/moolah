@@ -592,7 +592,7 @@ contract WstETHV3ProviderTest is Test {
     new V3ProviderOracle(address(adapter2), address(provider), WSTETH, WETH);
   }
 
-  /* ─────────── deposit crediting: min(fair, spot) shares (deposit-withdraw cycle) ─────────── */
+  /* ─────── deposit crediting: pro-rata of the live composition (deposit-withdraw cycle) ─────── */
 
   /// @dev Deposit as `user`, returning the consumed amounts (unlike `_deposit`). Per-leg floors set to 0
   ///      so a skewed spot cannot trip the slippage floor — we are measuring the share credit here.
@@ -614,10 +614,10 @@ contract WstETHV3ProviderTest is Test {
     return (amtWst * oracle.peek(WSTETH)) / 1e18 + (amtWeth * oracle.peek(WETH)) / 1e18;
   }
 
-  /// @dev At a spot skewed off the rate-anchored fair the SAME deposit is credited fewer shares: the spot
-  ///      quote (same consumed amounts re-priced at the manipulated slot0 composition) wins the min,
-  ///      capping the credit at what a spot exit can back. Pre-fix (fair-only issuance) the skew would
-  ///      not change the credited shares, so this fails pre-fix.
+  /// @dev At a skewed spot the SAME offered basket is credited fewer shares, because the live composition
+  ///      it binds to has shifted: the binding leg's fraction falls, so the deposit consumes less and is
+  ///      credited proportionally less. Value-neutral, not a haircut — the unconsumed input is refunded.
+  ///      Pre-fix (fair-basis issuance) the skew did not change the credit at all.
   function test_deposit_skewedSpotCreditsFewerShares() public {
     _deposit(50 ether, 50 ether); // seed
 
@@ -669,5 +669,32 @@ contract WstETHV3ProviderTest is Test {
     );
 
     assertLe(_valueUSD(out0, out1), _valueUSD(in0, in1), "cycle extracts no value");
+  }
+
+  /* ─────────── Bailsec Issue_44: a bricked TWAP must not brick subsequent deposits ─────────── */
+
+  /// @dev `pool.observe()` reverts on a pool whose observation cardinality never grew past TWAP_PERIOD,
+  ///      and an attacker can hold it there by observing on a cadence. That reverts the TWAP-clamped
+  ///      `fairSqrtPriceX96()` (maxTwapDeviationBps > 0 on this pair), which Bailsec Issue_44 says bricks
+  ///      deposits. Share issuance no longer reads the fair price at all, so a SUBSEQUENT deposit must
+  ///      survive it; only the first deposit, which prices the opening mint at fair, may fail.
+  function test_deposit_survivesBrickedTwap_onSubsequentDeposit() public {
+    _deposit(50 ether, 50 ether); // seed while observe() still answers
+
+    // The pool's own guard: `require(..., 'OLD')` when the oldest observation is younger than the period.
+    vm.mockCallRevert(
+      POOL,
+      abi.encodeWithSignature("observe(uint32[])"),
+      abi.encodeWithSignature("Error(string)", "OLD")
+    );
+
+    // The clamped fair price really is bricked, so the test is not vacuous.
+    assertGt(adapter.maxTwapDeviationBps(), 0, "this pair clamps the TWAP, so fair reads observe()");
+    vm.expectRevert();
+    adapter.fairSqrtPriceX96();
+
+    (uint256 shares, uint256 used0, uint256 used1) = _depositRet(10 ether, 10 ether);
+    assertGt(shares, 0, "subsequent deposit must not depend on the pool's observation history");
+    assertTrue(used0 > 0 || used1 > 0, "tokens consumed");
   }
 }

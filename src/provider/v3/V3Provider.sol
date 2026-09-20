@@ -280,12 +280,10 @@ abstract contract V3Provider is
       IERC20(TOKEN1).safeTransferFrom(msg.sender, address(this), _amount1Desired);
     }
 
-    // No inline compound: positionAmountsAt(fair) below already includes pending fees (simulated from
-    // fee-growth deltas), so the composition snapshot is complete and existing holders keep their fees
-    // without deploying liquidity here. Fees are deployed only via the BOT-gated, slippage-bounded
-    // compound() / rebalance.
+    // No inline compound: the composition snapshot below already includes pending fees (simulated from
+    // fee-growth deltas), so it is complete and existing holders keep their fees without deploying
+    // liquidity here. Fees are deployed only via the BOT-gated, slippage-bounded compound() / rebalance.
     uint256 supplyBefore = totalSupply();
-    uint160 fairSqrtPriceX96 = IV3DexAdapter(ADAPTER).fairSqrtPriceX96();
 
     if (supplyBefore == 0) {
       // First deposit: no existing composition to match and no holders to dilute. Mint the initial NFT
@@ -293,10 +291,20 @@ abstract contract V3Provider is
       // spot-vs-fair over-crediting this path guards against needs pre-existing idle/holders, so it
       // cannot occur on the first deposit; the first-depositor inflation surface is a separate concern.
       //
+      // Fair is read ONLY inside this branch. The share math of a subsequent deposit binds to the live
+      // composition and never needs the fair price, so hoisting this read would make every deposit
+      // inherit a TWAP-clamped adapter's dependency on the pool's observation history — pool.observe()
+      // reverts 'OLD' on a low-cardinality pool, which an attacker can sustain, bricking deposits for no
+      // reason (Bailsec Issue_44) — and equally sensitive to a mid-flight setMaxTwapDeviationBps
+      // (Issue_43). The opening mint genuinely needs fair, so it alone pays that cost. A subclass hook
+      // can still reach fair on a subsequent deposit — SlisBNBV3Provider does, through the slisBNBx
+      // minter — but only on a rate-implied adapter, where fairSqrtPriceX96() never calls pool.observe().
+      //
       // The addLiquidity refund is deliberately NOT sent to the depositor here (refundTo = this vault):
       // a native-BNB refund before shares are minted would expose a window where adapter NAV already
       // includes the new liquidity but totalSupply() is stale, letting a malicious depositor reenter and
       // read an inflated share price. The vault refunds the depositor only after _mint below.
+      uint160 fairSqrtPriceX96 = IV3DexAdapter(ADAPTER).fairSqrtPriceX96();
       if (_amount0Desired > 0) IERC20(TOKEN0).safeTransfer(ADAPTER, _amount0Desired);
       if (_amount1Desired > 0) IERC20(TOKEN1).safeTransfer(ADAPTER, _amount1Desired);
       uint128 liquidityAdded;
@@ -313,14 +321,20 @@ abstract contract V3Provider is
         shares = (_amountsValueUsd(added0, added1) * (10 ** uint256(accountingAssetDecimals))) / assetPrice;
       }
     } else {
-      // Subsequent deposit: issue shares purely proportional to the existing position
-      // composition — never from a pool-spot mint re-valued at fair. Snapshot the composition at the
-      // fair price (positionAmountsAt already includes idle inventory + collected fees), bind the deposit
-      // to that ratio, and park the consumed tokens as IDLE rather than minting into the pool. The pool
-      // spot price never enters share issuance, so the mint-at-spot / value-at-fair gap that let a
-      // depositor be over-credited (with idle present) is eliminated. Value-conserving: the depositor
-      // adds exactly `frac` of each composition leg and receives `frac` of the supply.
-      // min(fair, spot) share credit + fair-pinned consumed amounts (see _quoteDeposit).
+      // Subsequent deposit: issue shares purely proportional to the existing position composition,
+      // snapshotted at the LIVE pool price (positionAmountsAt already includes idle inventory +
+      // collected fees) — the same basis removeLiquidity pays out on the way out. Bind the deposit to
+      // that ratio and park the consumed tokens as IDLE rather than minting into the pool. Issuance and
+      // redemption therefore share one basis: the depositor adds exactly `frac` of each composition leg
+      // and receives `frac` of the supply, so the round trip returns the principal and the mint-at-spot
+      // / value-at-fair cycle (Bailsec Issue_05) is closed. See _quoteDeposit for why a fair-basis
+      // credit, or a min() against the spot composition, does not close it.
+      //
+      // A third party CAN still move the pool price between the depositor's quote and this call, which
+      // shifts the composition and therefore the ratio the deposit binds to. That is what
+      // amount0Min/amount1Min below are for. They are a tolerance, not a switch: any shift that leaves
+      // both legs above their floors passes, so the depositor's residual exposure equals the tolerance
+      // they chose. An integration must size them off a fresh quote with a tight band, plus minShares.
       (shares, amount0Used, amount1Used) = _quoteDeposit(supplyBefore, _amount0Desired, _amount1Desired);
       // Repurposed slippage guard: amount0Min/amount1Min are now the minimum of each leg that must be
       // consumed (the rest is refunded), protecting the depositor from an unexpected composition ratio.
@@ -335,7 +349,7 @@ abstract contract V3Provider is
     if (shares == 0) revert ZeroShares();
     // Caller-specified share-slippage floor. Protects a depositor from receiving fewer shares than their
     // contribution warrants — e.g. a first-depositor inflation attack that inflates the position via a
-    // direct NPM.increaseLiquidity donation, or the fair composition shifting between the off-chain
+    // direct NPM.increaseLiquidity donation, or the live composition shifting between the off-chain
     // preview and execution. Pass 0 to disable.
     if (shares < minShares) revert InsufficientShares();
 
@@ -362,7 +376,7 @@ abstract contract V3Provider is
     if (refund1 > 0) _refund(TOKEN1, refund1, msg.sender);
 
     // NOTE: the subsequent-deposit path deliberately does NOT deploy the freshly-parked
-    // idle into the pool here. Deposits enter as idle valued at the fair composition and are matched by
+    // idle into the pool here. Deposits enter as idle valued at the live composition and are matched by
     // proportionally-minted shares, so the deposit is exactly value-conserving and never touches the pool
     // spot price. The idle is deployed later by the BOT-gated compound() (keeper cadence) or a rebalance,
     // both slippage-bounded. Deploying it inline here would mint at spot and realize a small IL shared by
@@ -485,9 +499,9 @@ abstract contract V3Provider is
 
   /// @inheritdoc IV3Provider
   /// @dev The managed position's token composition valued at the FAIR (manipulation-resistant) price,
-  ///      inclusive of idle inventory and collected fees. This is the ratio a subsequent deposit binds
-  ///      to; front-ends should size the two deposit legs in this ratio to minimise the refund. Returns
-  ///      (0, 0) before the first deposit (no position yet) — use previewDepositAmounts for that case.
+  ///      inclusive of idle inventory and collected fees. This is the basis the share ORACLE values, not
+  ///      the ratio a deposit binds to — a deposit binds to the live composition, getTotalAmounts().
+  ///      Returns (0, 0) before the first deposit (no position yet).
   function getFairComposition() public view returns (uint256 total0, uint256 total1) {
     return IV3DexAdapter(ADAPTER).positionAmountsAt(IV3DexAdapter(ADAPTER).fairSqrtPriceX96());
   }
@@ -501,7 +515,7 @@ abstract contract V3Provider is
   /// @notice Preview the token amounts a deposit would consume.
   /// @dev For the first deposit (totalSupply == 0) this previews the pool mint (liquidity + amounts at
   ///      spot). For subsequent deposits it previews the composition-ratio binding used by deposit():
-  ///      the amounts are `frac` of the current fair composition, where `frac = min(d0/T0, d1/T1)`, and
+  ///      the amounts are `frac` of the current live composition, where `frac = min(d0/T0, d1/T1)`, and
   ///      `liquidity` is returned as 0 since the deposit is parked as idle rather than minted.
   function previewDepositAmounts(
     uint256 amount0Desired,
@@ -510,7 +524,7 @@ abstract contract V3Provider is
     if (totalSupply() == 0) {
       return IV3DexAdapter(ADAPTER).previewAddLiquidity(amount0Desired, amount1Desired);
     }
-    (uint256 t0, uint256 t1) = IV3DexAdapter(ADAPTER).positionAmountsAt(IV3DexAdapter(ADAPTER).fairSqrtPriceX96());
+    (uint256 t0, uint256 t1) = IV3DexAdapter(ADAPTER).positionAmountsAt(IV3DexAdapter(ADAPTER).spotSqrtPriceX96());
     uint256 frac;
     if (t0 == 0) {
       frac = t1 == 0 ? 0 : (amount1Desired * WAD) / t1;
@@ -526,7 +540,7 @@ abstract contract V3Provider is
     amount1 = (t1 * frac + WAD - 1) / WAD;
   }
 
-  /// @notice Preview the shares a deposit would mint — the exact min(fair, spot) credit deposit() uses.
+  /// @notice Preview the shares a deposit would mint — the exact pro-rata credit deposit() uses.
   ///         Frontends size `minShares` off this (× a slippage tolerance). First deposit (supply == 0)
   ///         previews the oracle-valued opening mint.
   /// @param amount0Desired token0 offered by the depositor.
@@ -548,21 +562,22 @@ abstract contract V3Provider is
       shares = (_amountsValueUsd(added0, added1) * (10 ** uint256(accountingAssetDecimals))) / assetPrice;
   }
 
-  /// @notice Given a desired token0 amount, the token1 amount that pairs with it at the current fair
+  /// @notice Given a desired token0 amount, the token1 amount that pairs with it at the vault's live
   ///         composition ratio, so a subsequent deposit consumes both legs fully (minimal refund).
-  /// @dev    amount1 = amount0 * T1 / T0, where (T0, T1) = getFairComposition(). Reverts once fair has
-  ///         drifted past tickUpper (no token0 leg); deposits are then closed in every shape until the
-  ///         BOT recenters. Symmetric below tickLower. First deposit: use previewDepositAmounts.
+  /// @dev    amount1 = amount0 * T1 / T0, where (T0, T1) = getTotalAmounts() — the same basis
+  ///         quoteDeposit binds to, so the pairing is exact. Reverts when the live composition holds no
+  ///         token0 (spot at/above tickUpper with no token0 idle); a token1-only deposit is still
+  ///         accepted in that state. Symmetric below tickLower. First deposit: use previewDepositAmounts.
   function previewDepositForToken0(uint256 amount0) external view returns (uint256 amount1) {
-    (uint256 t0, uint256 t1) = getFairComposition();
+    (uint256 t0, uint256 t1) = getTotalAmounts();
     if (t0 == 0) revert ZeroAmounts();
     amount1 = (amount0 * t1) / t0;
   }
 
   /// @notice Mirror of previewDepositForToken0: the token0 amount that pairs with a desired token1
-  ///         amount at the current fair composition ratio (amount0 = amount1 * T0 / T1).
+  ///         amount at the vault's live composition ratio (amount0 = amount1 * T0 / T1).
   function previewDepositForToken1(uint256 amount1) external view returns (uint256 amount0) {
-    (uint256 t0, uint256 t1) = getFairComposition();
+    (uint256 t0, uint256 t1) = getTotalAmounts();
     if (t1 == 0) revert ZeroAmounts();
     amount0 = (amount1 * t0) / t1;
   }
@@ -610,14 +625,14 @@ abstract contract V3Provider is
   /// @param comp1   token1 of the composition priced against.
   /// @return WAD-scaled fraction (1e18 == the full composition).
 
-  /// @dev Quote a subsequent deposit (supplyBefore > 0): consumed amounts pinned to the FAIR composition
-  ///      (rounded up); shares = min(sharesFair, sharesSpot), the spot quote re-pricing the SAME consumed
-  ///      amounts. Withdraw settles at spot, so the min caps the credit at what a spot exit can back
-  ///      (closes the deposit-withdraw cycle). Shared with previewDepositShares — preview can't drift.
+  /// @dev Quote a subsequent deposit (supplyBefore > 0): both the consumed amounts (rounded up) and
+  ///      `shares = frac * supplyBefore` (rounded down) come from the LIVE composition. Withdraw settles
+  ///      at the same live price, so issuance and redemption share one basis and the deposit-withdraw
+  ///      cycle is closed. Shared with previewDepositShares — preview can't drift from the mint.
   /// @param supplyBefore   share supply before this deposit.
   /// @param amount0Desired token0 offered by the depositor.
   /// @param amount1Desired token1 offered by the depositor.
-  /// @return shares      shares to mint = min(fair, spot).
+  /// @return shares      shares to mint = `frac` of the existing supply.
   /// @return amount0Used token0 consumed and parked to idle (rest refunded).
   /// @return amount1Used token1 consumed and parked to idle (rest refunded).
   function _quoteDeposit(

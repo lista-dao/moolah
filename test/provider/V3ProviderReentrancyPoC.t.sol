@@ -72,9 +72,10 @@ contract V3ProviderReentrancyPoC is SlisBNBV3ProviderTest {
     //     observed mid-deposit equals the SETTLED price — no transient inflation. This is the core
     //     regression guard: pre-fix the refund preceded mint, so peekDuring spiked ~26x vs peekAfter.
     assertApproxEqRel(peekDuring, peekAfter, 1e16, "peek during refund must equal settled price (<=1%)");
-    //     The settled price sits at/above the pre-deposit price: min(fair,spot) crediting caps a large
-    //     imbalanced deposit at its spot-exit value, so the surplus accrues to holders — a legitimate,
-    //     persistent rise, never a transient inflation to over-borrow against.
+    //     The settled price sits at/above the pre-deposit price: the deposit binds to the live
+    //     composition, so an imbalanced deposit consumes only the ratio that fits and the convexity
+    //     surplus accrues to holders — a legitimate, persistent rise, never a transient inflation to
+    //     over-borrow against.
     assertGe(peekDuring, peekNormal, "deposit may only raise peek (surplus to holders), never lower it");
 
     // (b) Because the price was never inflated, any reentrant borrow was fairly priced: the attacker's
