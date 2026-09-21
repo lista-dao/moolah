@@ -83,6 +83,9 @@ contract WbETHV3ProviderTest is Test {
   bytes32 constant MOOLAH_MANAGER = keccak256("MANAGER");
 
   uint32 constant TWAP_PERIOD = 1800;
+  uint256 constant RANGE_LOWER_BPS = 50;
+  uint256 constant RANGE_UPPER_BPS = 50;
+  uint256 constant TWAP_DEV_BPS = 25;
   uint256 constant LLTV = 86 * 1e16;
   uint256 constant ETH_USD = 3000e8; // mock ETH price, 8 decimals
 
@@ -119,7 +122,12 @@ contract WbETHV3ProviderTest is Test {
 
     WbETHV3DexAdapter adapterImpl = new WbETHV3DexAdapter(NPM, WBETH, WETH, FEE, TWAP_PERIOD);
     adapter = WbETHV3DexAdapter(
-      payable(new ERC1967Proxy(address(adapterImpl), abi.encodeCall(WbETHV3DexAdapter.initialize, (admin, manager))))
+      payable(
+        new ERC1967Proxy(
+          address(adapterImpl),
+          abi.encodeCall(WbETHV3DexAdapter.initialize, (admin, manager, RANGE_LOWER_BPS, RANGE_UPPER_BPS, TWAP_DEV_BPS))
+        )
+      )
     );
 
     WbETHV3Provider provImpl = new WbETHV3Provider(MOOLAH_PROXY, address(adapter));
@@ -177,7 +185,7 @@ contract WbETHV3ProviderTest is Test {
     assertEq(adapter.WRAPPED_NATIVE(), WETH);
     assertEq(adapter.FEE(), FEE);
     assertEq(adapter.POOL(), POOL);
-    assertEq(adapter.maxTwapDeviationBps(), 50, "TWAP clamp band defaults to range width");
+    assertEq(adapter.maxTwapDeviationBps(), 25, "TWAP clamp band defaults below the upper range margin");
     assertEq(adapter.centerRateThresholdBps(), 1, "default threshold 1bp: minimal anti-churn floor");
     // rate wiring: the center rate is wbETH.exchangeRate(), not stEthPerToken or pool price.
     assertEq(adapter.lastCenterRate(), IWbETH(WBETH).exchangeRate(), "center rate from exchangeRate");
@@ -246,10 +254,10 @@ contract WbETHV3ProviderTest is Test {
     assertEq(adapter.maxTwapDeviationBps(), 0, "clamp band settable to 0 (pure rate)");
   }
 
-  /* ─────────── deposit crediting: min(fair, spot) shares (deposit-withdraw cycle) ───────────
+  /* ─────── deposit crediting: pro-rata of the live composition (deposit-withdraw cycle) ───────
 
-     WbETHV3Provider does not override V3Provider.deposit, so these exercise the SAME min(fair,spot)
-     credit path proven for slisBNB/wstETH — here against the wbETH topology (exchangeRate-anchored fair).
+     WbETHV3Provider does not override V3Provider.deposit, so these exercise the SAME pro-rata credit
+     path proven for slisBNB/wstETH — here against the wbETH topology (exchangeRate-anchored fair).
      The only wbETH/WETH pool is empty, so the first deposit bootstraps it with our own liquidity; pure-rate
      mode + a wide center band let that seed land despite the pool's un-arbitraged slot0. */
 
@@ -285,8 +293,8 @@ contract WbETHV3ProviderTest is Test {
     swapper.swapExactIn(POOL, false, amountIn); // token1 (WETH) in → price up
   }
 
-  /// @dev A spot pushed further from the rate-anchored fair credits fewer shares for the same deposit —
-  ///      the spot quote wins the min, capping the credit at what a spot exit can back.
+  /// @dev A spot pushed further from the rate-anchored fair credits fewer shares for the same deposit:
+  ///      the live composition shifts towards token1, so a fixed basket covers a smaller fraction of it.
   function test_deposit_skewedSpotCreditsFewerShares() public {
     _bootstrap();
     _swapPoolUp(20 ether); // push spot clearly above fair
