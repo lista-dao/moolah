@@ -9,6 +9,7 @@ import { SafeERC20, IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/Saf
 import { IListaV2Factory } from "../dex/interfaces/IListaV2Factory.sol";
 import { IListaV2Pair } from "../dex/interfaces/IListaV2Pair.sol";
 import { IStableSwap } from "../dex/interfaces/IStableSwap.sol";
+import { IStableSwapFactory } from "../dex/interfaces/IStableSwapFactory.sol";
 import { ILiquidator } from "../liquidator/ILiquidator.sol";
 import { IMoolahVault } from "../moolah-vault/interfaces/IMoolahVault.sol";
 
@@ -20,7 +21,7 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   using EnumerableSet for EnumerableSet.AddressSet;
   using SafeERC20 for IERC20;
 
-  /// @dev Sets of stable swap pools
+  /// @dev DEPRECATED - superseded by `ssFactory` provenance; kept for the storage layout and may be stale
   EnumerableSet.AddressSet private stableSwapPools;
 
   /// @dev Sets of liquidator contracts
@@ -28,6 +29,9 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
 
   /// @dev The Lista V2 factory whose pairs are redeemable by this collector
   address public v2Factory;
+
+  /// @dev The StableSwapFactory whose pools this collector may claim admin fees from
+  address public ssFactory;
 
   /// @dev Manager role
   bytes32 public constant MANAGER = keccak256("MANAGER");
@@ -53,6 +57,7 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   event EmergencyWithdraw(address indexed asset, uint256 amount, address indexed to);
   event VaultFeeAccrued(address indexed vault);
   event V2FactoryUpdated(address indexed oldFactory, address indexed newFactory);
+  event SsFactoryUpdated(address indexed oldFactory, address indexed newFactory);
   event V2LpRedeemed(
     address indexed lpToken,
     uint256 lpAmount,
@@ -125,7 +130,7 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   }
 
   function _claimDexFee(address pool) internal {
-    require(stableSwapPools.contains(pool), "not whitelisted pool");
+    _validateStableSwapPool(pool);
     IStableSwap(pool).withdraw_admin_fees();
 
     emit StableSwapFeeCollected(pool);
@@ -256,11 +261,35 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     require(factory.feeTo() == address(this), "not fee recipient");
   }
 
+  /**
+   * @dev Authorizes a pool by provenance instead of a whitelist: it must be registered in
+   * `ssFactory` under its own coin pair. Defence in depth only - `withdraw_admin_fees` is
+   * MANAGER-gated on the pool, which is the binding gate.
+   */
+  function _validateStableSwapPool(address pool) internal view {
+    require(ssFactory != address(0), "ss factory not set");
+
+    IStableSwapFactory.StableSwapPairInfo[] memory infos = IStableSwapFactory(ssFactory).getPairInfos(
+      IStableSwap(pool).coins(0),
+      IStableSwap(pool).coins(1)
+    );
+
+    uint256 len = infos.length;
+    for (uint256 i = 0; i < len; i++) {
+      if (infos[i].swapContract == pool) {
+        return;
+      }
+    }
+
+    revert("invalid stable swap pool");
+  }
+
   /// @dev To receive BNB
   receive() external payable {}
 
   //// ----------------------------- Admin Functions ----------------------------- ////
 
+  /// @dev DEPRECATED - has no effect on what can be claimed; onboarding only needs the pool-side MANAGER grant
   function updateStableSwapPool(address pool, bool addPool) external onlyRole(MANAGER) {
     require(pool != address(0), "zero address");
 
@@ -293,6 +322,14 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     v2Factory = factory;
   }
 
+  function setSsFactory(address factory) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    require(factory != address(0), "zero address");
+    require(factory != ssFactory, "already set");
+
+    emit SsFactoryUpdated(ssFactory, factory);
+    ssFactory = factory;
+  }
+
   function emergencyWithdraw(address asset, uint256 amount, address to) external onlyRole(MANAGER) {
     require(to != address(0), "zero address");
     require(amount > 0, "invalid amount");
@@ -308,10 +345,13 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   }
 
   //// ----------------------------- View Functions ----------------------------- ////
+
+  /// @dev DEPRECATED - reads the stale set; claimability is `ssFactory` provenance plus the pool's MANAGER role
   function isStableSwapPool(address pool) external view returns (bool) {
     return stableSwapPools.contains(pool);
   }
 
+  /// @dev DEPRECATED - see `isStableSwapPool`.
   function getStableSwapPools() external view returns (address[] memory) {
     return stableSwapPools.values();
   }
@@ -357,7 +397,7 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   function previewClaimDexFee(
     address pool
   ) external view returns (uint256[2] memory adminFees, uint256[2] memory prices) {
-    require(stableSwapPools.contains(pool), "not whitelisted pool");
+    _validateStableSwapPool(pool);
     IStableSwap stableSwap = IStableSwap(pool);
 
     for (uint256 i = 0; i < 2; i++) {

@@ -6,6 +6,7 @@ import "forge-std/Test.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import { IStableSwap } from "../../src/dex/interfaces/IStableSwap.sol";
+import { IStableSwapFactory } from "../../src/dex/interfaces/IStableSwapFactory.sol";
 import { ERC20Mock } from "../../src/moolah/mocks/ERC20Mock.sol";
 import { RevenueCollector } from "../../src/revenue/RevenueCollector.sol";
 import { Liquidator } from "../../src/liquidator/Liquidator.sol";
@@ -16,6 +17,7 @@ contract RevenueCollectorTest is Test {
 
   MockStableSwap mockPool1;
   MockStableSwap mockPool2;
+  MockStableSwapFactory ssFactory;
 
   Liquidator liquidator1;
   BrokerLiquidator liquidator2;
@@ -82,6 +84,13 @@ contract RevenueCollectorTest is Test {
     assertEq(revenueCollector.isStableSwapPool(address(mockPool2)), true);
     assertEq(revenueCollector.isLiquidator(address(liquidator1)), true);
     assertEq(revenueCollector.isLiquidator(address(liquidator2)), true);
+
+    // pools are now authorized by provenance
+    ssFactory = new MockStableSwapFactory();
+    ssFactory.register(address(mockPool1));
+    ssFactory.register(address(mockPool2));
+    vm.prank(admin);
+    revenueCollector.setSsFactory(address(ssFactory));
   }
 
   function test_batchClaimDexFees() public {
@@ -110,11 +119,58 @@ contract RevenueCollectorTest is Test {
     assertEq(token0.balanceOf(address(revenueCollector)), 100 ether);
     assertEq(token1.balanceOf(address(revenueCollector)), 100 ether);
 
-    // should revert if pool is not whitelisted
+    // should revert for a pool that did not come from the factory, even though it has the same coins
     MockStableSwap mockPool3 = new MockStableSwap(address(token0), address(token1));
     vm.prank(bot);
-    vm.expectRevert("not whitelisted pool");
+    vm.expectRevert("invalid stable swap pool");
     revenueCollector.claimDexFee(address(mockPool3));
+  }
+
+  /// @dev a factory pool is claimable without ever entering the deprecated whitelist
+  function test_claimDexFee_provenanceWithoutWhitelist() public {
+    MockStableSwap pool = new MockStableSwap(address(token0), address(token1));
+    ssFactory.register(address(pool));
+
+    assertEq(revenueCollector.isStableSwapPool(address(pool)), false, "must not be whitelisted");
+
+    uint256 before = token0.balanceOf(address(revenueCollector));
+    vm.prank(bot);
+    revenueCollector.claimDexFee(address(pool));
+    assertEq(token0.balanceOf(address(revenueCollector)), before + 100 ether);
+  }
+
+  function test_claimDexFee_ssFactoryNotSet() public {
+    address[] memory pools = new address[](0);
+    address[] memory liqs = new address[](0);
+    RevenueCollector impl = new RevenueCollector();
+    ERC1967Proxy p = new ERC1967Proxy(
+      address(impl),
+      abi.encodeWithSelector(RevenueCollector.initialize.selector, admin, manager, bot, pools, liqs)
+    );
+    RevenueCollector fresh = RevenueCollector(payable(address(p)));
+
+    vm.prank(bot);
+    vm.expectRevert("ss factory not set");
+    fresh.claimDexFee(address(mockPool1));
+  }
+
+  function test_setSsFactory() public {
+    MockStableSwapFactory other = new MockStableSwapFactory();
+
+    vm.expectRevert(); // AccessControlUnauthorizedAccount
+    revenueCollector.setSsFactory(address(other));
+
+    vm.prank(admin);
+    vm.expectRevert("zero address");
+    revenueCollector.setSsFactory(address(0));
+
+    vm.prank(admin);
+    vm.expectRevert("already set");
+    revenueCollector.setSsFactory(address(ssFactory));
+
+    vm.prank(admin);
+    revenueCollector.setSsFactory(address(other));
+    assertEq(revenueCollector.ssFactory(), address(other));
   }
 
   function test_claimLiquidationFee() public {
@@ -510,6 +566,10 @@ contract MockStableSwap {
     token1 = _token1;
   }
 
+  function coins(uint256 i) external view returns (address) {
+    return i == 0 ? token0 : token1;
+  }
+
   function withdraw_admin_fees() public {
     if (token0 != BNB_ADDRESS) {
       ERC20Mock(token0).setBalance(address(this), 100 ether);
@@ -529,6 +589,32 @@ contract MockStableSwap {
   }
 
   receive() external payable {}
+}
+
+/// @dev Mirrors StableSwapFactory: infos are keyed by sorted tokens, and getPairInfos sorts too.
+contract MockStableSwapFactory {
+  mapping(address => mapping(address => IStableSwapFactory.StableSwapPairInfo[])) private pairInfos;
+
+  function register(address pool) external {
+    address c0 = MockStableSwap(payable(pool)).coins(0);
+    address c1 = MockStableSwap(payable(pool)).coins(1);
+    (address t0, address t1) = _sort(c0, c1);
+    pairInfos[t0][t1].push(
+      IStableSwapFactory.StableSwapPairInfo({ swapContract: pool, token0: t0, token1: t1, LPContract: address(0) })
+    );
+  }
+
+  function getPairInfos(
+    address tokenA,
+    address tokenB
+  ) external view returns (IStableSwapFactory.StableSwapPairInfo[] memory) {
+    (address t0, address t1) = _sort(tokenA, tokenB);
+    return pairInfos[t0][t1];
+  }
+
+  function _sort(address a, address b) private pure returns (address, address) {
+    return a < b ? (a, b) : (b, a);
+  }
 }
 
 contract MockMoolahVault {
