@@ -16,6 +16,7 @@ import { MockListaRevenueDistributor } from "./mocks/MockListaRevenueDistributor
 import { Moolah } from "moolah/Moolah.sol";
 import { ERC20Mock } from "moolah/mocks/ERC20Mock.sol";
 import { MockProvider } from "./mocks/MockProvider.sol";
+import { MockBrokerInterestRelayer } from "./mocks/MockBrokerInterestRelayer.sol";
 import { OracleMock } from "moolah/mocks/OracleMock.sol";
 import { MockSmartProvider } from "./mocks/MockSmartProvider.sol";
 import { RateCalculator, RateConfig } from "../../src/broker/RateCalculator.sol";
@@ -503,12 +504,12 @@ contract MarketFactoryTest is Test {
   }
 
   function testCreateFixedTermMarket() public {
-    address relayer = makeAddr("relayer");
     uint256 ratePerSecond = 1000000000195993755570992534;
     uint256 maxRatePerSecond = 1000000008319516284844716199;
     ERC20Mock loanToken = new ERC20Mock();
     ERC20Mock collateralToken = new ERC20Mock();
-    LendingBroker broker = newLendingBroker(relayer);
+    MockBrokerInterestRelayer relayer = newRelayer(address(loanToken));
+    LendingBroker broker = newLendingBroker(address(relayer));
 
     MarketFactory.FixedTermMarketParams memory params = MarketFactory.FixedTermMarketParams({
       broker: address(broker),
@@ -548,6 +549,13 @@ contract MarketFactoryTest is Test {
     // a broker market is liquidated via BrokerLiquidator, but the token whitelist is kept uniform
     assertSuiteWhitelisted(address(loanToken), true);
     assertSuiteWhitelisted(address(collateralToken), true);
+
+    // the factory registers the broker on its own relayer
+    address[] memory registered = relayer.getBrokers();
+    assertEq(registered.length, 1, "broker not registered on relayer");
+    assertEq(registered[0], address(broker), "wrong broker registered on relayer");
+
+    assertEq(moolah.providers(id, address(loanToken)), address(0), "unexpected provider on loan token");
   }
 
   function testCreateStockMarket() public {
@@ -782,6 +790,138 @@ contract MarketFactoryTest is Test {
       abi.encodeWithSelector(impl.initialize.selector, admin, operator, pauser)
     );
     return MarketFactory(address(proxy));
+  }
+
+  function testFixedTermMarketRegistersBNBProvider() public {
+    ERC20Mock collateralToken = new ERC20Mock();
+    MockBrokerInterestRelayer relayer = newRelayer(address(WBNB));
+    LendingBroker broker = newLendingBroker(address(relayer));
+
+    Id id = createFixedTerm(broker, address(WBNB), address(collateralToken));
+
+    assertEq(moolah.providers(id, address(WBNB)), address(bnbProvider), "BNBProvider not registered");
+  }
+
+  function testFixedTermMarketRegistersBNBProviderForNativeCollateral() public {
+    ERC20Mock loanToken = new ERC20Mock();
+    MockBrokerInterestRelayer relayer = newRelayer(address(loanToken));
+    LendingBroker broker = newLendingBroker(address(relayer));
+
+    Id id = createFixedTerm(broker, address(loanToken), address(WBNB));
+
+    assertEq(moolah.providers(id, address(WBNB)), address(bnbProvider), "BNBProvider not registered");
+  }
+
+  function testFixedTermMarketSkipsRelayerWhenAlreadyRegistered() public {
+    ERC20Mock loanToken = new ERC20Mock();
+    ERC20Mock collateralToken = new ERC20Mock();
+    MockBrokerInterestRelayer relayer = newRelayer(address(loanToken));
+    LendingBroker broker = newLendingBroker(address(relayer));
+
+    // pre-register by hand: addBroker needs LOAN_TOKEN, so set the market id first
+    bytes32 brokerManager = broker.MANAGER();
+    vm.prank(admin);
+    broker.grantRole(brokerManager, address(this));
+    Id preId = fixedTermId(broker, address(loanToken), address(collateralToken));
+    createRawMarket(address(loanToken), address(collateralToken), address(broker));
+    broker.setMarketId(preId);
+    relayer.setManager(address(this), true);
+    relayer.addBroker(address(broker));
+    assertEq(relayer.getBrokers().length, 1, "pre-condition");
+
+    LendingBroker broker2 = newLendingBroker(address(relayer));
+    ERC20Mock collateral2 = new ERC20Mock();
+    createFixedTerm(broker2, address(loanToken), address(collateral2));
+
+    address[] memory registered = relayer.getBrokers();
+    assertEq(registered.length, 2, "second broker not registered");
+    assertEq(registered[1], address(broker2), "wrong broker registered");
+  }
+
+  function testFixedTermMarketRevertsWhenFactoryLacksRelayerManager() public {
+    ERC20Mock loanToken = new ERC20Mock();
+    ERC20Mock collateralToken = new ERC20Mock();
+    MockBrokerInterestRelayer relayer = new MockBrokerInterestRelayer(address(loanToken)); // no grant
+    LendingBroker broker = newLendingBroker(address(relayer));
+
+    MarketFactory.FixedTermMarketParams memory params = fixedTermParams(
+      broker,
+      address(loanToken),
+      address(collateralToken)
+    );
+    oracle.setPrice(address(loanToken), 1e8);
+    oracle.setPrice(address(collateralToken), 1e8);
+    bytes32 brokerManager = broker.MANAGER();
+    vm.prank(admin);
+    broker.grantRole(brokerManager, address(marketFactory));
+
+    vm.prank(operator);
+    vm.expectRevert(bytes("relayer/not-manager"));
+    marketFactory.createFixedTermMarket(params);
+
+    assertEq(Id.unwrap(broker.MARKET_ID()), bytes32(0), "market id should not be set");
+  }
+
+  // ---------------------------------------------------------------- helpers
+
+  function fixedTermParams(
+    LendingBroker broker,
+    address loanToken,
+    address collateralToken
+  ) private view returns (MarketFactory.FixedTermMarketParams memory) {
+    return
+      MarketFactory.FixedTermMarketParams({
+        broker: address(broker),
+        loanToken: loanToken,
+        collateralToken: collateralToken,
+        irm: address(irm),
+        lltv: lltv80,
+        ratePerSecond: 1000000000195993755570992534,
+        maxRatePerSecond: 1000000008319516284844716199
+      });
+  }
+
+  function fixedTermId(LendingBroker broker, address loanToken, address collateralToken) private view returns (Id) {
+    return
+      MarketParams({
+        loanToken: loanToken,
+        collateralToken: collateralToken,
+        oracle: address(broker),
+        irm: address(irm),
+        lltv: lltv80
+      }).id();
+  }
+
+  function createRawMarket(address loanToken, address collateralToken, address brokerAsOracle) private {
+    oracle.setPrice(loanToken, 1e8);
+    oracle.setPrice(collateralToken, 1e8);
+    vm.prank(address(marketFactory));
+    moolah.createMarket(
+      MarketParams({
+        loanToken: loanToken,
+        collateralToken: collateralToken,
+        oracle: brokerAsOracle,
+        irm: address(irm),
+        lltv: lltv80
+      })
+    );
+  }
+
+  function createFixedTerm(LendingBroker broker, address loanToken, address collateralToken) private returns (Id) {
+    oracle.setPrice(loanToken, 1e8);
+    oracle.setPrice(collateralToken, 1e8);
+    bytes32 brokerManager = broker.MANAGER();
+    vm.prank(admin);
+    broker.grantRole(brokerManager, address(marketFactory));
+    MarketFactory.FixedTermMarketParams memory params = fixedTermParams(broker, loanToken, collateralToken);
+    vm.prank(operator);
+    return marketFactory.createFixedTermMarket(params);
+  }
+
+  function newRelayer(address loanToken) private returns (MockBrokerInterestRelayer) {
+    MockBrokerInterestRelayer relayer = new MockBrokerInterestRelayer(loanToken);
+    relayer.setManager(address(marketFactory), true);
+    return relayer;
   }
 
   function newLendingBroker(address replayer) private returns (LendingBroker) {
