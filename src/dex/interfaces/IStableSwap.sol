@@ -3,14 +3,6 @@ pragma solidity 0.8.34;
 
 uint256 constant N_COINS = 2;
 
-// enum
-enum StableSwapType {
-  BothERC20, // pool with ERC20 tokens
-  Token0Bnb, // pool with token0 as BNB
-  Token1Bnb, // pool with token1 as BNB
-  Others // unknown type
-}
-
 /// @notice Two-asset reserve pool supporting only pro-rata deposits and redemptions.
 /// @dev `AddLiquidity` and `RemoveLiquidity` keep their original signatures so existing consumers are
 ///      unaffected; their `fees` array is always zero and `invariant` is always zero.
@@ -44,7 +36,7 @@ interface IStableSwap {
   /// @notice Mint `lpAmount` shares, pulling exactly the reserves they are worth.
   function add_liquidity(uint256 lpAmount, uint256[N_COINS] memory maxAmounts) external payable;
 
-  /// @notice Burn `lpAmount` shares for a pro-rata slice of both reserves. Callable while paused.
+  /// @notice Burn `lpAmount` shares for a pro-rata slice of both reserves.
   function remove_liquidity(uint256 lpAmount, uint256[N_COINS] memory minAmounts) external;
 
   function withdraw_admin_fees() external;
@@ -69,7 +61,5 @@ interface IStableSwap {
 }
 
 interface IStableSwapPoolInfo {
-  function stableSwapType(address stableSwapPool) external view returns (StableSwapType);
-
   function calc_coins_amount(address stableSwapPool, uint256 _lpAmount) external view returns (uint256[2] memory);
 }

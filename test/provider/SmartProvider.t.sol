@@ -301,6 +301,27 @@ contract SmartProviderTest is Test {
     assertEq(lpCollateralTotalSupply, withdrawAmount);
   }
 
+  /// @dev A one-sided deposit funds zero shares, so the input check must reject it up front.
+  function test_supplyCollateral_rejectsSingleSidedDeposit() public {
+    uint256 supplyAmount = 1000 ether;
+    uint256[2] memory amounts = dexInfo.calc_coins_amount(address(dex), supplyAmount);
+
+    deal(address(token0), user2, amounts[0]);
+    deal(user2, amounts[1]);
+
+    vm.startPrank(user2);
+    token0.approve(address(smartProvider), amounts[0]);
+
+    // token0 only
+    vm.expectRevert("both token amounts required");
+    smartProvider.supplyCollateral(marketParams, user2, amounts[0], 0, 0);
+
+    // native leg only
+    vm.expectRevert("both token amounts required");
+    smartProvider.supplyCollateral{ value: amounts[1] }(marketParams, user2, 0, amounts[1], 0);
+    vm.stopPrank();
+  }
+
   function test_supplyCollateral_perfect() public {
     // user2 supply 1000 LP tokens as collateral
     uint256 supplyAmount = 1000 ether;

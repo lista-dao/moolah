@@ -9,9 +9,7 @@ import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 import { MarketParamsLib } from "../moolah/libraries/MarketParamsLib.sol";
-import { SharesMathLib } from "../moolah/libraries/SharesMathLib.sol";
-import { IMoolahVault } from "../moolah-vault/interfaces/IMoolahVault.sol";
-import { Id, IMoolah, MarketParams, Market } from "../moolah/interfaces/IMoolah.sol";
+import { Id, IMoolah, MarketParams } from "../moolah/interfaces/IMoolah.sol";
 import { ErrorsLib } from "../moolah/libraries/ErrorsLib.sol";
 import { UtilsLib } from "../moolah/libraries/UtilsLib.sol";
 
@@ -24,7 +22,8 @@ import { ISlisBNBxMinter } from "../utils/interfaces/ISlisBNBx.sol";
 /**
  * @title SmartProvider
  * @author Lista DAO
- * @notice SmartProvider is a contract that allows users to supply collaterals to Lista Lending while simultaneously earning swap fees.
+ * @notice Supplies a pro-rata StableSwap LP position as collateral to Lista Lending. The pool charges
+ *         no swap fee; a collateral position earns slisBNBx via {ISlisBNBxMinter}.
  */
 contract SmartProvider is
   ReentrancyGuardUpgradeable,
@@ -35,7 +34,6 @@ contract SmartProvider is
 {
   using SafeERC20 for IERC20;
   using MarketParamsLib for MarketParams;
-  using SharesMathLib for uint256;
 
   /* IMMUTABLES */
   IMoolah public immutable MOOLAH;
@@ -190,12 +188,15 @@ contract SmartProvider is
 
   /**
    * @dev Supplies liquidity to the pool and uses the resulting LP tokens as collateral in Moolah.
-   * @notice Callers pass the token amounts they are willing to spend plus a minimum LP amount; the
-   *         conversion to the pool's share-input API happens here.
+   * @notice Converts a pair of token amounts into the pool's share-input API. Both legs are mandatory.
+   * @dev An ERC20 leg is an upper bound; only what the shares are worth is pulled. A native leg is not:
+   *      `msg.value` must equal it exactly, since there is no refund path. Size a native call from
+   *      {IStableSwap-calc_add_liquidity}, not {IStableSwapPoolInfo-calc_coins_amount} — that helper
+   *      rounds down where the pool rounds up.
    * @param marketParams The market parameters.
    * @param onBehalf The address of the position owner.
-   * @param amount0 The amount of token0 to spend (upper bound).
-   * @param amount1 The amount of token1 to spend (upper bound).
+   * @param amount0 The amount of token0 to spend. Upper bound unless token0 is the native coin.
+   * @param amount1 The amount of token1 to spend. Upper bound unless token1 is the native coin.
    * @param minLpAmount The minimum amount of LP tokens to receive (slippage tolerance).
    */
   function supplyCollateral(
@@ -217,7 +218,8 @@ contract SmartProvider is
     } else {
       require(msg.value == 0, "msg.value must be 0");
     }
-    require(amount0 > 0 || amount1 > 0, "invalid amounts");
+    // `_sharesFor` takes the minimum of the two legs, so a one-sided deposit funds zero shares.
+    require(amount0 > 0 && amount1 > 0, "both token amounts required");
 
     // Largest share amount both legs can fully fund at the pool's current reserve ratio.
     uint256 lpAmount = _sharesFor(amount0, amount1);

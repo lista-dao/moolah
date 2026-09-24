@@ -231,7 +231,7 @@ contract StableSwapPoolERC20Test is StableSwapPoolBase {
     pool.add_liquidity{ value: 1 }(40 ether, quote);
   }
 
-  function test_addLiquidity_isBlockedWhilePaused() public {
+  function test_addLiquidity_staysOpenWhilePaused() public {
     _seed(300 ether, 100 ether);
     uint256[2] memory quote = pool.calc_add_liquidity(40 ether);
     _fund(userB, pool.coins(0), quote[0]);
@@ -239,10 +239,11 @@ contract StableSwapPoolERC20Test is StableSwapPoolBase {
 
     vm.prank(pauser);
     pool.pause();
+    assertTrue(pool.paused());
 
     vm.prank(userB);
-    vm.expectRevert();
     pool.add_liquidity(40 ether, quote);
+    assertEq(lp.balanceOf(userB), 40 ether, "deposit must work while paused");
   }
 
   /* ─────────────────────────── redemptions ───────────────────────── */

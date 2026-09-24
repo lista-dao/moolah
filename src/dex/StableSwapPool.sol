@@ -210,10 +210,7 @@ contract StableSwapPool is
   ///      nothing is ever returned to the caller and the deposit path has no re-entrancy window.
   /// @param lpAmount Shares to mint.
   /// @param maxAmounts Per-leg spend ceiling.
-  function add_liquidity(
-    uint256 lpAmount,
-    uint256[N_COINS] calldata maxAmounts
-  ) external payable whenNotPaused nonReentrant {
+  function add_liquidity(uint256 lpAmount, uint256[N_COINS] calldata maxAmounts) external payable nonReentrant {
     require(lpAmount > 0, "zero mint");
     uint256 supply = IStableSwapLP(token).totalSupply();
     require(supply > 0, "not seeded");
@@ -245,8 +242,7 @@ contract StableSwapPool is
   }
 
   /// @notice Burn `lpAmount` shares for a pro-rata slice of both reserves.
-  /// @dev Payouts derive from `balances`, so they can never exceed what the pool holds. Deliberately not
-  ///      gated on {whenNotPaused}: this is the only exit and it must stay open while the pool is paused.
+  /// @dev Payouts derive from `balances`, so they can never exceed what the pool holds.
   function remove_liquidity(uint256 lpAmount, uint256[N_COINS] calldata minAmounts) external nonReentrant {
     uint256 supply = IStableSwapLP(token).totalSupply();
     require(lpAmount > 0 && supply > 0, "nothing to redeem");
