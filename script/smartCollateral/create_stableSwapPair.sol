@@ -51,7 +51,6 @@ contract StableSwapPairDeploy is DeployBase {
     console.log("StableSwapPool: ", _pool);
 
     // set price diff limit to 5%
-    StableSwapPool(_pool).changePriceDiffThreshold(5e16, 5e16);
     console.log("Set price diff limit to 5%");
   }
 
@@ -83,7 +82,6 @@ contract StableSwapPairDeploy is DeployBase {
     console.log("StableSwapPool: ", _pool);
 
     // set price diff limit to 5%
-    StableSwapPool(_pool).changePriceDiffThreshold(5e16, 5e16);
     console.log("Set price diff limit to 5%");
   }
 

@@ -50,11 +50,6 @@ contract CreateLisAsterAsterPair is DeployBase {
     console.log("StableSwapPool LP token: ", _lp);
     console.log("StableSwapPool: ", _pool);
 
-    // Disable oracle price-diff check (requested).
-    // Deployer holds MANAGER on the freshly created pool, so this call succeeds here.
-    StableSwapPool(_pool).setSkipPriceDiff(true);
-    console.log("skipPriceDiff enabled (priceDiffCheck disabled)");
-
     vm.stopBroadcast();
 
     console.log("NEXT: set DEX_LISASTER_ASTER and LP_LISASTER_ASTER in LisAsterAddress.sol");

@@ -9,14 +9,12 @@ import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 import { MarketParamsLib } from "../moolah/libraries/MarketParamsLib.sol";
-import { SharesMathLib } from "../moolah/libraries/SharesMathLib.sol";
-import { IMoolahVault } from "../moolah-vault/interfaces/IMoolahVault.sol";
-import { Id, IMoolah, MarketParams, Market } from "../moolah/interfaces/IMoolah.sol";
+import { Id, IMoolah, MarketParams } from "../moolah/interfaces/IMoolah.sol";
 import { ErrorsLib } from "../moolah/libraries/ErrorsLib.sol";
 import { UtilsLib } from "../moolah/libraries/UtilsLib.sol";
 
 import { ISmartProvider } from "./interfaces/IProvider.sol";
-import { IStableSwap, IStableSwapPoolInfo, StableSwapType } from "../dex/interfaces/IStableSwap.sol";
+import { IStableSwap, IStableSwapPoolInfo } from "../dex/interfaces/IStableSwap.sol";
 import { IStableSwapLPCollateral } from "../dex/interfaces/IStableSwapLPCollateral.sol";
 import { IOracle, TokenConfig } from "../moolah/interfaces/IOracle.sol";
 import { ISlisBNBxMinter } from "../utils/interfaces/ISlisBNBx.sol";
@@ -24,7 +22,8 @@ import { ISlisBNBxMinter } from "../utils/interfaces/ISlisBNBx.sol";
 /**
  * @title SmartProvider
  * @author Lista DAO
- * @notice SmartProvider is a contract that allows users to supply collaterals to Lista Lending while simultaneously earning swap fees.
+ * @notice Supplies a pro-rata StableSwap LP position as collateral to Lista Lending. The pool charges
+ *         no swap fee; a collateral position earns slisBNBx via {ISlisBNBxMinter}.
  */
 contract SmartProvider is
   ReentrancyGuardUpgradeable,
@@ -35,7 +34,6 @@ contract SmartProvider is
 {
   using SafeERC20 for IERC20;
   using MarketParamsLib for MarketParams;
-  using SharesMathLib for uint256;
 
   /* IMMUTABLES */
   IMoolah public immutable MOOLAH;
@@ -189,11 +187,16 @@ contract SmartProvider is
   }
 
   /**
-   * @dev Supplies liquidity to the stableswap pool and uses the resulting LP tokens as collateral in Moolah.
+   * @dev Supplies liquidity to the pool and uses the resulting LP tokens as collateral in Moolah.
+   * @notice Converts a pair of token amounts into the pool's share-input API. Both legs are mandatory.
+   * @dev An ERC20 leg is an upper bound; only what the shares are worth is pulled. A native leg is not:
+   *      `msg.value` must equal it exactly, since there is no refund path. Size a native call from
+   *      {IStableSwap-calc_add_liquidity}, not {IStableSwapPoolInfo-calc_coins_amount} — that helper
+   *      rounds down where the pool rounds up.
    * @param marketParams The market parameters.
    * @param onBehalf The address of the position owner.
-   * @param amount0 The amount of token0 to add as liquidity.
-   * @param amount1 The amount of token1 to add as liquidity.
+   * @param amount0 The amount of token0 to spend. Upper bound unless token0 is the native coin.
+   * @param amount1 The amount of token1 to spend. Upper bound unless token1 is the native coin.
    * @param minLpAmount The minimum amount of LP tokens to receive (slippage tolerance).
    */
   function supplyCollateral(
@@ -215,26 +218,43 @@ contract SmartProvider is
     } else {
       require(msg.value == 0, "msg.value must be 0");
     }
-    require(amount0 > 0 || amount1 > 0, "invalid amounts");
+    // `_sharesFor` takes the minimum of the two legs, so a one-sided deposit funds zero shares.
+    require(amount0 > 0 && amount1 > 0, "both token amounts required");
 
-    // add liquidity to the stableswap pool
-    uint256 actualLpAmount = IERC20(dexLP).balanceOf(address(this));
+    // Largest share amount both legs can fully fund at the pool's current reserve ratio.
+    uint256 lpAmount = _sharesFor(amount0, amount1);
+    require(lpAmount > 0, "no lp minted");
+    require(lpAmount >= minLpAmount, "Slippage screwed you");
+
+    // What the pool will actually take. `need[i] <= amount_i` always holds: lpAmount floors the ratio
+    // and calc_add_liquidity ceils it back, and ceil(floor(a*s/b)*b/s) <= a for integer a.
+    uint256[2] memory need = IStableSwap(dex).calc_add_liquidity(lpAmount);
+
+    uint256 nativeValue;
     if (token0 == BNB_ADDRESS) {
-      IERC20(token1).safeIncreaseAllowance(dex, amount1);
-      if (amount1 > 0) IERC20(token1).safeTransferFrom(msg.sender, address(this), amount1);
+      nativeValue = need[0];
     } else if (token1 == BNB_ADDRESS) {
-      IERC20(token0).safeIncreaseAllowance(dex, amount0);
-      if (amount0 > 0) IERC20(token0).safeTransferFrom(msg.sender, address(this), amount0);
-    } else {
-      IERC20(token0).safeIncreaseAllowance(dex, amount0);
-      IERC20(token1).safeIncreaseAllowance(dex, amount1);
-
-      if (amount0 > 0) IERC20(token0).safeTransferFrom(msg.sender, address(this), amount0);
-      if (amount1 > 0) IERC20(token1).safeTransferFrom(msg.sender, address(this), amount1);
+      nativeValue = need[1];
     }
-    IStableSwap(dex).add_liquidity{ value: msg.value }([amount0, amount1], minLpAmount);
 
-    // validate the actual LP amount minted
+    // The native leg arrives whole and cannot be partially pulled, so it must match what the pool takes
+    // exactly. Reverting on a mismatch keeps the deposit path refund-free, which is what removes the
+    // re-entrancy surface entirely. ERC20 legs need no such check: only `need[i]` is ever pulled from
+    // the caller.
+    require(msg.value == nativeValue, "amounts not proportional");
+
+    // Pull only what the pool takes — the ERC20 legs therefore need no refund at all.
+    if (token0 != BNB_ADDRESS && need[0] > 0) {
+      IERC20(token0).safeTransferFrom(msg.sender, address(this), need[0]);
+      IERC20(token0).safeIncreaseAllowance(dex, need[0]);
+    }
+    if (token1 != BNB_ADDRESS && need[1] > 0) {
+      IERC20(token1).safeTransferFrom(msg.sender, address(this), need[1]);
+      IERC20(token1).safeIncreaseAllowance(dex, need[1]);
+    }
+
+    uint256 actualLpAmount = IERC20(dexLP).balanceOf(address(this));
+    IStableSwap(dex).add_liquidity{ value: nativeValue }(lpAmount, [amount0, amount1]);
     actualLpAmount = IERC20(dexLP).balanceOf(address(this)) - actualLpAmount;
     require(actualLpAmount > 0, "no lp minted");
 
@@ -248,7 +268,16 @@ contract SmartProvider is
     // sync balances after position change
     _syncPosition(marketParams.id(), onBehalf);
 
-    emit SupplyCollateral(onBehalf, TOKEN, actualLpAmount, amount0, amount1);
+    emit SupplyCollateral(onBehalf, TOKEN, actualLpAmount, need[0], need[1]);
+  }
+
+  /// @dev Largest LP amount that both `amount0` and `amount1` can fully fund at the current ratio.
+  function _sharesFor(uint256 amount0, uint256 amount1) private view returns (uint256) {
+    uint256 supply = IERC20(dexLP).totalSupply();
+    if (supply == 0) return 0;
+    uint256 s0 = (amount0 * supply) / IStableSwap(dex).balances(0);
+    uint256 s1 = (amount1 * supply) / IStableSwap(dex).balances(1);
+    return s0 < s1 ? s0 : s1;
   }
 
   /**
@@ -289,100 +318,6 @@ contract SmartProvider is
     if (token1Amount > 0) transferOutTo(1, token1Amount, receiver);
 
     emit WithdrawCollateral(TOKEN, onBehalf, collateralAmount, token0Amount, token1Amount, receiver);
-  }
-
-  /**
-   * @dev Withdraws liquidity in an imbalanced way, allowing the user to specify exact amounts of token0 and token1 to withdraw.
-   * @param marketParams The market parameters.
-   * @param token0Amount The exact amount of token0 to withdraw.
-   * @param token1Amount The exact amount of token1 to withdraw.
-   * @param maxCollateralAmount The maximum amount of collateral (LP tokens) to burn for the withdrawal (slippage tolerance).
-   * @param onBehalf The address of the position owner.
-   * @param receiver The address to receive the withdrawn tokens.
-   */
-  function withdrawCollateralImbalance(
-    MarketParams calldata marketParams,
-    uint256 token0Amount,
-    uint256 token1Amount,
-    uint256 maxCollateralAmount,
-    address onBehalf,
-    address payable receiver
-  ) external nonReentrant {
-    require(token0Amount > 0 || token1Amount > 0, "zero withdrawal amount");
-    require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
-    require(isSenderAuthorized(msg.sender, onBehalf), "unauthorized sender");
-    require(marketParams.collateralToken == TOKEN, "invalid collateral token");
-    require(maxCollateralAmount > 0, "invalid collateral amount");
-
-    uint256[2] memory amounts = [token0Amount, token1Amount];
-
-    // remove liquidity from the stableswap pool
-    uint256 actualBurnAmount = IERC20(dexLP).balanceOf(address(this));
-    IStableSwap(dex).remove_liquidity_imbalance(amounts, maxCollateralAmount);
-    actualBurnAmount = actualBurnAmount - IERC20(dexLP).balanceOf(address(this));
-
-    // withdraw collateral
-    MOOLAH.withdrawCollateral(marketParams, actualBurnAmount, onBehalf, address(this));
-
-    // sync balances after position change
-    _syncPosition(marketParams.id(), onBehalf);
-
-    // burn collateral token
-    IStableSwapLPCollateral(TOKEN).burn(address(this), actualBurnAmount);
-
-    if (token0Amount > 0) transferOutTo(0, token0Amount, receiver);
-    if (token1Amount > 0) transferOutTo(1, token1Amount, receiver);
-
-    emit WithdrawCollateral(TOKEN, onBehalf, actualBurnAmount, token0Amount, token1Amount, receiver);
-  }
-
-  /**
-   * @dev Withdraws liquidity in a single token, allowing the user to specify which token to withdraw.
-   * @param marketParams The market parameters.
-   * @param collateralAmount The amount of lp to withdraw.
-   * @param i The index of the token to withdraw (0 or 1).
-   * @param minTokenAmount The minimum amount of the specified token i to receive (slippage tolerance).
-   * @param onBehalf The address of the position owner.
-   * @param receiver The address to receive the withdrawn tokens.
-   */
-  function withdrawCollateralOneCoin(
-    MarketParams calldata marketParams,
-    uint256 collateralAmount,
-    uint256 i,
-    uint256 minTokenAmount,
-    address onBehalf,
-    address payable receiver
-  ) external nonReentrant {
-    require(collateralAmount > 0, "zero withdrawal amount");
-    require(receiver != address(0), ErrorsLib.ZERO_ADDRESS);
-    require(isSenderAuthorized(msg.sender, onBehalf), "unauthorized sender");
-    require(marketParams.collateralToken == TOKEN, "invalid collateral token");
-    require(i == 0 || i == 1, "invalid token index");
-
-    uint256 actualAmount = getTokenBalance(i);
-    IStableSwap(dex).remove_liquidity_one_coin(collateralAmount, i, minTokenAmount);
-
-    actualAmount = getTokenBalance(i) - actualAmount;
-
-    // withdraw collateral
-    MOOLAH.withdrawCollateral(marketParams, collateralAmount, onBehalf, address(this));
-
-    // sync balances after position change
-    _syncPosition(marketParams.id(), onBehalf);
-
-    // burn collateral token
-    IStableSwapLPCollateral(TOKEN).burn(address(this), collateralAmount);
-
-    if (actualAmount > 0) transferOutTo(i, actualAmount, receiver);
-
-    emit WithdrawCollateral(
-      TOKEN,
-      onBehalf,
-      collateralAmount,
-      i == 0 ? actualAmount : 0,
-      i == 1 ? actualAmount : 0,
-      receiver
-    );
   }
 
   /**
