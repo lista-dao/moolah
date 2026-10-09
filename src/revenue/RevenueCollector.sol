@@ -5,6 +5,7 @@ import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgr
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import { SafeERC20, IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 import { IListaV2Factory } from "../dex/interfaces/IListaV2Factory.sol";
 import { IListaV2Pair } from "../dex/interfaces/IListaV2Pair.sol";
@@ -262,9 +263,11 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   }
 
   /**
-   * @dev Authorizes a pool by provenance instead of a whitelist: it must be registered in
-   * `ssFactory` under its own coin pair. Defence in depth only - `withdraw_admin_fees` is
-   * MANAGER-gated on the pool, which is the binding gate.
+   * @dev Authorizes a pool by provenance: it must be registered in `ssFactory` under its own coin
+   * pair, and this collector must hold the pool's MANAGER role. The MANAGER check mirrors
+   * `_validateV2Lp`'s `feeTo() == address(this)`: `withdraw_admin_fees` is MANAGER-gated on the pool
+   * and pays `msg.sender`, so holding MANAGER is the real precondition for a successful claim. Making
+   * it explicit keeps `claimDexFee` and `previewClaimDexFee` consistent and surfaces a clear error.
    */
   function _validateStableSwapPool(address pool) internal view {
     require(ssFactory != address(0), "ss factory not set");
@@ -274,14 +277,17 @@ contract RevenueCollector is UUPSUpgradeable, AccessControlEnumerableUpgradeable
       IStableSwap(pool).coins(1)
     );
 
+    bool registered;
     uint256 len = infos.length;
     for (uint256 i = 0; i < len; i++) {
       if (infos[i].swapContract == pool) {
-        return;
+        registered = true;
+        break;
       }
     }
+    require(registered, "invalid stable swap pool");
 
-    revert("invalid stable swap pool");
+    require(IAccessControl(pool).hasRole(MANAGER, address(this)), "not pool manager");
   }
 
   /// @dev To receive BNB

@@ -139,6 +139,21 @@ contract RevenueCollectorTest is Test {
     assertEq(token0.balanceOf(address(revenueCollector)), before + 100 ether);
   }
 
+  /// @dev a registered pool still reverts when the collector does not hold the pool's MANAGER role,
+  ///      and preview is gated the same way (parity with claimDexFee)
+  function test_claimDexFee_notPoolManager() public {
+    MockStableSwap pool = new MockStableSwap(address(token0), address(token1));
+    ssFactory.register(address(pool));
+    pool.setManagerGranted(false);
+
+    vm.prank(bot);
+    vm.expectRevert("not pool manager");
+    revenueCollector.claimDexFee(address(pool));
+
+    vm.expectRevert("not pool manager");
+    revenueCollector.previewClaimDexFee(address(pool));
+  }
+
   function test_claimDexFee_ssFactoryNotSet() public {
     address[] memory pools = new address[](0);
     address[] memory liqs = new address[](0);
@@ -560,10 +575,22 @@ contract MockStableSwap {
   address public token1;
 
   address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+  bytes32 private constant MANAGER = keccak256("MANAGER");
+
+  /// @dev whether the pool recognizes the caller (the collector) as its MANAGER; granted by default
+  bool public managerGranted = true;
 
   constructor(address _token0, address _token1) {
     token0 = _token0;
     token1 = _token1;
+  }
+
+  function setManagerGranted(bool granted) external {
+    managerGranted = granted;
+  }
+
+  function hasRole(bytes32 role, address) external view returns (bool) {
+    return role == MANAGER && managerGranted;
   }
 
   function coins(uint256 i) external view returns (address) {
