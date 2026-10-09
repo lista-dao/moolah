@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.34;
 import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
+import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { MarketParams, Id, IMoolah } from "moolah/interfaces/IMoolah.sol";
@@ -51,6 +52,8 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
 
   bytes32 public constant OPERATOR = keccak256("OPERATOR");
   bytes32 public constant PAUSER = keccak256("PAUSER");
+  /// @dev MANAGER role on the Liquidator / BrokerLiquidator / LiquidationVault / StockOracleSwitch.
+  bytes32 public constant MANAGER = keccak256("MANAGER");
 
   event BrokerMarketDeployed(FixedTermMarketParams fixedTermMarketParams, Id marketId, address broker);
   event CommonMarketDeployed(MarketParams marketParams, Id marketId);
@@ -234,12 +237,10 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     if (liquidatorMarketWhitelist) {
       liquidator.setMarketWhitelist(Id.unwrap(id), true);
     }
-    // token whitelist across the liquidation suite (Liquidator / BrokerLiquidator / LiquidationVault).
-    // A smart-collateral LP is excluded from the vault only: the vault cannot sell it, so it is
-    // reflow-blacklisted in _configSmartProvider and only its underlying pair legs are vault-whitelisted.
-    // Whitelisting the LP there would also open the BOT collect* path for it.
-    _whitelistToken(param.loanToken, true);
-    _whitelistToken(param.collateralToken, !liquidatorSmartProvider);
+    // Liquidator + vault. Not the BrokerLiquidator: its entries need marketIdToBroker[id] != 0, which
+    // only fixed-term markets get, so common-market entries there would be inert.
+    _whitelistToken(param.loanToken, false, true);
+    _whitelistToken(param.collateralToken, false, true);
     // revenue distributor set token whitelist
     if (address(revenueDistributor) != address(0) && !revenueDistributor.tokenWhitelist(param.loanToken)) {
       address[] memory tokens = new address[](1);
@@ -273,6 +274,11 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     if (liquidatorSmartProvider) {
       _configSmartProvider(id, param.oracle, param.collateralToken);
     }
+
+    // An unregistered token is passthrough in the switch, so a forgotten flag would leave a bStock
+    // market trading on a stale price while the stock is closed — silently. Derive it from the oracle.
+    // The inverse is allowed: registering an explicitly named token is harmless.
+    require(!_routesThroughStockSwitch(param.oracle) || stockCollateral, "stockCollateral required");
 
     // if collateral is a tokenized stock, register it in the market-hours switch. setStock also opens
     // the stock; it stays gated by the switch's global market-hours flag, which MANAGER owns.
@@ -328,9 +334,9 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     // rate calculator register broker
     rateCalculator.registerBroker(param.broker, param.ratePerSecond, param.maxRatePerSecond);
 
-    // token whitelist across the liquidation suite (Liquidator / BrokerLiquidator / LiquidationVault)
-    _whitelistToken(param.loanToken, true);
-    _whitelistToken(param.collateralToken, true);
+    // A broker market is liquidated through the BrokerLiquidator only.
+    _whitelistToken(param.loanToken, true, true);
+    _whitelistToken(param.collateralToken, true, true);
 
     // broker liquidator set market whitelist
     brokerLiquidator.setMarketToBroker(Id.unwrap(id), param.broker, true);
@@ -363,8 +369,8 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     // whitelisted like any other token, which is what collectETH / sellBNB require.
     address token0 = ISmartProvider(provider).token(0);
     address token1 = ISmartProvider(provider).token(1);
-    _whitelistToken(token0, true);
-    _whitelistToken(token1, true);
+    _whitelistToken(token0, false, true);
+    _whitelistToken(token1, false, true);
     // blacklist the LP collateral from reflow on every liquidator that reflows into the vault: a
     // wrong-entry plain liquidate must not push un-sellable LP into the vault. It stays in the
     // liquidator, recoverable via redeemSmartCollateral. PublicLiquidator has no reflow path.
@@ -374,21 +380,48 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     if (address(brokerLiquidator) != address(0) && !brokerLiquidator.reflowBlacklist(collateral)) {
       brokerLiquidator.setReflowBlacklist(collateral, true);
     }
+    // The reflow blacklist above is what keeps the LP out of the vault from now on. Revoke an entry
+    // an earlier market may already have added: once whitelisted, BOT collectERC20 could pull
+    // un-sellable LP in, where only a MANAGER withdrawERC20 gets it out.
+    if (address(liquidationVault) != address(0) && liquidationVault.tokenWhitelist(collateral)) {
+      liquidationVault.setTokenWhitelist(collateral, false);
+    }
   }
 
-  /// @dev Whitelist `token` on every contract that can hold or sell it during a liquidation: the
-  ///      Liquidator, the BrokerLiquidator and — when `includeVault` — the LiquidationVault. The
-  ///      latter two are skipped while unwired (address(0)). Every branch reads the current status
-  ///      first because these setters reject a no-op status change.
-  /// @param includeVault false only for a smart-collateral LP, which the vault must never hold.
-  function _whitelistToken(address token, bool includeVault) private {
-    if (!liquidator.tokenWhitelist(token)) {
-      liquidator.setTokenWhitelist(token, true);
+  /// @dev Whether `oracle` is a StockOracle on our switch, i.e. whether this market is market-hours
+  ///      gated. Decoded as uint256 so a non-conforming oracle cannot revert market creation.
+  function _routesThroughStockSwitch(address oracle) private view returns (bool) {
+    address switch_ = address(stockOracleSwitch);
+    if (switch_ == address(0)) return false;
+    (bool ok, bytes memory ret) = oracle.staticcall(abi.encodeWithSignature("stockSwitch()"));
+    if (!ok || ret.length != 32) return false;
+    return abi.decode(ret, (uint256)) == uint256(uint160(switch_));
+  }
+
+  /// @dev Whitelist `token` on the liquidator that can actually liquidate this market, plus the vault
+  ///      when `includeVault`. Unwired dependencies are skipped; each branch reads the current status
+  ///      first because these setters reject a no-op change.
+  /// @param brokerMarket true for a fixed-term market, false for a common one.
+  /// @param includeVault whether the vault may sell/collect this token at all.
+  function _whitelistToken(address token, bool brokerMarket, bool includeVault) private {
+    if (brokerMarket) {
+      if (address(brokerLiquidator) != address(0) && !brokerLiquidator.tokenWhitelist(token)) {
+        brokerLiquidator.setTokenWhitelist(token, true);
+      }
+    } else {
+      if (!liquidator.tokenWhitelist(token)) {
+        liquidator.setTokenWhitelist(token, true);
+      }
     }
-    if (address(brokerLiquidator) != address(0) && !brokerLiquidator.tokenWhitelist(token)) {
-      brokerLiquidator.setTokenWhitelist(token, true);
-    }
-    if (includeVault && address(liquidationVault) != address(0) && !liquidationVault.tokenWhitelist(token)) {
+    // A reflow-blacklisted token is a smart-collateral LP the vault cannot sell. That flag is the
+    // single on-chain source of truth and outranks includeVault, so no later market path can flip an
+    // LP back on, and LPs blacklisted before this build are covered without any backfill.
+    if (
+      includeVault &&
+      !liquidator.reflowBlacklist(token) &&
+      address(liquidationVault) != address(0) &&
+      !liquidationVault.tokenWhitelist(token)
+    ) {
       liquidationVault.setTokenWhitelist(token, true);
     }
   }
@@ -417,8 +450,17 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
    * @dev Set the liquidation vault address
    * @param _liquidationVault The address of the liquidation vault contract
    */
+  /// @dev Must equal the fundSource of every wired liquidator, so the factory never whitelists
+  ///      against a vault that proceeds do not land in, and must already grant this factory MANAGER,
+  ///      or the next createMarket would revert. address(0) mirrors a disabled fundSource.
   function setLiquidationVault(address _liquidationVault) external onlyRole(DEFAULT_ADMIN_ROLE) {
-    require(_liquidationVault != address(0), "ZeroAddress");
+    if (_liquidationVault != address(0)) {
+      require(liquidator.fundSource() == _liquidationVault, "vault != Liquidator fundSource");
+      if (address(brokerLiquidator) != address(0)) {
+        require(brokerLiquidator.fundSource() == _liquidationVault, "vault != BrokerLiquidator fundSource");
+      }
+      require(IAccessControl(_liquidationVault).hasRole(MANAGER, address(this)), "factory lacks MANAGER on the vault");
+    }
     emit LiquidationVaultUpdated(address(liquidationVault), _liquidationVault);
     liquidationVault = ILiquidationVault(_liquidationVault);
   }
@@ -427,8 +469,11 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
    * @dev Set the stock oracle switch address
    * @param _stockOracleSwitch The address of the stock oracle switch contract
    */
+  /// @dev The switch must already grant this factory MANAGER, or the first bStock market would revert
+  ///      inside setStock. address(0) stays rejected: an unset switch is the ETH default.
   function setStockOracleSwitch(address _stockOracleSwitch) external onlyRole(DEFAULT_ADMIN_ROLE) {
     require(_stockOracleSwitch != address(0), "ZeroAddress");
+    require(IAccessControl(_stockOracleSwitch).hasRole(MANAGER, address(this)), "factory lacks MANAGER on the switch");
     emit StockOracleSwitchUpdated(address(stockOracleSwitch), _stockOracleSwitch);
     stockOracleSwitch = IStockOracleSwitch(_stockOracleSwitch);
   }
