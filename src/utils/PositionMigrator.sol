@@ -90,7 +90,7 @@ contract PositionMigrator is
   /// @dev The only markets `batchForceMigrate` may register PM as lisUSD provider on. Hardcoded:
   ///      PM holds Moolah MANAGER for the migration, and a BOT-chosen market would let PM borrow
   ///      on users' behalf in any lisUSD market.
-  bytes32 public constant MARKET_SLISBNB = 0x7fe248d8459a88e50e8582c71219edbce1079437e58190aeab41ac503694f0a5;
+  bytes32 public constant MARKET_SLISBNB = 0xabbf94356a49ee51ea2f36277343a2ff5942445de92cc3f05ec4e489fb994cd2;
   bytes32 public constant MARKET_BTCB = 0xbbd16eb859bf2cef6cc7503f0d8ac0ec8b15d48dd6f5bf7314792b6970058df6;
   bytes32 public constant MARKET_WBETH = 0x4a0d55fdcb3817f124bc55f9236700384551dfb7437dd39c75d3568d11e66576;
 

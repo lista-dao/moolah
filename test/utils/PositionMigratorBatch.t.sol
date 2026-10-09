@@ -27,8 +27,8 @@ contract PositionMigratorBatchTest is Test {
   address constant BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
   address constant WBETH = 0xa2E3356610840701BDf5611a53974510Ae27E2e1;
   address constant BNB_STRATEGY = 0x6F28FeC449dbd2056b76ac666350Af8773E03873;
-  /// @dev the YieldAccount market: also lisUSD/slisBNB, but not a forced-migration target
-  bytes32 constant YIELD_MARKET = 0xabbf94356a49ee51ea2f36277343a2ff5942445de92cc3f05ec4e489fb994cd2;
+  /// @dev the 85% lisUSD/slisBNB market: same pair as MARKET_SLISBNB, but not a forced-migration target
+  bytes32 constant OTHER_SLISBNB_MARKET = 0x7fe248d8459a88e50e8582c71219edbce1079437e58190aeab41ac503694f0a5;
   bytes32 constant MANAGER_ROLE = keccak256("MANAGER");
 
   // whitelisted CDP accounts with debt at FORK_BLOCK, one per collateral kind
@@ -163,13 +163,13 @@ contract PositionMigratorBatchTest is Test {
 
   /// @dev a lisUSD market outside the three targets is refused before the migrator registers there
   function test_batchForceMigrate_rejectsMarketOutsideTargets() public {
-    PositionMigrator.ForceMigration[] memory entries = _one(_entry(SLISBNB_USER, YIELD_MARKET, false));
+    PositionMigrator.ForceMigration[] memory entries = _one(_entry(SLISBNB_USER, OTHER_SLISBNB_MARKET, false));
     assertEq(entries[0].marketParams.loanToken, LISUSD, "precondition: a lisUSD market");
 
     vm.prank(bot);
     vm.expectRevert("market not allowed");
     MIGRATOR.batchForceMigrate(entries);
-    assertEq(MOOLAH.providers(Id.wrap(YIELD_MARKET), LISUSD), address(0));
+    assertEq(MOOLAH.providers(Id.wrap(OTHER_SLISBNB_MARKET), LISUSD), address(0));
   }
 
   function test_batchForceMigrate_needsMoolahManager() public {
