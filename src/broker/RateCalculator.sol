@@ -63,22 +63,10 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
    */
   function getRate(address broker) external view override returns (uint256) {
     RateConfig memory config = brokers[broker];
-    require(brokers[broker].lastUpdated != 0, "RateCalculator/broker-not-active");
-    uint256 ratePerSecond = config.ratePerSecond;
-    uint256 lastUpdated = config.lastUpdated;
-    uint256 currentRate = config.currentRate;
-    // no rate set, return default
-    if (ratePerSecond == 0) {
-      return currentRate;
-    }
-    // no time elapsed, return current rate
-    if (lastUpdated == block.timestamp) {
-      return currentRate;
-    }
-    return
-      uint256(
-        BrokerMath._rmul(BrokerMath._rpow(ratePerSecond, block.timestamp - lastUpdated, RATE_SCALE), currentRate)
-      );
+
+    require(config.lastUpdated != 0, "RateCalculator/broker-not-active");
+
+    return _calculateRate(config.ratePerSecond, config.lastUpdated, config.currentRate, block.timestamp);
   }
 
   /**
@@ -134,27 +122,41 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
    */
   function _accrueRate(address broker) internal returns (uint256) {
     RateConfig storage config = brokers[broker];
-    require(config.lastUpdated != 0, "RateCalculator/broker-not-active");
-    uint256 ratePerSecond = config.ratePerSecond;
+
     uint256 lastUpdated = config.lastUpdated;
-    uint256 currentRate = config.currentRate;
-    // no rate set, return default
-    if (ratePerSecond == 0) {
-      config.lastUpdated = block.timestamp;
-      return currentRate;
+    require(lastUpdated != 0, "RateCalculator/broker-not-active");
+
+    uint256 timestamp = block.timestamp;
+
+    // No rate set: just refresh timestamp
+    if (config.ratePerSecond == 0) {
+      config.lastUpdated = timestamp;
+      return config.currentRate;
     }
+
     // no time elapsed, return current rate
-    if (lastUpdated == block.timestamp) {
+    if (lastUpdated == timestamp) {
+      return config.currentRate;
+    }
+
+    config.currentRate = _calculateRate(config.ratePerSecond, lastUpdated, config.currentRate, timestamp);
+
+    config.lastUpdated = timestamp;
+
+    return config.currentRate;
+  }
+
+  function _calculateRate(
+    uint256 ratePerSecond,
+    uint256 lastUpdated,
+    uint256 currentRate,
+    uint256 timestamp
+  ) internal pure returns (uint256) {
+    if (ratePerSecond == 0 || lastUpdated == timestamp) {
       return currentRate;
     }
-    // update current rate
-    config.currentRate = BrokerMath._rmul(
-      BrokerMath._rpow(ratePerSecond, block.timestamp - lastUpdated, RATE_SCALE),
-      currentRate
-    );
-    // refresh updated timestamp
-    config.lastUpdated = block.timestamp;
-    return config.currentRate;
+
+    return BrokerMath._rmul(BrokerMath._rpow(ratePerSecond, timestamp - lastUpdated, RATE_SCALE), currentRate);
   }
 
   ///////////////////////////////////////
@@ -190,12 +192,12 @@ contract RateCalculator is UUPSUpgradeable, AccessControlEnumerableUpgradeable, 
     require(brokers[_broker].lastUpdated == 0, "RateCalculator/broker-already-registered");
     require(_ratePerSecond >= RATE_SCALE, "RateCalculator/rate-below-min");
     require(_maxRatePerSecond >= _ratePerSecond, "RateCalculator/max-rate-too-low");
-    brokers[_broker] = RateConfig({
-      currentRate: RATE_SCALE,
-      ratePerSecond: _ratePerSecond,
-      maxRatePerSecond: _maxRatePerSecond,
-      lastUpdated: block.timestamp
-    });
+
+    brokers[_broker].currentRate = RATE_SCALE;
+    brokers[_broker].ratePerSecond = _ratePerSecond;
+    brokers[_broker].maxRatePerSecond = _maxRatePerSecond;
+    brokers[_broker].lastUpdated = block.timestamp;
+
     emit BrokerRegistered(_broker, _ratePerSecond, _maxRatePerSecond);
   }
 
