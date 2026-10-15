@@ -484,7 +484,10 @@ abstract contract V3Provider is
 
   /* ──────────────────── Moolah provider callback ──────────────────── */
 
-  function liquidate(Id id, address borrower) external {
+  /// @dev nonReentrant: a liquidation cannot land while this vault is mid-rebalance (burned NFT, idle
+  ///      cleared, peek at the dust floor) — a whitelisted swap venue that re-enters Moolah.liquidate
+  ///      reverts here instead of seizing collateral at a transiently near-zero price.
+  function liquidate(Id id, address borrower) external nonReentrant {
     if (msg.sender != address(MOOLAH)) revert OnlyMoolah();
     if (MOOLAH.idToMarketParams(id).collateralToken != address(this)) revert InvalidMarket();
     _afterCollateralChange(id, borrower);

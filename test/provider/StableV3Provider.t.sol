@@ -15,6 +15,8 @@ import { IOracle, TokenConfig } from "moolah/interfaces/IOracle.sol";
 import { MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { TickMath } from "lista-dao-contracts/libraries/TickMath.sol";
+import { FullMath } from "lista-dao-contracts/oracle/libraries/FullMath.sol";
+import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @dev Minimal resilient-oracle mock: 8-decimal USD prices, settable per token.
 contract MockOracle is IOracle {
@@ -30,6 +32,39 @@ contract MockOracle is IOracle {
 
   function getTokenConfig(address) external pure returns (TokenConfig memory c) {
     return c;
+  }
+}
+
+/// @dev Whitelisted "swap venue" that re-enters Moolah.liquidate while the adapter is mid-rebalance.
+contract ReenteringVenue {
+  Moolah immutable MOOLAH;
+  address immutable BORROWER;
+  address immutable SHARE;
+  address immutable ORACLE;
+  MarketParams mp;
+  bool public attempted;
+  bool public liquidated;
+  bytes public err;
+  uint256 public peekDuring;
+
+  constructor(Moolah _moolah, MarketParams memory _mp, address _borrower, address _oracle, address _loanToken) {
+    MOOLAH = _moolah;
+    mp = _mp;
+    BORROWER = _borrower;
+    SHARE = _mp.collateralToken;
+    ORACLE = _oracle;
+    IERC20(_loanToken).approve(address(_moolah), type(uint256).max);
+  }
+
+  fallback() external payable {
+    attempted = true;
+    peekDuring = IOracle(ORACLE).peek(SHARE);
+    (, , uint128 collateral) = MOOLAH.position(MarketParamsLib.id(mp), BORROWER);
+    try MOOLAH.liquidate(mp, BORROWER, collateral, 0, "") {
+      liquidated = true;
+    } catch (bytes memory e) {
+      err = e;
+    }
   }
 }
 
@@ -310,6 +345,86 @@ contract StableV3ProviderTest is Test {
     assertGt(adapter.totalLiquidity(), liqBefore, "idle compounded into the existing position");
     // spot is above the range here, so only the token1 leg is addable; token0 idle stays parked
     assertEq(adapter.idleToken1(), 0, "addable idle deployed");
+  }
+
+  /* ───────────────────────── opening range rounding ───────────────────────── */
+
+  /// @dev Both edges round OUTWARD: the aligned lower tick sits at or below the lower target price and
+  ///      the aligned upper tick at or above the upper one (fixture: rate 0.9999, 10/10 bps, spacing 1).
+  function test_openingRange_bothEdgesRoundOutward() public view {
+    uint256 rate = adapter.centerRate();
+    uint160 sqrtLower = _sqrtFromRate((rate * (10_000 - RANGE_LOWER_BPS)) / 10_000);
+    uint160 sqrtUpper = _sqrtFromRate((rate * (10_000 + RANGE_UPPER_BPS)) / 10_000);
+    assertLe(TickMath.getSqrtRatioAtTick(adapter.tickLower()), sqrtLower, "lower edge at or below target");
+    assertGe(TickMath.getSqrtRatioAtTick(adapter.tickUpper()), sqrtUpper, "upper edge at or above target");
+    assertEq(adapter.tickLower(), -12);
+    assertEq(adapter.tickUpper(), 9); // was 8: the floored price-to-tick ate the upper margin
+  }
+
+  /// @dev An upper target exactly on a tick: the floored sqrt lands one wei under it, so without the
+  ///      outward step the upper edge collapses onto the centre (rate 1.0, 1/1 bps → [-2, 0]).
+  function test_openingRange_exactTickTargetKeepsUpperMargin() public {
+    MockOracle par = new MockOracle();
+    par.setPrice(TOKEN0, 1e8);
+    par.setPrice(TOKEN1, 1e8);
+    StableV3DexAdapter a = _deployAdapter(address(par), 1, 1, SPOT_DEV_BPS);
+    assertEq(a.tickLower(), -2);
+    assertEq(a.tickUpper(), 1, "upper margin survives the exact-tick target");
+  }
+
+  /* ───────────────────────── liquidation during rebalance ───────────────────────── */
+
+  /// @dev Mid-rebalance (NFT burned, idle cleared) the share prices at the dust floor. A whitelisted venue
+  ///      that re-enters Moolah.liquidate in that window must be stopped by the provider's guard.
+  function test_liquidate_duringRebalance_isBlockedByReentrancyGuard() public {
+    deal(LISUSD, address(this), 1_000_000 ether);
+    IERC20(LISUSD).approve(MOOLAH_PROXY, 1_000_000 ether);
+    moolah.supply(marketParams, 1_000_000 ether, 0, address(this), "");
+
+    _depositRaw(300 ether, 300 ether); // opens single-sided here (spot is out of range): ~$300 of collateral
+    vm.prank(user);
+    moolah.borrow(marketParams, 100 ether, 0, user, user);
+    uint256 collateralBefore = _collateral(user);
+
+    ReenteringVenue venue = new ReenteringVenue(moolah, marketParams, user, address(providerOracle), LISUSD);
+    deal(LISUSD, address(venue), 1 ether);
+    vm.startPrank(manager);
+    adapter.setSwapPairWhitelist(address(venue), true);
+    adapter.setCenterRateThresholdBps(0);
+    vm.stopPrank();
+
+    // Full path (non-empty swapData): sell 1 WBNB to the venue, which moves nothing and re-enters.
+    bytes memory swapData = abi.encode(address(venue), false, uint256(1 ether), uint256(0), false, bytes(""));
+    vm.prank(bot);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, swapData, false);
+
+    assertTrue(venue.attempted(), "venue was called mid-rebalance");
+    assertEq(venue.peekDuring(), 1, "the window prices the share at the floor");
+    assertFalse(venue.liquidated(), "liquidation did not go through");
+    assertEq(bytes4(venue.err()), bytes4(keccak256("ReentrancyGuardReentrantCall()")));
+    assertEq(_collateral(user), collateralBefore, "collateral untouched");
+  }
+
+  function _deployAdapter(
+    address _oracle,
+    uint256 lowerBps,
+    uint256 upperBps,
+    uint256 spotDevBps
+  ) internal returns (StableV3DexAdapter a) {
+    StableV3DexAdapter impl = new StableV3DexAdapter(NPM, TOKEN0, TOKEN1, FEE, TWAP_PERIOD, TOKEN1, _oracle);
+    a = StableV3DexAdapter(
+      payable(
+        new ERC1967Proxy(
+          address(impl),
+          abi.encodeCall(StableV3DexAdapter.initialize, (admin, manager, lowerBps, upperBps, spotDevBps))
+        )
+      )
+    );
+  }
+
+  /// @dev Mirrors the adapter's rate → sqrtPriceX96 conversion (both fixture tokens are 18-dec).
+  function _sqrtFromRate(uint256 rate) internal pure returns (uint160) {
+    return uint160(Math.sqrt(FullMath.mulDiv(rate, 1 << 192, 1e18)));
   }
 
   /* ───────────────────────── compound cooldown ───────────────────────── */

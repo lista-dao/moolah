@@ -916,7 +916,13 @@ abstract contract V3DexAdapter is
     uint256 lowerRate = (centerRate * (BPS - rangeLowerBps)) / BPS;
     uint256 upperRate = (centerRate * (BPS + rangeUpperBps)) / BPS;
     initialTickLower = _floorTick(_tickAtSqrtRatio(_sqrtPriceX96FromRate(lowerRate)), tickSpacing);
-    initialTickUpper = _ceilTick(_tickAtSqrtRatio(_sqrtPriceX96FromRate(upperRate)), tickSpacing);
+    // _tickAtSqrtRatio floors, which is outward for the lower edge but inward for the upper one: an
+    // upper target between ticks (or one wei under an exact tick, from the floored sqrt) would lose
+    // its margin. Round the upper edge outward before aligning it to the spacing.
+    uint160 sqrtUpper = _sqrtPriceX96FromRate(upperRate);
+    int24 upperTick = _tickAtSqrtRatio(sqrtUpper);
+    if (TickMath.getSqrtRatioAtTick(upperTick) < sqrtUpper) upperTick += 1;
+    initialTickUpper = _ceilTick(upperTick, tickSpacing);
   }
 
   function _requireCenterRateDeviation(uint256 centerRate) internal view {
