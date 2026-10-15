@@ -23,6 +23,10 @@ import { BrokerLiquidator } from "../../src/liquidator/BrokerLiquidator.sol";
 import { LendingBroker } from "../../src/broker/LendingBroker.sol";
 import { LiquidationVault } from "../../src/liquidator/LiquidationVault.sol";
 import { StockOracleSwitch } from "../../src/oracle/StockOracleSwitch.sol";
+import { V3Liquidator } from "../../src/liquidator/V3Liquidator.sol";
+import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import { MockV3Adapter, MockV3Share, MockV3Oracle, MockV3LiquidatorView } from "./mocks/MockV3Provider.sol";
+import { V3MarketParams } from "moolah/libraries/V3MarketLib.sol";
 
 contract MarketFactoryTest is Test {
   using MarketParamsLib for MarketParams;
@@ -802,5 +806,393 @@ contract MarketFactoryTest is Test {
     );
 
     return LendingBroker(payable(address(lendingBrokerProxy)));
+  }
+
+  /* ───────────────────────── V3 LP share markets ───────────────────────── */
+
+  address constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+
+  function _newV3Liquidator() internal returns (V3Liquidator v3Liq) {
+    V3Liquidator impl = new V3Liquidator(address(moolah));
+    v3Liq = V3Liquidator(
+      payable(
+        address(
+          new ERC1967Proxy(
+            address(impl),
+            abi.encodeWithSelector(impl.initialize.selector, admin, manager, bot, address(0))
+          )
+        )
+      )
+    );
+  }
+
+  function _setUpV3() internal returns (V3Liquidator v3Liq) {
+    v3Liq = _newV3Liquidator();
+    vm.startPrank(admin);
+    v3Liq.grantRole(v3Liq.MANAGER(), address(marketFactory));
+    marketFactory.setV3Liquidator(address(v3Liq));
+    vm.stopPrank();
+  }
+
+  function _newV3Share(address token0, address token1) internal returns (MockV3Share share, MockV3Oracle v3Oracle) {
+    MockV3Adapter adapter = new MockV3Adapter();
+    share = new MockV3Share(address(moolah), address(adapter), token0, token1, address(WBNB), address(oracle));
+    adapter.setProvider(address(share));
+    share.setDepositWhitelistEnabled(true);
+    v3Oracle = new MockV3Oracle(address(share), address(oracle));
+  }
+
+  /// @dev slisBNB-like share: token0 = LST, token1 = WBNB (the wrapped native).
+  function _newV3Share(address token0) internal returns (MockV3Share, MockV3Oracle) {
+    return _newV3Share(token0, address(WBNB));
+  }
+
+  function _v3Market(
+    address loan,
+    address share,
+    address v3Oracle,
+    address[] memory extra
+  ) internal view returns (V3MarketParams memory m) {
+    m.params = MarketParams({
+      loanToken: loan,
+      collateralToken: share,
+      oracle: v3Oracle,
+      irm: address(irm),
+      lltv: lltv80
+    });
+    m.extraLiquidators = extra;
+  }
+
+  function _createV3(V3MarketParams memory m) internal {
+    V3MarketParams[] memory ms = new V3MarketParams[](1);
+    ms[0] = m;
+    vm.prank(operator);
+    marketFactory.batchCreateV3Markets(ms);
+  }
+
+  function _noExtra() internal pure returns (address[] memory) {
+    return new address[](0);
+  }
+
+  function testCreateV3Market_wiresShareMarket() public {
+    V3Liquidator v3Liq = _setUpV3();
+    ERC20Mock lst = new ERC20Mock();
+    ERC20Mock loan = new ERC20Mock();
+    (MockV3Share share, MockV3Oracle v3Oracle) = _newV3Share(address(lst));
+    address[] memory extra = new address[](1);
+    extra[0] = bot;
+    V3MarketParams memory m = _v3Market(address(loan), address(share), address(v3Oracle), extra);
+    _createV3(m);
+    Id id = m.params.id();
+
+    assertEq(moolah.providers(id, address(share)), address(share), "share is its own provider");
+    assertTrue(moolah.flashLoanTokenBlacklist(address(share)), "share flash-loan blacklisted");
+    address[] memory wl = moolah.getLiquidationWhitelist(id);
+    assertEq(wl.length, 2);
+    assertEq(wl[0], address(v3Liq));
+    assertEq(wl[1], bot);
+    assertTrue(v3Liq.marketWhitelist(Id.unwrap(id)));
+    assertTrue(v3Liq.v3Providers(address(share)));
+    assertEq(marketFactory.v3OracleOf(address(share)), address(v3Oracle), "oracle pinned");
+
+    // loan + legs + native on the V3Liquidator; legs + native on the vault
+    assertTrue(v3Liq.tokenWhitelist(address(loan)));
+    assertTrue(v3Liq.tokenWhitelist(address(lst)));
+    assertTrue(v3Liq.tokenWhitelist(address(WBNB)));
+    assertTrue(v3Liq.tokenWhitelist(BNB_ADDRESS));
+    assertTrue(liquidationVault.tokenWhitelist(address(lst)));
+    assertTrue(liquidationVault.tokenWhitelist(address(WBNB)));
+    assertTrue(liquidationVault.tokenWhitelist(BNB_ADDRESS));
+    assertTrue(liquidationVault.tokenWhitelist(address(loan)));
+    // the share itself is whitelisted nowhere, and the generic liquidator is not wired to the market
+    assertFalse(liquidationVault.tokenWhitelist(address(share)));
+    assertFalse(v3Liq.tokenWhitelist(address(share)));
+    assertFalse(liquidator.tokenWhitelist(address(share)));
+    assertFalse(liquidator.marketWhitelist(Id.unwrap(id)));
+    assertTrue(listaRevenueDistributor.tokenWhitelist(address(loan)));
+  }
+
+  function testCreateV3Market_shareWithoutNativeLeg() public {
+    V3Liquidator v3Liq = _setUpV3();
+    (MockV3Share share, MockV3Oracle v3Oracle) = _newV3Share(address(new ERC20Mock()), address(new ERC20Mock()));
+    _createV3(_v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra()));
+    assertFalse(v3Liq.tokenWhitelist(BNB_ADDRESS), "no native leg, no native whitelist");
+    assertFalse(liquidationVault.tokenWhitelist(BNB_ADDRESS));
+  }
+
+  function testCreateV3Market_toleratesPreconfiguredSwitches() public {
+    V3Liquidator v3Liq = _setUpV3();
+    ERC20Mock lst = new ERC20Mock();
+    (MockV3Share share, MockV3Oracle v3Oracle) = _newV3Share(address(lst));
+    vm.startPrank(manager);
+    moolah.setFlashLoanTokenBlacklist(address(share), true);
+    v3Liq.setV3ProviderWhitelist(address(share), true);
+    v3Liq.setTokenWhitelist(address(lst), true);
+    v3Liq.setTokenWhitelist(BNB_ADDRESS, true);
+    liquidationVault.setTokenWhitelist(address(WBNB), true);
+    vm.stopPrank();
+
+    _createV3(_v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra()));
+    assertTrue(v3Liq.v3Providers(address(share)));
+  }
+
+  function testCreateV3Market_secondMarketRewiresProviderSwitches() public {
+    V3Liquidator v3Liq = _setUpV3();
+    ERC20Mock lst = new ERC20Mock();
+    (MockV3Share share, MockV3Oracle v3Oracle) = _newV3Share(address(lst));
+    _createV3(_v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra()));
+
+    // incident response: MANAGER pauses the provider and delists a leg
+    vm.startPrank(manager);
+    v3Liq.setV3ProviderWhitelist(address(share), false);
+    v3Liq.setTokenWhitelist(address(lst), false);
+    liquidationVault.setTokenWhitelist(address(lst), false);
+    vm.stopPrank();
+
+    V3MarketParams memory m2 = _v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra());
+    _createV3(m2);
+
+    // like a smart provider, a new market turns the switches back on
+    assertTrue(v3Liq.v3Providers(address(share)), "provider re-enabled");
+    assertTrue(v3Liq.tokenWhitelist(address(lst)), "leg re-listed on the liquidator");
+    assertTrue(liquidationVault.tokenWhitelist(address(lst)), "leg re-listed on the vault");
+    assertEq(moolah.providers(m2.params.id(), address(share)), address(share), "second market still wired");
+    assertTrue(v3Liq.marketWhitelist(Id.unwrap(m2.params.id())));
+  }
+
+  function testCreateV3Market_replacementLiquidatorGetsWired() public {
+    V3Liquidator first = _setUpV3();
+    ERC20Mock lst = new ERC20Mock();
+    (MockV3Share share, MockV3Oracle v3Oracle) = _newV3Share(address(lst));
+    _createV3(_v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra()));
+
+    V3Liquidator second = _setUpV3();
+    assertTrue(address(second) != address(first));
+    V3MarketParams memory m2 = _v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra());
+    _createV3(m2);
+
+    assertTrue(second.v3Providers(address(share)), "new liquidator knows the provider");
+    assertTrue(second.tokenWhitelist(address(lst)));
+    assertTrue(second.tokenWhitelist(BNB_ADDRESS));
+    assertTrue(second.marketWhitelist(Id.unwrap(m2.params.id())));
+  }
+
+  function testCreateV3Market_twoMarketsSameShareInOneBatch() public {
+    V3Liquidator v3Liq = _setUpV3();
+    (MockV3Share share, MockV3Oracle v3Oracle) = _newV3Share(address(new ERC20Mock()));
+    V3MarketParams[] memory ms = new V3MarketParams[](2);
+    ms[0] = _v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra());
+    ms[1] = _v3Market(address(WBNB), address(share), address(v3Oracle), _noExtra());
+    vm.prank(operator);
+    marketFactory.batchCreateV3Markets(ms);
+
+    for (uint256 i = 0; i < 2; i++) {
+      Id id = ms[i].params.id();
+      assertEq(moolah.providers(id, address(share)), address(share));
+      assertTrue(v3Liq.marketWhitelist(Id.unwrap(id)));
+      assertEq(moolah.getLiquidationWhitelist(id)[0], address(v3Liq));
+    }
+    assertEq(moolah.providers(ms[1].params.id(), address(WBNB)), address(bnbProvider), "BNBProvider on the WBNB loan");
+  }
+
+  function testCreateV3Market_pinsTheFirstOracle() public {
+    _setUpV3();
+    (MockV3Share share, MockV3Oracle v3Oracle) = _newV3Share(address(new ERC20Mock()));
+    _createV3(_v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra()));
+
+    // a second, equally self-consistent oracle proxy for the same share
+    MockV3Oracle other = new MockV3Oracle(address(share), address(oracle));
+    V3MarketParams memory m = _v3Market(address(new ERC20Mock()), address(share), address(other), _noExtra());
+    vm.expectRevert(MarketFactory.InvalidV3Oracle.selector);
+    _createV3(m);
+  }
+
+  function testCreateV3Market_rejectsForeignOracle() public {
+    _setUpV3();
+    (MockV3Share share, ) = _newV3Share(address(new ERC20Mock()));
+    address loan = address(new ERC20Mock());
+
+    MockV3Oracle wrongShare = new MockV3Oracle(makeAddr("otherShare"), address(oracle));
+    V3MarketParams memory m1 = _v3Market(loan, address(share), address(wrongShare), _noExtra());
+    vm.expectRevert(MarketFactory.InvalidV3Oracle.selector);
+    _createV3(m1);
+
+    MockV3Oracle wrongFeed = new MockV3Oracle(address(share), makeAddr("otherResilientOracle"));
+    V3MarketParams memory m2 = _v3Market(loan, address(share), address(wrongFeed), _noExtra());
+    vm.expectRevert(MarketFactory.InvalidV3Oracle.selector);
+    _createV3(m2);
+  }
+
+  function testCreateV3Market_rejectsUnwiredShare() public {
+    _setUpV3();
+    address loan = address(new ERC20Mock());
+
+    (MockV3Share unwired, MockV3Oracle o1) = _newV3Share(address(new ERC20Mock()));
+    MockV3Adapter(unwired.ADAPTER()).setProvider(address(0));
+    V3MarketParams memory m1 = _v3Market(loan, address(unwired), address(o1), _noExtra());
+    vm.expectRevert(MarketFactory.InvalidV3Share.selector);
+    _createV3(m1);
+
+    (MockV3Share notShare, MockV3Oracle o2) = _newV3Share(address(new ERC20Mock()));
+    notShare.setTokenOverride(makeAddr("lp"));
+    V3MarketParams memory m2 = _v3Market(loan, address(notShare), address(o2), _noExtra());
+    vm.expectRevert(MarketFactory.InvalidV3Share.selector);
+    _createV3(m2);
+
+    MockV3Adapter adapter = new MockV3Adapter();
+    MockV3Share otherMoolah = new MockV3Share(
+      makeAddr("otherMoolah"),
+      address(adapter),
+      address(new ERC20Mock()),
+      address(WBNB),
+      address(WBNB),
+      address(oracle)
+    );
+    adapter.setProvider(address(otherMoolah));
+    otherMoolah.setDepositWhitelistEnabled(true);
+    MockV3Oracle o3 = new MockV3Oracle(address(otherMoolah), address(oracle));
+    V3MarketParams memory m3 = _v3Market(loan, address(otherMoolah), address(o3), _noExtra());
+    vm.expectRevert(MarketFactory.InvalidV3Share.selector);
+    _createV3(m3);
+  }
+
+  function testCreateV3Market_requiresDepositGuard() public {
+    _setUpV3();
+    (MockV3Share share, MockV3Oracle v3Oracle) = _newV3Share(address(new ERC20Mock()));
+    share.setDepositWhitelistEnabled(false);
+    V3MarketParams memory m = _v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra());
+    vm.expectRevert(MarketFactory.V3DepositUnguarded.selector);
+    _createV3(m);
+
+    share.setTotalSupply(1e18); // seeded
+    _createV3(m);
+    assertEq(moolah.providers(m.params.id(), address(share)), address(share));
+  }
+
+  function testCreateV3Market_rejectsUnsafeExtraLiquidators() public {
+    V3Liquidator v3Liq = _setUpV3();
+    (MockV3Share share, MockV3Oracle v3Oracle) = _newV3Share(address(new ERC20Mock()));
+    address[5] memory bad = [
+      address(0),
+      address(liquidator),
+      address(publicLiquidator),
+      address(brokerLiquidator),
+      address(v3Liq)
+    ];
+    for (uint256 i = 0; i < bad.length; i++) {
+      address[] memory extra = new address[](1);
+      extra[0] = bad[i];
+      V3MarketParams memory m = _v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), extra);
+      vm.expectRevert(MarketFactory.InvalidLiquidator.selector);
+      _createV3(m);
+    }
+  }
+
+  function testCreateV3Market_requiresReflowIntoTheVault() public {
+    V3Liquidator v3Liq = _setUpV3();
+    vm.prank(manager);
+    liquidationVault.setLiquidator(address(v3Liq), true);
+    vm.prank(manager);
+    v3Liq.setFundSource(address(liquidationVault));
+    (MockV3Share share, MockV3Oracle v3Oracle) = _newV3Share(address(new ERC20Mock()));
+    _createV3(_v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra()));
+
+    // the factory's vault moves while the liquidator still reflows into the old one
+    vm.prank(admin);
+    marketFactory.setLiquidationVault(makeAddr("newVault"));
+    V3MarketParams memory m2 = _v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra());
+    vm.expectRevert(MarketFactory.InvalidV3Liquidator.selector);
+    _createV3(m2);
+  }
+
+  function testCreateV3Market_accessPauseAndLiquidatorUnset() public {
+    (MockV3Share share, MockV3Oracle v3Oracle) = _newV3Share(address(new ERC20Mock()));
+    V3MarketParams memory m = _v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra());
+
+    vm.expectRevert(MarketFactory.V3LiquidatorNotSet.selector);
+    _createV3(m);
+
+    _setUpV3();
+    V3MarketParams[] memory ms = new V3MarketParams[](1);
+    ms[0] = m;
+    vm.expectRevert();
+    marketFactory.batchCreateV3Markets(ms); // not OPERATOR
+
+    vm.prank(pauser);
+    marketFactory.pause();
+    vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+    _createV3(m);
+  }
+
+  function testCreateV3Market_revertsAtomicallyWithoutV3LiquidatorRole() public {
+    V3Liquidator v3Liq = _newV3Liquidator();
+    vm.prank(admin);
+    marketFactory.setV3Liquidator(address(v3Liq)); // MANAGER not granted to the factory
+
+    (MockV3Share share, MockV3Oracle v3Oracle) = _newV3Share(address(new ERC20Mock()));
+    V3MarketParams memory m = _v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra());
+    vm.expectRevert();
+    _createV3(m);
+    (, , , , uint128 lastUpdate, ) = moolah.market(m.params.id());
+    assertEq(lastUpdate, 0, "no half-configured market");
+    assertEq(marketFactory.v3OracleOf(address(share)), address(0), "nothing pinned");
+  }
+
+  function testCreateMarket_rejectsRegisteredV3Share() public {
+    _setUpV3();
+    (MockV3Share share, MockV3Oracle v3Oracle) = _newV3Share(address(new ERC20Mock()));
+    _createV3(_v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra()));
+
+    MarketParams memory p = MarketParams({
+      loanToken: address(new ERC20Mock()),
+      collateralToken: address(share),
+      oracle: address(v3Oracle),
+      irm: address(irm),
+      lltv: lltv80
+    });
+    vm.prank(operator);
+    vm.expectRevert(MarketFactory.V3ShareMarket.selector);
+    marketFactory.createMarket(p, new address[](0), new address[](0), false, false, false);
+  }
+
+  function testSetV3Oracle() public {
+    _setUpV3();
+    (MockV3Share share, MockV3Oracle v3Oracle) = _newV3Share(address(new ERC20Mock()));
+    MockV3Oracle replacement = new MockV3Oracle(address(share), address(oracle));
+
+    vm.prank(admin);
+    vm.expectRevert(MarketFactory.InvalidV3Share.selector);
+    marketFactory.setV3Oracle(address(share), address(replacement)); // not registered yet
+
+    _createV3(_v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra()));
+
+    vm.expectRevert();
+    marketFactory.setV3Oracle(address(share), address(replacement)); // not admin
+
+    MockV3Oracle foreign = new MockV3Oracle(address(share), makeAddr("otherResilientOracle"));
+    vm.prank(admin);
+    vm.expectRevert(MarketFactory.InvalidV3Oracle.selector);
+    marketFactory.setV3Oracle(address(share), address(foreign));
+
+    vm.prank(admin);
+    marketFactory.setV3Oracle(address(share), address(replacement));
+    assertEq(marketFactory.v3OracleOf(address(share)), address(replacement));
+    _createV3(_v3Market(address(new ERC20Mock()), address(share), address(replacement), _noExtra()));
+  }
+
+  function testSetV3Liquidator() public {
+    address valid = address(new MockV3LiquidatorView(address(moolah), address(0)));
+    vm.expectRevert();
+    marketFactory.setV3Liquidator(valid); // not admin
+
+    address wrongMoolah = address(new MockV3LiquidatorView(makeAddr("otherMoolah"), address(0)));
+    vm.startPrank(admin);
+    vm.expectRevert("ZeroAddress");
+    marketFactory.setV3Liquidator(address(0));
+    vm.expectRevert(MarketFactory.InvalidV3Liquidator.selector);
+    marketFactory.setV3Liquidator(wrongMoolah);
+    marketFactory.setV3Liquidator(valid);
+    vm.stopPrank();
+    assertEq(address(marketFactory.v3Liquidator()), valid);
   }
 }
