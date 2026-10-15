@@ -696,7 +696,8 @@ abstract contract V3Provider is
   ///      adapter's increaseLiquidity). Adding CLAMM liquidity is the one operation that must not be
   ///      permissionless: a manipulated pool spot lets a caller force a bad-price re-add and sandwich it.
   ///      This is the sole liquidity-deploy path for accrued fees/idle (the other is BOT rebalance); no
-  ///      user hot-path triggers it. Keeper runs this on a cadence.
+  ///      user hot-path triggers it. Keeper runs this on a cadence; the adapter rate-limits it to one
+  ///      liquidity-adding compound per `cooldownBlocks` (reverts CompoundCooldown otherwise).
   function compound(uint256 amount0Min, uint256 amount1Min) external onlyRole(BOT) nonReentrant {
     IV3DexAdapter(ADAPTER).collectAndCompound(amount0Min, amount1Min);
   }
@@ -732,7 +733,8 @@ abstract contract V3Provider is
     uint160 targetSqrtPriceX96,
     uint256 expectedCenterRate,
     uint256 deadline,
-    bytes calldata swapData
+    bytes calldata swapData,
+    bool noOp
   ) internal {
     uint256 navBefore = _positionValueUsd();
     if (totalSupply() != 0 && navBefore == 0) revert OracleZero();
@@ -744,7 +746,8 @@ abstract contract V3Provider is
       targetSqrtPriceX96,
       expectedCenterRate,
       deadline,
-      swapData
+      swapData,
+      noOp
     );
 
     uint256 navAfter = _positionValueUsd();

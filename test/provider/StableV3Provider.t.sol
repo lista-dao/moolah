@@ -7,6 +7,7 @@ import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 
 import { StableV3Provider } from "../../src/provider/v3/StableV3Provider.sol";
 import { StableV3DexAdapter } from "../../src/provider/v3/StableV3DexAdapter.sol";
+import { V3DexAdapter } from "../../src/provider/v3/V3DexAdapter.sol";
 import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -288,6 +289,148 @@ contract StableV3ProviderTest is Test {
     vm.mockCallRevert(POOL, abi.encodeWithSignature("observe(uint32[])"), bytes("OLD"));
     assertGt(adapter.fairSqrtPriceX96(), 0, "fair survives a dead observation ring");
     assertGt(providerOracle.peek(address(provider)), 0, "so does the share price");
+  }
+
+  /* ───────────────────────── rebalance noOp ───────────────────────── */
+
+  /// @dev noOp with an unchanged range: compound in place, no burn / re-mint.
+  function test_rebalance_noOp_compoundsInPlace() public {
+    _depositRaw(10 ether, 10 ether); // opens the position
+    _depositRaw(1 ether, 1 ether); // parks idle
+    assertGt(adapter.idleToken1(), 0, "idle parked");
+    uint256 tokenBefore = adapter.tokenId();
+    uint128 liqBefore = adapter.totalLiquidity();
+    vm.startPrank(manager);
+    adapter.setCenterRateThresholdBps(0); // rate did not move: lift the anti-churn floor for the test
+    adapter.setMaxSpotDeviationBps(0); // this fixture's mock fair sits far from the live pool spot
+    vm.stopPrank();
+    vm.prank(bot);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "", true);
+    assertEq(adapter.tokenId(), tokenBefore, "no re-mint");
+    assertGt(adapter.totalLiquidity(), liqBefore, "idle compounded into the existing position");
+    // spot is above the range here, so only the token1 leg is addable; token0 idle stays parked
+    assertEq(adapter.idleToken1(), 0, "addable idle deployed");
+  }
+
+  /* ───────────────────────── compound cooldown ───────────────────────── */
+
+  /// @dev Liquidity-adding compounds are spaced by cooldownBlocks; a cooldown expiry re-opens.
+  function test_compound_cooldown_blocksBackToBackCompounds() public {
+    _depositRaw(10 ether, 10 ether);
+    _depositRaw(1 ether, 1 ether);
+    vm.prank(manager);
+    adapter.setMaxSpotDeviationBps(0); // this fixture's mock fair sits far from the live pool spot
+    vm.prank(bot);
+    provider.compound(0, 0);
+    assertEq(adapter.lastCompoundBlock(), block.number, "cooldown armed by a liquidity-adding compound");
+
+    _depositRaw(1 ether, 1 ether); // fresh idle to compound
+    vm.prank(bot);
+    vm.expectRevert(abi.encodeWithSelector(V3DexAdapter.CompoundCooldown.selector));
+    provider.compound(0, 0);
+
+    vm.roll(block.number + adapter.cooldownBlocks());
+    vm.prank(bot);
+    provider.compound(0, 0);
+    assertEq(adapter.idleToken1(), 0, "compound re-opens once the cooldown has elapsed");
+  }
+
+  /// @dev A compound the spot gate skips adds no liquidity and must not arm the cooldown.
+  function test_compound_cooldown_notArmedWhenGateSkips() public {
+    _depositRaw(10 ether, 10 ether);
+    _depositRaw(1 ether, 1 ether);
+    vm.prank(bot);
+    provider.compound(0, 0); // fixture spot is outside the 10 bps gate → skipped, idle stays
+    assertGt(adapter.idleToken1(), 0, "skipped");
+    assertEq(adapter.lastCompoundBlock(), 0, "not armed");
+
+    vm.prank(manager);
+    adapter.setMaxSpotDeviationBps(0);
+    vm.prank(bot);
+    provider.compound(0, 0); // same block: allowed, the previous attempt did not count
+    assertEq(adapter.idleToken1(), 0, "deployed");
+  }
+
+  /// @dev The rebalance no-op path compounds too, so it shares the same cooldown.
+  function test_rebalance_noOp_underCompoundCooldown_reverts() public {
+    _depositRaw(10 ether, 10 ether);
+    _depositRaw(1 ether, 1 ether);
+    vm.startPrank(manager);
+    adapter.setMaxSpotDeviationBps(0);
+    adapter.setCenterRateThresholdBps(0);
+    vm.stopPrank();
+    vm.prank(bot);
+    provider.compound(0, 0);
+
+    _depositRaw(1 ether, 1 ether);
+    vm.prank(bot);
+    vm.expectRevert(abi.encodeWithSelector(V3DexAdapter.CompoundCooldown.selector));
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "", true);
+
+    vm.roll(block.number + adapter.cooldownBlocks());
+    vm.prank(bot);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "", true);
+    assertEq(adapter.idleToken1(), 0, "no-op rebalance compounds once the cooldown has elapsed");
+  }
+
+  function test_setCooldownBlocks_managerOnly_zeroDisables() public {
+    assertEq(adapter.cooldownBlocks(), 300, "init default");
+    vm.prank(user);
+    vm.expectRevert();
+    adapter.setCooldownBlocks(1);
+
+    _depositRaw(10 ether, 10 ether);
+    _depositRaw(1 ether, 1 ether);
+    vm.startPrank(manager);
+    adapter.setMaxSpotDeviationBps(0);
+    vm.expectEmit(true, true, true, true);
+    emit V3DexAdapter.CooldownBlocksChanged(0);
+    adapter.setCooldownBlocks(0);
+    vm.stopPrank();
+    vm.startPrank(bot);
+    provider.compound(0, 0);
+    provider.compound(0, 0); // same block, cooldown disabled
+    vm.stopPrank();
+  }
+
+  /// @dev noOp when the fair price moved: the recomputed range differs → revert, never the full path.
+  function test_rebalance_noOp_revertsWhenRangeMoved() public {
+    _depositRaw(10 ether, 10 ether);
+    _depositRaw(1 ether, 1 ether);
+    uint256 tokenBefore = adapter.tokenId();
+    oracle.setPrice(TOKEN0, (PRICE0 * 10_005) / 10_000); // +5 bps: passes anti-churn, shifts the range
+    vm.prank(bot);
+    vm.expectRevert(abi.encodeWithSelector(V3DexAdapter.RangeMoved.selector));
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "", true);
+    assertEq(adapter.tokenId(), tokenBefore, "position untouched");
+    assertGt(adapter.idleToken1(), 0, "idle untouched");
+  }
+
+  /// @dev noOp contradicts any conversion / target / liquidity parameter.
+  function test_rebalance_noOp_rejectsConflictingParams() public {
+    _depositRaw(10 ether, 10 ether);
+    vm.prank(manager);
+    adapter.setCenterRateThresholdBps(0);
+    vm.startPrank(bot);
+    vm.expectRevert(abi.encodeWithSelector(V3DexAdapter.InvalidParam.selector));
+    provider.rebalance(0, 0, 1, 0, 0, block.timestamp, "", true);
+    uint160 fair = adapter.fairSqrtPriceX96(); // hoisted: expectRevert binds to the NEXT external call
+    vm.expectRevert(abi.encodeWithSelector(V3DexAdapter.InvalidParam.selector));
+    provider.rebalance(0, 0, 0, fair, 0, block.timestamp, "", true);
+    vm.expectRevert(abi.encodeWithSelector(V3DexAdapter.InvalidParam.selector));
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, hex"01", true);
+    vm.stopPrank();
+  }
+
+  /// @dev The same all-zero call WITHOUT noOp still takes the full path once the range moved (documented
+  ///      residual: no target, no minLiquidity — the BOT must not use it as a compound substitute).
+  function test_rebalance_allZeroWithoutNoOp_reMintsWhenRangeMoved() public {
+    _depositRaw(10 ether, 10 ether);
+    uint256 tokenBefore = adapter.tokenId();
+    oracle.setPrice(TOKEN0, (PRICE0 * 10_005) / 10_000);
+    vm.prank(bot);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "", false);
+    assertTrue(adapter.tokenId() != tokenBefore, "full path re-minted the position");
   }
 
   function _depositRaw(uint256 a0, uint256 a1) internal returns (uint256, uint256, uint256) {

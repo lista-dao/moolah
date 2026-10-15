@@ -55,6 +55,7 @@ contract SlisBNBV3Provider is V3Provider {
   ///         BOT-gated here; the adapter's rebalance is onlyProvider. `swapData` is built by the BOT
   ///         backend and encodes (swapPair, sellToken0, amountIn, amountOutMin, innerSwapData) for the
   ///         inventory-conversion swap (empty ⇒ recenter only).
+  ///         `noOp` = compound-only: reverts `RangeMoved` instead of re-minting if the range moved.
   function rebalance(
     uint256 minAmount0,
     uint256 minAmount1,
@@ -62,9 +63,19 @@ contract SlisBNBV3Provider is V3Provider {
     uint160 targetSqrtPriceX96,
     uint256 expectedCenterRate,
     uint256 deadline,
-    bytes calldata swapData
+    bytes calldata swapData,
+    bool noOp
   ) external onlyRole(BOT) nonReentrant {
-    _guardedRebalance(minAmount0, minAmount1, minLiquidity, targetSqrtPriceX96, expectedCenterRate, deadline, swapData);
+    _guardedRebalance(
+      minAmount0,
+      minAmount1,
+      minLiquidity,
+      targetSqrtPriceX96,
+      expectedCenterRate,
+      deadline,
+      swapData,
+      noOp
+    );
   }
 
   /* ─────────────────── slisBNBx: sync / view ──────────────────────── */
