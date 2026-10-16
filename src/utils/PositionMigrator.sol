@@ -87,6 +87,13 @@ contract PositionMigrator is
   /// @dev may run `forceMigrate` once the migration window has closed
   bytes32 public constant BOT = keccak256("BOT");
 
+  /// @dev The only markets `batchForceMigrate` may register PM as lisUSD provider on. Hardcoded:
+  ///      PM holds Moolah MANAGER for the migration, and a BOT-chosen market would let PM borrow
+  ///      on users' behalf in any lisUSD market.
+  bytes32 public constant MARKET_SLISBNB = 0xabbf94356a49ee51ea2f36277343a2ff5942445de92cc3f05ec4e489fb994cd2;
+  bytes32 public constant MARKET_BTCB = 0xbbd16eb859bf2cef6cc7503f0d8ac0ec8b15d48dd6f5bf7314792b6970058df6;
+  bytes32 public constant MARKET_WBETH = 0x4a0d55fdcb3817f124bc55f9236700384551dfb7437dd39c75d3568d11e66576;
+
   event PositionMigrated(
     address indexed user,
     address indexed collAddr,
@@ -118,6 +125,14 @@ contract PositionMigrator is
     /// @dev owner of the resulting Moolah position; equals `onBehalf` for ordinary migrations, and
     /// `yieldAccount` for the routed one, so the CDP side still acts on the owner's own address.
     address moolahOwner;
+  }
+
+  /// @dev one `batchForceMigrate` entry; same arguments as `forceMigrate`
+  struct ForceMigration {
+    address onBehalf;
+    MarketParams marketParams;
+    bool isBnb;
+    uint256 minSlisBnb;
   }
 
   constructor() {
@@ -205,6 +220,51 @@ contract PositionMigrator is
     bool isBnb,
     uint256 minSlisBnb
   ) external nonReentrant onlyRole(BOT) returns (uint256) {
+    return _forceMigrate(onBehalf, marketParams, isBnb, minSlisBnb);
+  }
+
+  /**
+   * @dev Force-migrates several positions in one transaction with PM itself as the lisUSD provider,
+   *      so `Moolah.borrow` skips the owner's authorization. PM registers itself only on the target
+   *      markets the entries touch and deregisters before returning: `providers(id, LISUSD) == PM` is
+   *      never visible outside this call, so frontends and SDKs never route borrow/repay to PM.
+   *      Any failing entry reverts the whole call, provider registration included.
+   * @notice Needs Moolah MANAGER on this contract (for `setProvider`). Reverts ALREADY_SET if a
+   *         lisUSD provider is already registered on a touched market.
+   */
+  function batchForceMigrate(
+    ForceMigration[] calldata entries
+  ) external nonReentrant onlyRole(BOT) returns (uint256 total) {
+    require(entries.length > 0, "no entries");
+    bytes32[3] memory ids = [MARKET_SLISBNB, MARKET_BTCB, MARKET_WBETH];
+    bool[3] memory opened;
+
+    for (uint256 i = 0; i < entries.length; i++) {
+      ForceMigration calldata e = entries[i];
+      uint256 k = _targetMarketIndex(ids, Id.unwrap(e.marketParams.id()));
+      if (!opened[k]) {
+        MOOLAH.setProvider(Id.wrap(ids[k]), address(this), true);
+        opened[k] = true;
+      }
+      total += _forceMigrate(e.onBehalf, e.marketParams, e.isBnb, e.minSlisBnb);
+    }
+
+    for (uint256 k = 0; k < 3; k++) {
+      if (opened[k]) MOOLAH.setProvider(Id.wrap(ids[k]), address(this), false);
+    }
+  }
+
+  /// @dev TOKEN() is read by `Moolah.setProvider` to pick the `providers[id][token]` slot: lisUSD.
+  function TOKEN() external pure returns (address) {
+    return LISUSD;
+  }
+
+  function _forceMigrate(
+    address onBehalf,
+    MarketParams calldata marketParams,
+    bool isBnb,
+    uint256 minSlisBnb
+  ) internal returns (uint256) {
     uint256 deadline = migrationDeadline;
     require(deadline != 0, "deadline not set");
     require(block.timestamp >= deadline, "migration window open");
@@ -216,6 +276,13 @@ contract PositionMigrator is
     emit ForcedMigration(msg.sender, onBehalf, migrated);
 
     return migrated;
+  }
+
+  function _targetMarketIndex(bytes32[3] memory ids, bytes32 id) private pure returns (uint256) {
+    for (uint256 k = 0; k < 3; k++) {
+      if (ids[k] == id) return k;
+    }
+    revert("market not allowed");
   }
 
   /// @dev Migrates `onBehalf`'s whole CDP position for the given collateral. The CDP side always
