@@ -69,6 +69,9 @@ interface IBrokerBase {
 
 /// @dev Broker interface
 interface IBroker is IBrokerBase {
+  /// @dev the interest relayer of the broker
+  function RELAYER() external view returns (address);
+
   /// ------------------------------
   ///            Events
   /// ------------------------------
