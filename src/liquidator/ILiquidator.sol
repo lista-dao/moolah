@@ -60,6 +60,10 @@ interface ILiquidator {
 
   function reflowBlacklist(address token) external view returns (bool);
 
+  /// @notice The LiquidationVault this liquidator reflows into and may pull funds from.
+  ///          address(0) means reflow/pull is disabled.
+  function fundSource() external view returns (address);
+
   function marketWhitelist(bytes32 id) external view returns (bool);
 
   function tokenWhitelist(address token) external view returns (bool);

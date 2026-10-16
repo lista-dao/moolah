@@ -6,6 +6,12 @@ contract MockLiquidator {
   mapping(bytes32 => bool) public marketWhitelist;
   mapping(address => bool) public smartProviders;
   mapping(address => bool) public reflowBlacklist;
+  /// @dev the LiquidationVault this liquidator reflows into; the factory cross-checks it
+  address public fundSource;
+
+  function setFundSource(address _fundSource) external {
+    fundSource = _fundSource;
+  }
 
   function setTokenWhitelist(address token, bool status) external {
     tokenWhitelist[token] = status;
