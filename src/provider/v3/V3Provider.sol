@@ -252,8 +252,7 @@ abstract contract V3Provider is
     address onBehalf
   ) external payable nonReentrant returns (uint256 shares, uint256 amount0Used, uint256 amount1Used) {
     if (marketParams.collateralToken != address(this)) revert InvalidCollateralToken();
-    // Entries only: in a market without Moolah.setProvider, withdrawals bypass our hooks and the
-    // deposit records go stale. Exits are never gated on this.
+    // Entries only: without Moolah.setProvider, withdrawals bypass our hooks. Exits are never gated.
     if (MOOLAH.providers(marketParams.id(), address(this)) != address(this)) revert ProviderNotRegistered();
     if (onBehalf == address(0)) revert ZeroAddress();
     // Check both: gating only msg.sender would let a whitelisted caller open a position for anyone.
@@ -489,9 +488,8 @@ abstract contract V3Provider is
 
   /* ──────────────────── Moolah provider callback ──────────────────── */
 
-  /// @dev nonReentrant: a liquidation cannot land while this vault is mid-rebalance (burned NFT, idle
-  ///      cleared, peek at the dust floor) — a whitelisted swap venue that re-enters Moolah.liquidate
-  ///      reverts here instead of seizing collateral at a transiently near-zero price.
+  /// @dev nonReentrant: mid-rebalance (NFT burned, idle cleared) the share prices at 0, so a swap venue
+  ///      re-entering Moolah.liquidate must revert here rather than seize collateral at that price.
   function liquidate(Id id, address borrower) external nonReentrant {
     if (msg.sender != address(MOOLAH)) revert OnlyMoolah();
     if (MOOLAH.idToMarketParams(id).collateralToken != address(this)) revert InvalidMarket();
@@ -515,8 +513,7 @@ abstract contract V3Provider is
   }
 
   /// @notice Simulate a redemption of `shares` at the current pool price.
-  /// @dev Upper bound, not an exact quote: execution rounds the liquidity burn, the pool payout and the
-  ///      idle share separately and can deliver a few wei less. Size minAmount0/1 with a tolerance.
+  /// @dev Upper bound (execution rounds three components separately); size minAmount0/1 with a tolerance.
   function previewRedeemUnderlying(uint256 shares) external view returns (uint256 amount0, uint256 amount1) {
     return IV3DexAdapter(ADAPTER).previewRemoveLiquidity(shares, totalSupply());
   }
@@ -706,8 +703,8 @@ abstract contract V3Provider is
   ///      adapter's increaseLiquidity). Adding CLAMM liquidity is the one operation that must not be
   ///      permissionless: a manipulated pool spot lets a caller force a bad-price re-add and sandwich it.
   ///      This is the sole liquidity-deploy path for accrued fees/idle (the other is BOT rebalance); no
-  ///      user hot-path triggers it. Keeper runs this on a cadence; the adapter rate-limits it to one
-  ///      liquidity-adding compound per `cooldownBlocks` (reverts CompoundCooldown otherwise).
+  ///      user hot-path triggers it. Keeper runs this on a cadence; the adapter rate-limits it by
+  ///      `cooldownBlocks` (CompoundCooldown).
   function compound(uint256 amount0Min, uint256 amount1Min) external onlyRole(BOT) nonReentrant {
     IV3DexAdapter(ADAPTER).collectAndCompound(amount0Min, amount1Min);
   }

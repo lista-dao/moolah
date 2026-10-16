@@ -12,9 +12,8 @@ import { IOracle } from "moolah/interfaces/IOracle.sol";
  *         Separating the IOracle implementation from the vault isolates the estimation-bug radius from
  *         vault state and upgrades.
  *
- * @dev `peek(share)` reverts on a zero underlying price when supply > 0 (fail-closed on a broken feed),
- *      and returns 0 for a dust / zero-value position rather than reverting or flooring (keeps
- *      liquidation live without overvaluing a collapsed vault); `supply == 0` returns 0 (pre-market).
+ * @dev `peek(share)` reverts on a zero underlying price when supply > 0 (broken feed) and returns 0 for a
+ *      dust / zero-value position (liquidation stays live, nothing is overvalued); `supply == 0` returns 0.
  *      `getTokenConfig(share)` self-registers this oracle for the share token; other tokens delegate to
  *      the resilient oracle.
  */

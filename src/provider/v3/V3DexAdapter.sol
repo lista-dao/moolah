@@ -127,9 +127,8 @@ abstract contract V3DexAdapter is
   uint256 public rangeLowerBps;
   uint256 public rangeUpperBps;
 
-  /// @dev Min blocks between two liquidity-adding compounds — compound() and the rebalance no-op path
-  ///      alike — so a BOT cannot chain deposit → skew spot → compound → unskew cycles back to back.
-  ///      Armed only when liquidity was actually added (a gate-skipped compound does not count). 0 = off.
+  /// @dev Min blocks between liquidity-adding compounds (compound() and the rebalance no-op path), so a
+  ///      BOT cannot chain skew → compound → unskew cycles. Armed only when liquidity was added; 0 = off.
   uint256 public cooldownBlocks;
   uint256 public lastCompoundBlock;
 
@@ -498,16 +497,10 @@ abstract contract V3DexAdapter is
     int24 oldTickLower = tickLower;
     int24 oldTickUpper = tickUpper;
 
-    // Short-circuit a pure no-op recenter: the recomputed range matches the live one AND the caller
-    // asked us to enforce nothing (no swap-based inventory conversion, no target-price assertion, no
-    // slippage / min-liquidity floors). In that case a burn/mint would just re-create the identical
-    // position at the cost of gas and rounding dust. Compound accrued fees + idle into the existing
-    // position instead (itself spot-deviation guarded) and return. When any of those is supplied — a
-    // swap to run, a price/slippage/liquidity floor to honor, or a genuinely different range — we fall
-    // through to the full path so that work still happens and the guards are enforced.
-    // `noOp` makes the compound-only intent explicit: the range must be unchanged (else RangeMoved — the
-    // BOT then sends a real recenter with its target / minLiquidity), the conversion / target / liquidity
-    // params must be empty, and minAmount0/1 act as the compound's slippage floors.
+    // Unchanged range + nothing to enforce: compound in place instead of re-minting the identical
+    // position; anything supplied (swap, target, floors, new range) takes the full path. `noOp` makes
+    // the compound-only intent explicit: RangeMoved if the range changed, InvalidParam if a conversion /
+    // target / liquidity param is set; minAmount0/1 become the compound's floors.
     bool rangeUnchanged = tokenId != 0 && newTickLower == oldTickLower && newTickUpper == oldTickUpper;
     if (noOp) {
       if (swapData.length != 0 || targetSqrtPriceX96 != 0 || minLiquidity != 0) revert InvalidParam();
@@ -915,9 +908,8 @@ abstract contract V3DexAdapter is
     uint256 lowerRate = (centerRate * (BPS - rangeLowerBps)) / BPS;
     uint256 upperRate = (centerRate * (BPS + rangeUpperBps)) / BPS;
     initialTickLower = _floorTick(_tickAtSqrtRatio(_sqrtPriceX96FromRate(lowerRate)), tickSpacing);
-    // _tickAtSqrtRatio floors, which is outward for the lower edge but inward for the upper one: an
-    // upper target between ticks (or one wei under an exact tick, from the floored sqrt) would lose
-    // its margin. Round the upper edge outward before aligning it to the spacing.
+    // _tickAtSqrtRatio floors: outward for the lower edge, inward for the upper one. Round the upper
+    // edge outward first so the configured margin survives.
     uint160 sqrtUpper = _sqrtPriceX96FromRate(upperRate);
     int24 upperTick = _tickAtSqrtRatio(sqrtUpper);
     if (TickMath.getSqrtRatioAtTick(upperTick) < sqrtUpper) upperTick += 1;

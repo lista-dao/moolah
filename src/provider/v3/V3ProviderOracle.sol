@@ -23,9 +23,8 @@ import { IV3ProviderOracle } from "../interfaces/IV3ProviderOracle.sol";
  *         consistent with the rate-anchored composition — see the note in peek(). Chain/pair-agnostic:
  *         the pair is taken from the constructor and validated against the adapter.
  *
- * @dev When supply > 0, peek(share) reverts on a zero leg price (fail-closed on a broken feed) but returns
- *      0 for a dust / zero-value position rather than reverting or flooring (keeps liquidation live
- *      without overvaluing a collapsed vault); supply == 0 returns 0 (pre-market).
+ * @dev When supply > 0, peek(share) reverts on a zero leg price (broken feed) but returns 0 for a dust /
+ *      zero-value position (liquidation stays live, nothing is overvalued); supply == 0 returns 0.
  */
 contract V3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IV3ProviderOracle {
   /* ─────────────────────────── immutables ─────────────────────────── */
@@ -148,10 +147,8 @@ contract V3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     // 8-decimal USD price per ONE WHOLE share (10 ** SHARE_DECIMALS share-wei) — Moolah interprets peek()
     // using collateralToken.decimals() — minus the conservative haircut.
     uint256 raw = (totalValue * (10 ** SHARE_DECIMALS)) / supply;
-    // A dust (or collapsed) position rounds to 0: return it as is. A revert would brick liquidation; a
-    // positive floor would price every share at that floor regardless of backing, i.e. overvalue a
-    // collapsed vault. At 0 nothing can be borrowed, and Moolah's seize-by-amount liquidation still
-    // clears the position and socializes the bad debt.
+    // A dust / collapsed position rounds to 0: no revert (bricks liquidation), no floor (overvalues).
+    // At 0 nothing can be borrowed and seize-by-amount liquidation still clears the position.
     return (raw * (BPS - haircutBps)) / BPS;
   }
 

@@ -485,7 +485,7 @@ contract StableV3ProviderTest is Test {
 
   /* ───────────────────────── liquidation during rebalance ───────────────────────── */
 
-  /// @dev Mid-rebalance (NFT burned, idle cleared) the share prices at the dust floor. A whitelisted venue
+  /// @dev Mid-rebalance (NFT burned, idle cleared) the share prices at 0. A whitelisted venue
   ///      that re-enters Moolah.liquidate in that window must be stopped by the provider's guard.
   function test_liquidate_duringRebalance_isBlockedByReentrancyGuard() public {
     deal(LISUSD, address(this), 1_000_000 ether);
@@ -613,10 +613,34 @@ contract StableV3ProviderTest is Test {
     emit V3DexAdapter.CooldownBlocksChanged(0);
     adapter.setCooldownBlocks(0);
     vm.stopPrank();
-    vm.startPrank(bot);
+    vm.prank(bot);
     provider.compound(0, 0);
-    provider.compound(0, 0); // same block, cooldown disabled
+    assertEq(adapter.lastCompoundBlock(), block.number, "armed");
+    _depositRaw(1 ether, 1 ether); // fresh idle
+    vm.prank(bot);
+    provider.compound(0, 0); // same block: allowed, cooldown disabled
+    assertEq(adapter.idleToken1(), 0, "second compound in the same block deployed the idle");
+  }
+
+  /// @dev noOp forwards minAmount0/1 as the compound's floors. The implicit short-circuit needs them to be
+  ///      0, so the same call without noOp would burn and re-mint instead.
+  function test_rebalance_noOp_forwardsMinAmountsAsCompoundFloors() public {
+    _depositRaw(10 ether, 10 ether);
+    _depositRaw(1 ether, 1 ether);
+    uint256 tokenBefore = adapter.tokenId();
+    uint128 liqBefore = adapter.totalLiquidity();
+    vm.startPrank(manager);
+    adapter.setMaxSpotDeviationBps(0);
+    adapter.setCenterRateThresholdBps(0);
     vm.stopPrank();
+    vm.startPrank(bot);
+    vm.expectRevert(); // NPM slippage check: the floor is forwarded and cannot be met
+    provider.rebalance(0, type(uint256).max, 0, 0, 0, block.timestamp, "", true);
+    provider.rebalance(0, 1, 0, 0, 0, block.timestamp, "", true); // spot above range: token1 leg deploys
+    vm.stopPrank();
+    assertEq(adapter.tokenId(), tokenBefore, "compounded in place, no re-mint");
+    assertGt(adapter.totalLiquidity(), liqBefore, "idle compounded");
+    assertEq(adapter.idleToken1(), 0, "addable idle deployed");
   }
 
   /// @dev noOp when the fair price moved: the recomputed range differs → revert, never the full path.
