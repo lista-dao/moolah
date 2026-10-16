@@ -125,9 +125,9 @@ contract StableSwapFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeabl
    * @param _tokenB: Addresses of ERC20 contracts
    * @param _name: name of LP token
    * @param _symbol: symbol of LP token
-   * @param _A: Amplification coefficient multiplied by n * (n - 1)
-   * @param _fee: Fee to charge for exchanges
-   * @param _admin_fee: Admin fee
+   * @param _A: Unused. Accepted and forwarded so the factory ABI stays stable.
+   * @param _fee: Unused. Accepted and forwarded so the factory ABI stays stable.
+   * @param _admin_fee: Unused. Accepted and forwarded so the factory ABI stays stable.
    * @param _admin: Admin address
    * @param _manager: Manager address
    * @param _pauser: Pauser address
