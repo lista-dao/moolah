@@ -135,8 +135,6 @@ abstract contract V3Provider is
   error InsufficientShares();
   error OnlyMoolah();
   error NotWhitelisted();
-  error InvalidMarket();
-  error ProviderNotRegistered();
   error StandardEntryDisabled();
   error BnbTransferFailed();
   error NotAdapter();
@@ -252,8 +250,7 @@ abstract contract V3Provider is
     address onBehalf
   ) external payable nonReentrant returns (uint256 shares, uint256 amount0Used, uint256 amount1Used) {
     if (marketParams.collateralToken != address(this)) revert InvalidCollateralToken();
-    // Entries only: without Moolah.setProvider, withdrawals bypass our hooks. Exits are never gated.
-    if (MOOLAH.providers(marketParams.id(), address(this)) != address(this)) revert ProviderNotRegistered();
+    V3ProviderLib.requireRegistered(MOOLAH, marketParams);
     if (onBehalf == address(0)) revert ZeroAddress();
     // Check both: gating only msg.sender would let a whitelisted caller open a position for anyone.
     if (depositWhitelistEnabled && (!depositWhitelist[msg.sender] || !depositWhitelist[onBehalf]))
@@ -444,7 +441,7 @@ abstract contract V3Provider is
   /// @inheritdoc IV3Provider
   function supplyShares(MarketParams calldata marketParams, uint256 shares, address onBehalf) external nonReentrant {
     if (marketParams.collateralToken != address(this)) revert InvalidCollateralToken();
-    if (MOOLAH.providers(marketParams.id(), address(this)) != address(this)) revert ProviderNotRegistered();
+    V3ProviderLib.requireRegistered(MOOLAH, marketParams);
     if (shares == 0) revert ZeroShares();
     if (onBehalf == address(0)) revert ZeroAddress();
     if (balanceOf(msg.sender) < shares) revert InsufficientShares();
@@ -492,7 +489,7 @@ abstract contract V3Provider is
   ///      re-entering Moolah.liquidate must revert here rather than seize collateral at that price.
   function liquidate(Id id, address borrower) external nonReentrant {
     if (msg.sender != address(MOOLAH)) revert OnlyMoolah();
-    if (MOOLAH.idToMarketParams(id).collateralToken != address(this)) revert InvalidMarket();
+    V3ProviderLib.requireCollateral(MOOLAH, id);
     _afterCollateralChange(id, borrower);
   }
 

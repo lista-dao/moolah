@@ -9,6 +9,7 @@ import { StableV3Provider } from "../../src/provider/v3/StableV3Provider.sol";
 import { StableV3DexAdapter } from "../../src/provider/v3/StableV3DexAdapter.sol";
 import { V3DexAdapter } from "../../src/provider/v3/V3DexAdapter.sol";
 import { V3Provider } from "../../src/provider/v3/V3Provider.sol";
+import { V3ProviderLib } from "../../src/provider/libraries/V3ProviderLib.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
@@ -442,7 +443,7 @@ contract StableV3ProviderTest is Test {
     vm.startPrank(user);
     IERC20(TOKEN0).approve(address(provider), 10 ether);
     IERC20(TOKEN1).approve(address(provider), 10 ether);
-    vm.expectRevert(V3Provider.ProviderNotRegistered.selector);
+    vm.expectRevert(V3ProviderLib.ProviderNotRegistered.selector);
     provider.deposit(unregistered, 10 ether, 10 ether, 0, 0, 0, user);
     vm.stopPrank();
 
@@ -451,7 +452,7 @@ contract StableV3ProviderTest is Test {
     (uint256 sh, , ) = _depositRaw(10 ether, 10 ether);
     vm.startPrank(user);
     provider.withdrawShares(marketParams, sh, user, user);
-    vm.expectRevert(V3Provider.ProviderNotRegistered.selector);
+    vm.expectRevert(V3ProviderLib.ProviderNotRegistered.selector);
     provider.supplyShares(unregistered, sh, user);
     provider.redeemShares(sh, 0, 0, user);
     vm.stopPrank();

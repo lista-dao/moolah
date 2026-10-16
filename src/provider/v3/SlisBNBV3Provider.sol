@@ -2,6 +2,7 @@
 pragma solidity 0.8.34;
 
 import { IMoolah, Id } from "moolah/interfaces/IMoolah.sol";
+import { V3ProviderLib } from "../libraries/V3ProviderLib.sol";
 import { IOracle } from "moolah/interfaces/IOracle.sol";
 
 import { V3Provider } from "./V3Provider.sol";
@@ -108,14 +109,14 @@ contract SlisBNBV3Provider is V3Provider {
   }
 
   function syncUserBalance(Id id, address account) external {
-    if (MOOLAH.idToMarketParams(id).collateralToken != address(this)) revert InvalidMarket();
+    V3ProviderLib.requireCollateral(MOOLAH, id);
     _syncPosition(id, account);
   }
 
   function bulkSyncUserBalance(Id[] calldata ids, address[] calldata accounts) external {
     if (ids.length != accounts.length) revert LengthMismatch();
     for (uint256 i = 0; i < accounts.length; i++) {
-      if (MOOLAH.idToMarketParams(ids[i]).collateralToken != address(this)) revert InvalidMarket();
+      V3ProviderLib.requireCollateral(MOOLAH, ids[i]);
       _syncPosition(ids[i], accounts[i]);
     }
   }

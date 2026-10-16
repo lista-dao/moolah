@@ -2,6 +2,8 @@
 pragma solidity 0.8.34;
 
 import { IOracle } from "moolah/interfaces/IOracle.sol";
+import { IMoolah, MarketParams, Id } from "moolah/interfaces/IMoolah.sol";
+import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 
 import { IV3DexAdapter } from "../interfaces/IV3DexAdapter.sol";
 
@@ -21,6 +23,8 @@ library V3ProviderLib {
 
   error ZeroShares();
   error OracleZero();
+  error ProviderNotRegistered();
+  error InvalidMarket();
 
   /// @param adapter DEX adapter holding the position.
   /// @param oracle  Resilient oracle pricing TOKEN0/TOKEN1 in 8-decimal USD.
@@ -34,6 +38,19 @@ library V3ProviderLib {
   }
 
   /// @notice 8-decimal USD value of a (amount0, amount1) pair at the resilient oracle's prices.
+  /// @dev Entries only: without Moolah.setProvider, withdrawals bypass the vault's hooks. Runs via
+  ///      DELEGATECALL, so address(this) is the vault. Exits are never gated.
+  function requireRegistered(IMoolah moolah, MarketParams calldata marketParams) external view {
+    if (moolah.providers(MarketParamsLib.id(marketParams), address(this)) != address(this)) {
+      revert ProviderNotRegistered();
+    }
+  }
+
+  /// @dev The market must use the vault (address(this) under DELEGATECALL) as its collateral token.
+  function requireCollateral(IMoolah moolah, Id id) external view {
+    if (moolah.idToMarketParams(id).collateralToken != address(this)) revert InvalidMarket();
+  }
+
   function amountsValueUsd(Ctx memory c, uint256 amount0, uint256 amount1) external view returns (uint256) {
     return _amountsValueUsd(c, amount0, amount1);
   }

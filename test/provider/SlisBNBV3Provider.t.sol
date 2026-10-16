@@ -13,6 +13,7 @@ import { SlisBNBV3ProviderOracle } from "../../src/provider/v3/SlisBNBV3Provider
 import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
 import { IStakeManager } from "../../src/provider/interfaces/IStakeManager.sol";
 import { V3Provider } from "../../src/provider/v3/V3Provider.sol";
+import { V3ProviderLib } from "../../src/provider/libraries/V3ProviderLib.sol";
 import { V3DexAdapter } from "../../src/provider/v3/V3DexAdapter.sol";
 import { SwapInventoryLib } from "../../src/provider/libraries/SwapInventoryLib.sol";
 import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
@@ -2144,7 +2145,7 @@ contract SlisBNBV3ProviderTest is Test {
     _deposit(user, 10 ether, 10 ether);
     uint256 totalBefore = provider.userTotalDeposit(user);
 
-    vm.expectRevert(V3Provider.InvalidMarket.selector);
+    vm.expectRevert(V3ProviderLib.InvalidMarket.selector);
     provider.syncUserBalance(_foreignMarketId(), user);
 
     // Deposit tracking must be unchanged.
@@ -2160,7 +2161,7 @@ contract SlisBNBV3ProviderTest is Test {
     address[] memory accounts = new address[](1);
     accounts[0] = user;
 
-    vm.expectRevert(V3Provider.InvalidMarket.selector);
+    vm.expectRevert(V3ProviderLib.InvalidMarket.selector);
     provider.bulkSyncUserBalance(ids, accounts);
 
     assertEq(provider.userTotalDeposit(user), totalBefore);
