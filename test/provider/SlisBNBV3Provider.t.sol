@@ -825,8 +825,9 @@ contract SlisBNBV3ProviderTest is Test {
     assertGt(price, 0, "share price should be non-zero after deposit");
   }
 
-  /// @dev Dust (zero-value) composition, valid feeds ⇒ peek floors to 1, not revert (else liquidation bricks).
-  function test_peek_dustPositionFloorsInsteadOfReverting() public {
+  /// @dev Dust (zero-value) composition, valid feeds ⇒ peek returns 0, not revert (else liquidation bricks)
+  ///      and not a positive floor (else a collapsed vault is overvalued).
+  function test_peek_dustPositionReturnsZeroInsteadOfReverting() public {
     _deposit(user, 10 ether, 10 ether); // totalSupply > 0 so peek runs the full valuation
 
     // Force the adapter to report a zero-value composition at the fair price (dust position).
@@ -837,7 +838,7 @@ contract SlisBNBV3ProviderTest is Test {
     );
 
     uint256 price = providerOracle.peek(address(provider));
-    assertEq(price, 1, "dust position floors to 1 (peek does not revert)");
+    assertEq(price, 0, "dust position prices at 0 (peek does not revert)");
   }
 
   function test_getTotalAmounts_nonZeroAfterDeposit() public {

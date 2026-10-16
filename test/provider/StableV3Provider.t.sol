@@ -372,6 +372,42 @@ contract StableV3ProviderTest is Test {
     assertEq(adapter.rangeUpperBps(), 30);
   }
 
+  /* ───────────────────────── zero share price ───────────────────────── */
+
+  /// @dev A position that values to 0 prices at 0: no new borrowing, but a seize-by-amount liquidation
+  ///      still clears the borrower and socializes the bad debt (nothing reverts, nothing is overvalued).
+  function test_zeroSharePrice_blocksBorrowButLiquidationStillClears() public {
+    deal(LISUSD, address(this), 1_000_000 ether);
+    IERC20(LISUSD).approve(MOOLAH_PROXY, 1_000_000 ether);
+    moolah.supply(marketParams, 1_000_000 ether, 0, address(this), "");
+    _depositRaw(300 ether, 300 ether);
+    vm.prank(user);
+    moolah.borrow(marketParams, 100 ether, 0, user, user);
+    uint256 collateral = _collateral(user);
+    (uint128 supplyBefore, , , , , ) = moolah.market(marketId);
+
+    // The position collapses to a zero-value composition (dust / wiped backing).
+    vm.mockCall(
+      address(adapter),
+      abi.encodeWithSelector(bytes4(keccak256("positionAmountsAt(uint160)"))),
+      abi.encode(uint256(0), uint256(0))
+    );
+    assertEq(providerOracle.peek(address(provider)), 0, "prices at 0, no revert");
+
+    vm.prank(user);
+    vm.expectRevert(bytes("insufficient collateral"));
+    moolah.borrow(marketParams, 1 ether, 0, user, user);
+
+    (uint256 seized, uint256 repaid) = moolah.liquidate(marketParams, user, collateral, 0, "");
+    assertEq(seized, collateral, "all collateral seized");
+    assertEq(repaid, 0, "nothing repaid at price 0");
+    (, uint128 debt, uint128 left) = moolah.position(marketId, user);
+    assertEq(debt, 0, "debt written off");
+    assertEq(left, 0);
+    (uint128 supplyAfter, , , , , ) = moolah.market(marketId);
+    assertLt(supplyAfter, supplyBefore, "bad debt socialized to suppliers");
+  }
+
   /* ───────────────────────── oracle construction order ───────────────────────── */
 
   /// @dev Built against a share proxy that has not been initialized, the oracle would snapshot 0 share
@@ -474,7 +510,7 @@ contract StableV3ProviderTest is Test {
     provider.rebalance(0, 0, 0, 0, 0, block.timestamp, swapData, false);
 
     assertTrue(venue.attempted(), "venue was called mid-rebalance");
-    assertEq(venue.peekDuring(), 1, "the window prices the share at the floor");
+    assertEq(venue.peekDuring(), 0, "the window prices the share at 0");
     assertFalse(venue.liquidated(), "liquidation did not go through");
     assertEq(bytes4(venue.err()), bytes4(keccak256("ReentrancyGuardReentrantCall()")));
     assertEq(_collateral(user), collateralBefore, "collateral untouched");

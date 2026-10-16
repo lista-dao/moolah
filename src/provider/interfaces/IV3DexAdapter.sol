@@ -79,6 +79,9 @@ interface IV3DexAdapter {
   ) external view returns (uint128 liquidity, uint256 amount0, uint256 amount1);
 
   /// @notice Simulate removing `shares/totalShares` of the position (liquidity + idle) at spot.
+  /// @dev Rounds the aggregate entitlement once per token; execution rounds the liquidity burn, the pool
+  ///      payout and the idle share separately, so delivery can trail this by a few wei. Do not pass the
+  ///      preview verbatim as minAmount0/1 — leave a tolerance.
   function previewRemoveLiquidity(
     uint256 shares,
     uint256 totalShares

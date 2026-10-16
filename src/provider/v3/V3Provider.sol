@@ -514,7 +514,9 @@ abstract contract V3Provider is
     return IV3DexAdapter(ADAPTER).positionAmountsAt(IV3DexAdapter(ADAPTER).fairSqrtPriceX96());
   }
 
-  /// @notice Simulate a redemption of `shares` at the current pool price (for tight minAmount0/1).
+  /// @notice Simulate a redemption of `shares` at the current pool price.
+  /// @dev Upper bound, not an exact quote: execution rounds the liquidity burn, the pool payout and the
+  ///      idle share separately and can deliver a few wei less. Size minAmount0/1 with a tolerance.
   function previewRedeemUnderlying(uint256 shares) external view returns (uint256 amount0, uint256 amount1) {
     return IV3DexAdapter(ADAPTER).previewRemoveLiquidity(shares, totalSupply());
   }
