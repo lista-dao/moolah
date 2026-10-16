@@ -431,7 +431,8 @@ abstract contract V3DexAdapter is
 
   /// @notice Set the range margins below / above the rate-derived center (BPS). onlyRole MANAGER.
   function setRangeBps(uint256 _rangeLowerBps, uint256 _rangeUpperBps) external onlyRole(MANAGER) {
-    if (_rangeLowerBps > BPS || _rangeUpperBps > BPS) revert InvalidParam();
+    if (_rangeLowerBps == 0 || _rangeLowerBps >= BPS) revert InvalidParam();
+    if (_rangeUpperBps == 0 || _rangeUpperBps >= BPS) revert InvalidParam();
     rangeLowerBps = _rangeLowerBps;
     rangeUpperBps = _rangeUpperBps;
     emit RangeBpsChanged(_rangeLowerBps, _rangeUpperBps);
@@ -903,10 +904,8 @@ abstract contract V3DexAdapter is
     if (initialTickLower < minUsable) initialTickLower = minUsable;
     if (initialTickUpper > maxUsable) initialTickUpper = maxUsable;
 
-    if (initialTickLower >= initialTickUpper) {
-      initialTickLower = maxUsable - tickSpacing;
-      initialTickUpper = maxUsable;
-    }
+    // A collapsed range is a configuration error, never something to relocate: fail the init/rebalance.
+    if (initialTickLower >= initialTickUpper) revert InvalidTickRange();
   }
 
   function _tickRangeForRate(

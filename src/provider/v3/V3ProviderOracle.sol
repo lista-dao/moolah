@@ -69,6 +69,7 @@ contract V3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   error ZeroPrice();
   error AdapterPairMismatch();
   error ShareAdapterMismatch();
+  error ShareNotInitialized();
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor(address _adapter, address _providerShare, address _token0, address _token1) {
@@ -88,6 +89,8 @@ contract V3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     DECIMALS0 = IERC20Metadata(_token0).decimals();
     DECIMALS1 = IERC20Metadata(_token1).decimals();
     SHARE_DECIMALS = IERC20Metadata(_providerShare).decimals();
+    // An uninitialized share proxy reports 0 decimals; snapshotting that would mis-scale every price.
+    if (SHARE_DECIMALS == 0) revert ShareNotInitialized();
     _disableInitializers();
   }
 

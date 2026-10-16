@@ -8,6 +8,8 @@ import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { StableV3Provider } from "../../src/provider/v3/StableV3Provider.sol";
 import { StableV3DexAdapter } from "../../src/provider/v3/StableV3DexAdapter.sol";
 import { V3DexAdapter } from "../../src/provider/v3/V3DexAdapter.sol";
+import { V3Provider } from "../../src/provider/v3/V3Provider.sol";
+import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -85,6 +87,7 @@ contract StableV3ProviderTest is Test {
   address constant OPERATOR = 0xd7e38800201D6a42C408Bf79d8723740C4E7f631;
   address constant MANAGER_ADDR = 0x8d388136d578dCD791D081c6042284CED6d9B0c6;
   address constant LISUSD = 0x0782b6d8c4551B9760e74c0545a9bCD90bdc41E5;
+  address constant USDT = 0x55d398326f99059fF775485246999027B3197955;
   address constant IRM = 0xFe7dAe87Ebb11a7BEB9F534BB23267992d9cDe7c;
   uint256 constant LLTV = 70 * 1e16;
 
@@ -345,6 +348,78 @@ contract StableV3ProviderTest is Test {
     assertGt(adapter.totalLiquidity(), liqBefore, "idle compounded into the existing position");
     // spot is above the range here, so only the token1 leg is addable; token0 idle stays parked
     assertEq(adapter.idleToken1(), 0, "addable idle deployed");
+  }
+
+  /* ───────────────────────── range margin bounds ───────────────────────── */
+
+  /// @dev setRangeBps enforces the initializer's bounds (0 < bps < BPS); a zero margin would collapse
+  ///      the range, which _initialTickRange now rejects instead of relocating to the top tick.
+  function test_setRangeBps_mirrorsInitBounds() public {
+    vm.startPrank(manager);
+    vm.expectRevert(V3DexAdapter.InvalidParam.selector);
+    adapter.setRangeBps(0, 10);
+    vm.expectRevert(V3DexAdapter.InvalidParam.selector);
+    adapter.setRangeBps(10, 0);
+    vm.expectRevert(V3DexAdapter.InvalidParam.selector);
+    adapter.setRangeBps(10_000, 10);
+    vm.expectRevert(V3DexAdapter.InvalidParam.selector);
+    adapter.setRangeBps(10, 10_000);
+    vm.expectEmit(true, true, true, true);
+    emit V3DexAdapter.RangeBpsChanged(20, 30);
+    adapter.setRangeBps(20, 30);
+    vm.stopPrank();
+    assertEq(adapter.rangeLowerBps(), 20);
+    assertEq(adapter.rangeUpperBps(), 30);
+  }
+
+  /* ───────────────────────── oracle construction order ───────────────────────── */
+
+  /// @dev Built against a share proxy that has not been initialized, the oracle would snapshot 0 share
+  ///      decimals forever; the constructor rejects it.
+  function test_oracleConstructor_rejectsUninitializedShare() public {
+    StableV3Provider impl = new StableV3Provider(MOOLAH_PROXY, address(adapter));
+    address uninit = address(new ERC1967Proxy(address(impl), ""));
+    assertEq(IERC20Metadata(uninit).decimals(), 0, "uninitialized share reports 0 decimals");
+    vm.expectRevert(V3ProviderOracle.ShareNotInitialized.selector);
+    new V3ProviderOracle(address(adapter), uninit, TOKEN0, TOKEN1);
+  }
+
+  /* ───────────────────────── provider registration ───────────────────────── */
+
+  /// @dev A market that uses our share as collateral but was never registered with Moolah.setProvider
+  ///      lets collateral leave without our hooks; deposit and supplyShares refuse it, exits still work.
+  function test_entries_requireMoolahProviderRegistration() public {
+    oracle.setPrice(USDT, 1e8);
+    MarketParams memory unregistered = MarketParams({
+      loanToken: USDT,
+      collateralToken: address(provider),
+      oracle: address(providerOracle),
+      irm: IRM,
+      lltv: LLTV
+    });
+    vm.prank(OPERATOR);
+    moolah.createMarket(unregistered);
+    assertEq(moolah.providers(unregistered.id(), address(provider)), address(0), "not registered");
+
+    deal(TOKEN0, user, 10 ether);
+    deal(TOKEN1, user, 10 ether);
+    vm.startPrank(user);
+    IERC20(TOKEN0).approve(address(provider), 10 ether);
+    IERC20(TOKEN1).approve(address(provider), 10 ether);
+    vm.expectRevert(V3Provider.ProviderNotRegistered.selector);
+    provider.deposit(unregistered, 10 ether, 10 ether, 0, 0, 0, user);
+    vm.stopPrank();
+
+    // Shares obtained in the registered market cannot be supplied into the unregistered one either,
+    // but they can still be redeemed.
+    (uint256 sh, , ) = _depositRaw(10 ether, 10 ether);
+    vm.startPrank(user);
+    provider.withdrawShares(marketParams, sh, user, user);
+    vm.expectRevert(V3Provider.ProviderNotRegistered.selector);
+    provider.supplyShares(unregistered, sh, user);
+    provider.redeemShares(sh, 0, 0, user);
+    vm.stopPrank();
+    assertEq(provider.balanceOf(user), 0, "exit path untouched");
   }
 
   /* ───────────────────────── opening range rounding ───────────────────────── */
