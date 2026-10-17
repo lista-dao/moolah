@@ -127,8 +127,13 @@ abstract contract V3DexAdapter is
   uint256 public rangeLowerBps;
   uint256 public rangeUpperBps;
 
+  /// @dev Min blocks between liquidity-adding compounds (compound() and the rebalance no-op path), so a
+  ///      BOT cannot chain skew → compound → unskew cycles. Armed only when liquidity was added; 0 = off.
+  uint256 public cooldownBlocks;
+  uint256 public lastCompoundBlock;
+
   /// @dev Reserved storage for future base variables (keep subclass storage stable on upgrade).
-  uint256[42] private __gap;
+  uint256[40] private __gap;
 
   /* ───────────────────────────── events ───────────────────────────── */
 
@@ -144,6 +149,7 @@ abstract contract V3DexAdapter is
   event MaxSpotDeviationBpsChanged(uint256 maxSpotDeviationBps);
   event RangeBpsChanged(uint256 rangeLowerBps, uint256 rangeUpperBps);
   event MaxCenterRateDeviationBpsChanged(uint256 maxCenterRateDeviationBps);
+  event CooldownBlocksChanged(uint256 cooldownBlocks);
   event CompoundSkippedSpotDeviated(uint160 spotSqrtPriceX96, uint160 fairSqrtPriceX96);
   event CompoundSkippedNoLiquidity(uint256 idleToken0, uint256 idleToken1);
   event IdleCredited(uint256 amount0, uint256 amount1);
@@ -173,6 +179,8 @@ abstract contract V3DexAdapter is
   error InsufficientAmount();
   error SpotDeviationTooHigh();
   error CenterRateDeviationTooHigh();
+  error RangeMoved();
+  error CompoundCooldown();
   error ZeroAmount();
 
   /* ─────────────────────────── constructor ────────────────────────── */
@@ -248,6 +256,9 @@ abstract contract V3DexAdapter is
     // Sized off the measured spot-vs-rate discount, not off the range width.
     maxSpotDeviationBps = 50; // 0.5% — spot-vs-fair gate for adding liquidity at pool spot
     emit MaxSpotDeviationBpsChanged(maxSpotDeviationBps);
+
+    cooldownBlocks = 300; // per-chain policy knob; MANAGER re-sizes at launch
+    emit CooldownBlocksChanged(cooldownBlocks);
   }
 
   /// @notice Wire the vault that may drive this adapter. One-time, admin-only.
@@ -411,9 +422,16 @@ abstract contract V3DexAdapter is
     emit MaxSpotDeviationBpsChanged(_maxSpotDeviationBps);
   }
 
+  /// @notice Set the min block gap between liquidity-adding compounds (0 disables). onlyRole MANAGER.
+  function setCooldownBlocks(uint256 _cooldownBlocks) external onlyRole(MANAGER) {
+    cooldownBlocks = _cooldownBlocks;
+    emit CooldownBlocksChanged(_cooldownBlocks);
+  }
+
   /// @notice Set the range margins below / above the rate-derived center (BPS). onlyRole MANAGER.
   function setRangeBps(uint256 _rangeLowerBps, uint256 _rangeUpperBps) external onlyRole(MANAGER) {
-    if (_rangeLowerBps > BPS || _rangeUpperBps > BPS) revert InvalidParam();
+    if (_rangeLowerBps == 0 || _rangeLowerBps >= BPS) revert InvalidParam();
+    if (_rangeUpperBps == 0 || _rangeUpperBps >= BPS) revert InvalidParam();
     rangeLowerBps = _rangeLowerBps;
     rangeUpperBps = _rangeUpperBps;
     emit RangeBpsChanged(_rangeLowerBps, _rangeUpperBps);
@@ -456,7 +474,8 @@ abstract contract V3DexAdapter is
     uint160 targetSqrtPriceX96,
     uint256 expectedCenterRate,
     uint256 deadline,
-    bytes calldata swapData
+    bytes calldata swapData,
+    bool noOp
   ) external onlyProvider nonReentrant {
     if (block.timestamp > deadline) revert DeadlineExpired();
 
@@ -478,22 +497,23 @@ abstract contract V3DexAdapter is
     int24 oldTickLower = tickLower;
     int24 oldTickUpper = tickUpper;
 
-    // Short-circuit a pure no-op recenter: the recomputed range matches the live one AND the caller
-    // asked us to enforce nothing (no swap-based inventory conversion, no target-price assertion, no
-    // slippage / min-liquidity floors). In that case a burn/mint would just re-create the identical
-    // position at the cost of gas and rounding dust. Compound accrued fees + idle into the existing
-    // position instead (itself spot-deviation guarded) and return. When any of those is supplied — a
-    // swap to run, a price/slippage/liquidity floor to honor, or a genuinely different range — we fall
-    // through to the full path so that work still happens and the guards are enforced.
+    // Unchanged range + nothing to enforce: compound in place instead of re-minting the identical
+    // position; anything supplied (swap, target, floors, new range) takes the full path. `noOp` makes
+    // the compound-only intent explicit: RangeMoved if the range changed, InvalidParam if a conversion /
+    // target / liquidity param is set; minAmount0/1 become the compound's floors.
+    bool rangeUnchanged = tokenId != 0 && newTickLower == oldTickLower && newTickUpper == oldTickUpper;
+    if (noOp) {
+      if (swapData.length != 0 || targetSqrtPriceX96 != 0 || minLiquidity != 0) revert InvalidParam();
+      if (!rangeUnchanged) revert RangeMoved();
+    }
     if (
-      tokenId != 0 &&
-      newTickLower == oldTickLower &&
-      newTickUpper == oldTickUpper &&
-      swapData.length == 0 &&
-      targetSqrtPriceX96 == 0 &&
-      minAmount0 == 0 &&
-      minAmount1 == 0 &&
-      minLiquidity == 0
+      noOp ||
+      (rangeUnchanged &&
+        swapData.length == 0 &&
+        targetSqrtPriceX96 == 0 &&
+        minAmount0 == 0 &&
+        minAmount1 == 0 &&
+        minLiquidity == 0)
     ) {
       _collectAndCompound(minAmount0, minAmount1);
       if (rateImplied) {
@@ -758,6 +778,7 @@ abstract contract V3DexAdapter is
 
   function _collectAndCompound(uint256 amount0Min, uint256 amount1Min) internal {
     if (tokenId == 0) return;
+    if (block.number < lastCompoundBlock + cooldownBlocks) revert CompoundCooldown();
 
     (uint256 fees0, uint256 fees1) = V3PositionLib.collectAll(POSITION_MANAGER, tokenId);
 
@@ -807,6 +828,7 @@ abstract contract V3DexAdapter is
 
     idleToken0 = toCompound0 - used0;
     idleToken1 = toCompound1 - used1;
+    lastCompoundBlock = block.number;
 
     // Emit the amounts actually consumed by increaseLiquidity, not the raw inputs — the leftover
     // (toCompound - used) is held as idle, so the raw figures would overstate what was compounded.
@@ -875,10 +897,8 @@ abstract contract V3DexAdapter is
     if (initialTickLower < minUsable) initialTickLower = minUsable;
     if (initialTickUpper > maxUsable) initialTickUpper = maxUsable;
 
-    if (initialTickLower >= initialTickUpper) {
-      initialTickLower = maxUsable - tickSpacing;
-      initialTickUpper = maxUsable;
-    }
+    // A collapsed range is a configuration error, never something to relocate: fail the init/rebalance.
+    if (initialTickLower >= initialTickUpper) revert InvalidTickRange();
   }
 
   function _tickRangeForRate(
@@ -888,7 +908,12 @@ abstract contract V3DexAdapter is
     uint256 lowerRate = (centerRate * (BPS - rangeLowerBps)) / BPS;
     uint256 upperRate = (centerRate * (BPS + rangeUpperBps)) / BPS;
     initialTickLower = _floorTick(_tickAtSqrtRatio(_sqrtPriceX96FromRate(lowerRate)), tickSpacing);
-    initialTickUpper = _ceilTick(_tickAtSqrtRatio(_sqrtPriceX96FromRate(upperRate)), tickSpacing);
+    // _tickAtSqrtRatio floors: outward for the lower edge, inward for the upper one. Round the upper
+    // edge outward first so the configured margin survives.
+    uint160 sqrtUpper = _sqrtPriceX96FromRate(upperRate);
+    int24 upperTick = _tickAtSqrtRatio(sqrtUpper);
+    if (TickMath.getSqrtRatioAtTick(upperTick) < sqrtUpper) upperTick += 1;
+    initialTickUpper = _ceilTick(upperTick, tickSpacing);
   }
 
   function _requireCenterRateDeviation(uint256 centerRate) internal view {

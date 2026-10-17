@@ -13,6 +13,7 @@ import { SlisBNBV3ProviderOracle } from "../../src/provider/v3/SlisBNBV3Provider
 import { V3ProviderOracle } from "../../src/provider/v3/V3ProviderOracle.sol";
 import { IStakeManager } from "../../src/provider/interfaces/IStakeManager.sol";
 import { V3Provider } from "../../src/provider/v3/V3Provider.sol";
+import { V3ProviderLib } from "../../src/provider/libraries/V3ProviderLib.sol";
 import { V3DexAdapter } from "../../src/provider/v3/V3DexAdapter.sol";
 import { SwapInventoryLib } from "../../src/provider/libraries/SwapInventoryLib.sol";
 import { IListaV3Pool } from "lista-v3/core/interfaces/IListaV3Pool.sol";
@@ -770,7 +771,7 @@ contract SlisBNBV3ProviderTest is Test {
     // manager cannot rebalance — revert fires on role check before amounts matter.
     vm.prank(manager);
     vm.expectRevert();
-    provider.rebalance(1, 1, 1, 0, 0, block.timestamp, "");
+    provider.rebalance(1, 1, 1, 0, 0, block.timestamp, "", false);
 
     // Disable the rate-drift guard — a pool swap does NOT move the StakeManager rate, so the
     // default 1% center-rate threshold would block this rebalance with RateDeviationBelowThreshold.
@@ -783,7 +784,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint256 min1 = (total1 * 999) / 1000;
     uint256 oldTokenId = adapter.tokenId();
     vm.prank(bot);
-    provider.rebalance(min0, min1, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(min0, min1, 0, 0, 0, block.timestamp, "", false);
 
     assertGt(adapter.tokenId(), oldTokenId, "position NFT should be re-minted");
     assertLt(adapter.tickLower(), adapter.tickUpper());
@@ -802,7 +803,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint256 min0 = (total0 * 999) / 1000;
     uint256 min1 = (total1 * 999) / 1000;
     vm.prank(bot);
-    provider.rebalance(min0, min1, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(min0, min1, 0, 0, 0, block.timestamp, "", false);
 
     // Share count is unchanged after rebalance.
     assertEq(_collateral(user), shares, "shares should be unchanged after rebalance");
@@ -825,8 +826,9 @@ contract SlisBNBV3ProviderTest is Test {
     assertGt(price, 0, "share price should be non-zero after deposit");
   }
 
-  /// @dev Dust (zero-value) composition, valid feeds ⇒ peek floors to 1, not revert (else liquidation bricks).
-  function test_peek_dustPositionFloorsInsteadOfReverting() public {
+  /// @dev Dust (zero-value) composition, valid feeds ⇒ peek returns 0, not revert (else liquidation bricks)
+  ///      and not a positive floor (else a collapsed vault is overvalued).
+  function test_peek_dustPositionReturnsZeroInsteadOfReverting() public {
     _deposit(user, 10 ether, 10 ether); // totalSupply > 0 so peek runs the full valuation
 
     // Force the adapter to report a zero-value composition at the fair price (dust position).
@@ -837,7 +839,7 @@ contract SlisBNBV3ProviderTest is Test {
     );
 
     uint256 price = providerOracle.peek(address(provider));
-    assertEq(price, 1, "dust position floors to 1 (peek does not revert)");
+    assertEq(price, 0, "dust position prices at 0 (peek does not revert)");
   }
 
   function test_getTotalAmounts_nonZeroAfterDeposit() public {
@@ -1473,7 +1475,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     // Rebalance uses an internally derived range; caller only supplies execution guards.
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "", false);
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
 
@@ -1509,7 +1511,7 @@ contract SlisBNBV3ProviderTest is Test {
     bytes memory data = abi.encode(address(mockSwap), true, amountIn, (fairOut * 99) / 100, false, inner);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data, false);
 
     assertGt(adapter.tokenId(), oldTokenId, "position re-minted after swap");
     assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "fair swap ~value-neutral");
@@ -1527,7 +1529,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.NotWhitelistedPair.selector);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data, false);
   }
 
   /// @notice Defense-in-depth: a swap venue may never be the position's own tokens / pool / NPM.
@@ -1568,7 +1570,7 @@ contract SlisBNBV3ProviderTest is Test {
     bytes memory data = abi.encode(STAKE_MANAGER, true, amountIn, (fairOut * 99) / 100, false, inner);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data, false);
 
     assertGt(adapter.tokenId(), oldTokenId, "position re-minted after instantWithdraw conversion");
     assertApproxEqRel(
@@ -1598,7 +1600,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(SwapInventoryLib.InsufficientOutput.selector);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data, false);
   }
 
   /// @notice The other swap direction (sellToken0 = false): sell WBNB → slisBNB, value-neutral.
@@ -1617,7 +1619,7 @@ contract SlisBNBV3ProviderTest is Test {
     bytes memory data = abi.encode(address(mockSwap), false, amountIn, (fairOut * 99) / 100, false, inner);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data, false);
     assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "WBNB->slisBNB swap ~value-neutral");
   }
 
@@ -1644,7 +1646,7 @@ contract SlisBNBV3ProviderTest is Test {
     bytes memory data = abi.encode(STAKE_MANAGER, false, amountIn, (fairOut * 99) / 100, true, inner); // nativeIn=true
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data, false);
 
     assertGt(adapter.tokenId(), oldTokenId, "position re-minted after deposit conversion");
     assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "deposit conversion ~value-neutral");
@@ -1671,7 +1673,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(SwapInventoryLib.InsufficientOutput.selector); // slisBNB received = 0 < amountOutMin
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data, false);
   }
 
   /* ─────────── rebalance after price leaves range (fully WBNB) ──────── */
@@ -1716,7 +1718,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     // Rebalance uses an internally derived range; caller only supplies execution guards.
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "", false);
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
 
@@ -1748,7 +1750,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     // minAmount0 = principal0 (exact), minAmount1 = 0 (position has no WBNB).
     vm.prank(bot);
-    provider.rebalance(principal0, 0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(principal0, 0, 0, 0, 0, block.timestamp, "", false);
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
   }
@@ -1766,7 +1768,7 @@ contract SlisBNBV3ProviderTest is Test {
     // minAmount0 one unit above actual → should revert with NPM slippage check.
     vm.prank(bot);
     vm.expectRevert();
-    provider.rebalance(total0 + 1, 0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(total0 + 1, 0, 0, 0, 0, block.timestamp, "", false);
   }
 
   /// @dev When price is above range the position is 100% WBNB (token1).
@@ -1786,7 +1788,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     // minAmount0 = 0 (no slisBNB), minAmount1 = principal1 (exact).
     vm.prank(bot);
-    provider.rebalance(0, principal1, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, principal1, 0, 0, 0, block.timestamp, "", false);
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
   }
@@ -1804,7 +1806,7 @@ contract SlisBNBV3ProviderTest is Test {
     // minAmount1 one unit above actual → should revert with NPM slippage check.
     vm.prank(bot);
     vm.expectRevert();
-    provider.rebalance(0, total1 + 1, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, total1 + 1, 0, 0, 0, block.timestamp, "", false);
   }
 
   function test_withdraw_minAmount_tooHigh_reverts() public {
@@ -2143,7 +2145,7 @@ contract SlisBNBV3ProviderTest is Test {
     _deposit(user, 10 ether, 10 ether);
     uint256 totalBefore = provider.userTotalDeposit(user);
 
-    vm.expectRevert(V3Provider.InvalidMarket.selector);
+    vm.expectRevert(V3ProviderLib.InvalidMarket.selector);
     provider.syncUserBalance(_foreignMarketId(), user);
 
     // Deposit tracking must be unchanged.
@@ -2159,7 +2161,7 @@ contract SlisBNBV3ProviderTest is Test {
     address[] memory accounts = new address[](1);
     accounts[0] = user;
 
-    vm.expectRevert(V3Provider.InvalidMarket.selector);
+    vm.expectRevert(V3ProviderLib.InvalidMarket.selector);
     provider.bulkSyncUserBalance(ids, accounts);
 
     assertEq(provider.userTotalDeposit(user), totalBefore);
@@ -2385,7 +2387,7 @@ contract SlisBNBV3ProviderTest is Test {
     adapter.setCenterRateThresholdBps(0);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "", false);
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
   }
@@ -2400,7 +2402,7 @@ contract SlisBNBV3ProviderTest is Test {
     adapter.setCenterRateThresholdBps(0);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "", false);
 
     assertLt(adapter.tickLower(), adapter.tickUpper(), "tick range remains valid");
   }
@@ -2445,7 +2447,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.SwapLossTooHigh.selector);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data, false);
   }
 
   function test_lossGuard_perSwapCap_passesWithinCap() public {
@@ -2459,7 +2461,7 @@ contract SlisBNBV3ProviderTest is Test {
     bytes memory data = _sellToken0Data(amountIn, (fairOut * 97) / 100, 0);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data, false);
     assertGt(adapter.tokenId(), oldTokenId, "position re-minted (3% swap loss within 5% per-swap cap)");
   }
 
@@ -2483,7 +2485,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3Provider.RebalanceLossTooHigh.selector);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data, false);
   }
 
   // ── per-UTC-day cumulative loss cap ──
@@ -2506,7 +2508,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3Provider.DailyLossExceeded.selector);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data, false);
   }
 
   function test_lossGuard_dailyCap_dailyAccumulatorResetsNextDay() public {
@@ -2524,7 +2526,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     bytes memory data1 = _sellToken0Data(amountIn, (fairOut * 90) / 100, 0);
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data1);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data1, false);
     uint256 accumDay1 = provider.dailyLossAccum();
     uint256 day1 = provider.dailyLossDay();
     assertGt(accumDay1, 0, "loss accrued on day 1");
@@ -2533,7 +2535,7 @@ contract SlisBNBV3ProviderTest is Test {
     vm.warp(block.timestamp + 1 days);
     bytes memory data2 = _sellToken0Data(amountIn, (fairOut * 90) / 100, 0);
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data2);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data2, false);
 
     assertGt(provider.dailyLossDay(), day1, "UTC day advanced");
     assertLt(provider.dailyLossAccum(), (accumDay1 * 3) / 2, "accumulator reset for the new day (not doubled)");
@@ -2590,7 +2592,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     bytes memory d1 = _sellToken0Data(amountIn, (fairOut * 90) / 100, 0);
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, d1);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, d1, false);
     uint256 loss1 = provider.dailyLossAccum();
     assertGt(loss1, 0, "rebalance 1 accrued loss");
 
@@ -2600,14 +2602,14 @@ contract SlisBNBV3ProviderTest is Test {
 
     bytes memory d2 = _sellToken0Data(amountIn, (fairOut * 90) / 100, 0);
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, d2);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, d2, false);
     // Proves cumulative `+=` (a `= loss` overwrite would leave accum ≈ loss1, failing this).
     assertGt(provider.dailyLossAccum(), (loss1 * 3) / 2, "same-day loss accumulates across rebalances");
 
     bytes memory d3 = _sellToken0Data(amountIn, (fairOut * 90) / 100, 0);
     vm.prank(bot);
     vm.expectRevert(V3Provider.DailyLossExceeded.selector);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, d3);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, d3, false);
   }
 
   /// @notice Fail-closed: if the feed returns 0 for a non-empty vault, rebalance must revert (not run
@@ -2619,7 +2621,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3Provider.OracleZero.selector);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "", false);
   }
 
   /// @notice The per-swap cap also covers the sell-token1 direction (WBNB→slisBNB), exercising `_fairAmount0ForAmount1`.
@@ -2636,7 +2638,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.SwapLossTooHigh.selector);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data, false);
   }
 
   /* ───────────── Spot-vs-fair gate when adding liquidity at pool spot ───────────── */
@@ -2893,7 +2895,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint160 badTarget = uint160(uint256(adapter.spotSqrtPriceX96()) * 2); // ~4x price, well beyond ±1%
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.SpotDeviationTooHigh.selector);
-    provider.rebalance(0, 0, 0, badTarget, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, badTarget, 0, block.timestamp, "", false);
   }
 
   function test_rebalance_passesWhenPoolPriceMatchesTarget() public {
@@ -2904,7 +2906,7 @@ contract SlisBNBV3ProviderTest is Test {
     // Target == the actual pool price ⇒ within the band ⇒ the deviation check passes.
     uint160 target = adapter.spotSqrtPriceX96();
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, target, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, target, 0, block.timestamp, "", false);
     assertLt(adapter.tickLower(), adapter.tickUpper(), "recentered with a matching target");
   }
 
@@ -2918,11 +2920,11 @@ contract SlisBNBV3ProviderTest is Test {
     uint160 bad = uint160(uint256(adapter.spotSqrtPriceX96()) * 2);
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.SpotDeviationTooHigh.selector);
-    provider.rebalance(0, 0, 0, bad, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, bad, 0, block.timestamp, "", false);
 
     // Same state, target 0 → no price check → succeeds.
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "", false);
     assertLt(adapter.tickLower(), adapter.tickUpper(), "recentered with target 0");
   }
 
@@ -2936,7 +2938,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     uint160 bad = uint160(uint256(adapter.spotSqrtPriceX96()) * 2);
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, bad, 0, block.timestamp, ""); // gate off → no revert
+    provider.rebalance(0, 0, 0, bad, 0, block.timestamp, "", false); // gate off → no revert
     assertLt(adapter.tickLower(), adapter.tickUpper(), "gate disabled: bad target ignored");
   }
 
@@ -2949,7 +2951,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint160 bad = uint160(uint256(adapter.spotSqrtPriceX96()) / 2); // target ~1/4 price of actual → outside band
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.SpotDeviationTooHigh.selector);
-    provider.rebalance(0, 0, 0, bad, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, bad, 0, block.timestamp, "", false);
   }
 
   /// @dev A target just inside the ±band passes; the same call just outside it reverts.
@@ -2966,10 +2968,10 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.SpotDeviationTooHigh.selector);
-    provider.rebalance(0, 0, 0, outside, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, outside, 0, block.timestamp, "", false);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, inside, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, inside, 0, block.timestamp, "", false);
     assertLt(adapter.tickLower(), adapter.tickUpper(), "inside-band target passes");
   }
 
@@ -2985,7 +2987,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.SpotDeviationTooHigh.selector);
-    provider.rebalance(0, 0, 0, fairTarget, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, fairTarget, 0, block.timestamp, "", false);
   }
 
   /* ─────────── rebalance: expectedCenterRate assertion ─────────── */
@@ -3017,7 +3019,7 @@ contract SlisBNBV3ProviderTest is Test {
 
     vm.prank(bot); // 2% off → outside band
     vm.expectRevert(V3DexAdapter.CenterRateDeviationTooHigh.selector);
-    provider.rebalance(min0, min1, minLiq, target, (rate * 102) / 100, block.timestamp, "");
+    provider.rebalance(min0, min1, minLiq, target, (rate * 102) / 100, block.timestamp, "", false);
   }
 
   /// @dev expectedCenterRate == centerRate() clears the guard; the full recenter (honoring the floors +
@@ -3035,7 +3037,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint256 peekBefore = providerOracle.peek(address(provider));
 
     vm.prank(bot);
-    provider.rebalance(min0, min1, minLiq, target, rate, block.timestamp, "");
+    provider.rebalance(min0, min1, minLiq, target, rate, block.timestamp, "", false);
 
     assertGt(adapter.tokenId(), oldTokenId, "recenter re-minted within band");
     assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "recenter ~value-neutral");
@@ -3053,7 +3055,7 @@ contract SlisBNBV3ProviderTest is Test {
     uint256 oldTokenId = adapter.tokenId();
 
     vm.prank(bot); // wrong rate ignored
-    provider.rebalance(min0, min1, minLiq, target, type(uint256).max, block.timestamp, "");
+    provider.rebalance(min0, min1, minLiq, target, type(uint256).max, block.timestamp, "", false);
     assertGt(adapter.tokenId(), oldTokenId, "recenter ran, guard off");
   }
 

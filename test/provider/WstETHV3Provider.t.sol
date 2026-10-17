@@ -384,7 +384,7 @@ contract WstETHV3ProviderTest is Test {
     adapter.setCenterRateThresholdBps(0);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "", false);
 
     // No-op recenter (unchanged range, no swap / target / floors) short-circuits to an in-place compound
     // rather than burning and re-minting the identical position: same tokenId, value preserved.
@@ -414,7 +414,7 @@ contract WstETHV3ProviderTest is Test {
     bytes memory data = _swapData(address(mockSwap), true, amountIn, (fairOut * 99) / 100, inner);
 
     vm.prank(bot);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data, false);
 
     assertGt(adapter.tokenId(), oldTokenId, "position re-minted after swap");
     assertApproxEqRel(providerOracle.peek(address(provider)), peekBefore, 2e16, "fair swap ~value-neutral");
@@ -446,7 +446,7 @@ contract WstETHV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3Provider.RebalanceLossTooHigh.selector);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data, false);
   }
 
   /// @notice Linchpin: the backend-supplied `amountOutMin` is enforced on the measured output. A venue
@@ -468,7 +468,7 @@ contract WstETHV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(SwapInventoryLib.InsufficientOutput.selector);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data, false);
   }
 
   /// @notice The adapter only allows whitelisted swap venues; a non-whitelisted target reverts before
@@ -485,7 +485,7 @@ contract WstETHV3ProviderTest is Test {
 
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.NotWhitelistedPair.selector);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data);
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, data, false);
   }
 
   /* ─────────────────────── access control / config ─────────────────────── */
@@ -493,7 +493,7 @@ contract WstETHV3ProviderTest is Test {
   function test_rebalance_onlyBot() public {
     _deposit(10 ether, 10 ether);
     vm.expectRevert();
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp, "", false);
   }
 
   function test_rebalance_revertsAfterDeadline() public {
@@ -502,7 +502,7 @@ contract WstETHV3ProviderTest is Test {
     adapter.setCenterRateThresholdBps(0);
     vm.prank(bot);
     vm.expectRevert(V3DexAdapter.DeadlineExpired.selector);
-    provider.rebalance(0, 0, 0, 0, 0, block.timestamp - 1, "");
+    provider.rebalance(0, 0, 0, 0, 0, block.timestamp - 1, "", false);
   }
 
   function test_setSwapPairWhitelist_onlyManager() public {

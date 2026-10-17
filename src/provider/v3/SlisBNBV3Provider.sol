@@ -2,6 +2,7 @@
 pragma solidity 0.8.34;
 
 import { IMoolah, Id } from "moolah/interfaces/IMoolah.sol";
+import { V3ProviderLib } from "../libraries/V3ProviderLib.sol";
 import { IOracle } from "moolah/interfaces/IOracle.sol";
 
 import { V3Provider } from "./V3Provider.sol";
@@ -55,6 +56,7 @@ contract SlisBNBV3Provider is V3Provider {
   ///         BOT-gated here; the adapter's rebalance is onlyProvider. `swapData` is built by the BOT
   ///         backend and encodes (swapPair, sellToken0, amountIn, amountOutMin, innerSwapData) for the
   ///         inventory-conversion swap (empty ⇒ recenter only).
+  ///         `noOp` = compound-only: reverts `RangeMoved` instead of re-minting if the range moved.
   function rebalance(
     uint256 minAmount0,
     uint256 minAmount1,
@@ -62,9 +64,19 @@ contract SlisBNBV3Provider is V3Provider {
     uint160 targetSqrtPriceX96,
     uint256 expectedCenterRate,
     uint256 deadline,
-    bytes calldata swapData
+    bytes calldata swapData,
+    bool noOp
   ) external onlyRole(BOT) nonReentrant {
-    _guardedRebalance(minAmount0, minAmount1, minLiquidity, targetSqrtPriceX96, expectedCenterRate, deadline, swapData);
+    _guardedRebalance(
+      minAmount0,
+      minAmount1,
+      minLiquidity,
+      targetSqrtPriceX96,
+      expectedCenterRate,
+      deadline,
+      swapData,
+      noOp
+    );
   }
 
   /* ─────────────────── slisBNBx: sync / view ──────────────────────── */
@@ -97,14 +109,14 @@ contract SlisBNBV3Provider is V3Provider {
   }
 
   function syncUserBalance(Id id, address account) external {
-    if (MOOLAH.idToMarketParams(id).collateralToken != address(this)) revert InvalidMarket();
+    V3ProviderLib.requireCollateral(MOOLAH, id);
     _syncPosition(id, account);
   }
 
   function bulkSyncUserBalance(Id[] calldata ids, address[] calldata accounts) external {
     if (ids.length != accounts.length) revert LengthMismatch();
     for (uint256 i = 0; i < accounts.length; i++) {
-      if (MOOLAH.idToMarketParams(ids[i]).collateralToken != address(this)) revert InvalidMarket();
+      V3ProviderLib.requireCollateral(MOOLAH, ids[i]);
       _syncPosition(ids[i], accounts[i]);
     }
   }
