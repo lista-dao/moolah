@@ -37,7 +37,6 @@ library V3ProviderLib {
     uint8 dec1;
   }
 
-  /// @notice 8-decimal USD value of a (amount0, amount1) pair at the resilient oracle's prices.
   /// @dev Entries only: without Moolah.setProvider, withdrawals bypass the vault's hooks. Runs via
   ///      DELEGATECALL, so address(this) is the vault. Exits are never gated.
   function requireRegistered(IMoolah moolah, MarketParams calldata marketParams) external view {
@@ -51,6 +50,7 @@ library V3ProviderLib {
     if (moolah.idToMarketParams(id).collateralToken != address(this)) revert InvalidMarket();
   }
 
+  /// @notice 8-decimal USD value of a (amount0, amount1) pair at the resilient oracle's prices.
   function amountsValueUsd(Ctx memory c, uint256 amount0, uint256 amount1) external view returns (uint256) {
     return _amountsValueUsd(c, amount0, amount1);
   }
