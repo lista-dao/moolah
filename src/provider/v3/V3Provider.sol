@@ -135,7 +135,6 @@ abstract contract V3Provider is
   error InsufficientShares();
   error OnlyMoolah();
   error NotWhitelisted();
-  error InvalidMarket();
   error StandardEntryDisabled();
   error BnbTransferFailed();
   error NotAdapter();
@@ -251,6 +250,7 @@ abstract contract V3Provider is
     address onBehalf
   ) external payable nonReentrant returns (uint256 shares, uint256 amount0Used, uint256 amount1Used) {
     if (marketParams.collateralToken != address(this)) revert InvalidCollateralToken();
+    V3ProviderLib.requireRegistered(MOOLAH, marketParams);
     if (onBehalf == address(0)) revert ZeroAddress();
     // Check both: gating only msg.sender would let a whitelisted caller open a position for anyone.
     if (depositWhitelistEnabled && (!depositWhitelist[msg.sender] || !depositWhitelist[onBehalf]))
@@ -441,6 +441,7 @@ abstract contract V3Provider is
   /// @inheritdoc IV3Provider
   function supplyShares(MarketParams calldata marketParams, uint256 shares, address onBehalf) external nonReentrant {
     if (marketParams.collateralToken != address(this)) revert InvalidCollateralToken();
+    V3ProviderLib.requireRegistered(MOOLAH, marketParams);
     if (shares == 0) revert ZeroShares();
     if (onBehalf == address(0)) revert ZeroAddress();
     if (balanceOf(msg.sender) < shares) revert InsufficientShares();
@@ -484,9 +485,11 @@ abstract contract V3Provider is
 
   /* ──────────────────── Moolah provider callback ──────────────────── */
 
-  function liquidate(Id id, address borrower) external {
+  /// @dev nonReentrant: mid-rebalance (NFT burned, idle cleared) the share prices at 0, so a swap venue
+  ///      re-entering Moolah.liquidate must revert here rather than seize collateral at that price.
+  function liquidate(Id id, address borrower) external nonReentrant {
     if (msg.sender != address(MOOLAH)) revert OnlyMoolah();
-    if (MOOLAH.idToMarketParams(id).collateralToken != address(this)) revert InvalidMarket();
+    V3ProviderLib.requireCollateral(MOOLAH, id);
     _afterCollateralChange(id, borrower);
   }
 
@@ -506,7 +509,8 @@ abstract contract V3Provider is
     return IV3DexAdapter(ADAPTER).positionAmountsAt(IV3DexAdapter(ADAPTER).fairSqrtPriceX96());
   }
 
-  /// @notice Simulate a redemption of `shares` at the current pool price (for tight minAmount0/1).
+  /// @notice Simulate a redemption of `shares` at the current pool price.
+  /// @dev Upper bound (execution rounds three components separately); size minAmount0/1 with a tolerance.
   function previewRedeemUnderlying(uint256 shares) external view returns (uint256 amount0, uint256 amount1) {
     return IV3DexAdapter(ADAPTER).previewRemoveLiquidity(shares, totalSupply());
   }
@@ -696,7 +700,8 @@ abstract contract V3Provider is
   ///      adapter's increaseLiquidity). Adding CLAMM liquidity is the one operation that must not be
   ///      permissionless: a manipulated pool spot lets a caller force a bad-price re-add and sandwich it.
   ///      This is the sole liquidity-deploy path for accrued fees/idle (the other is BOT rebalance); no
-  ///      user hot-path triggers it. Keeper runs this on a cadence.
+  ///      user hot-path triggers it. Keeper runs this on a cadence; the adapter rate-limits it by
+  ///      `cooldownBlocks` (CompoundCooldown).
   function compound(uint256 amount0Min, uint256 amount1Min) external onlyRole(BOT) nonReentrant {
     IV3DexAdapter(ADAPTER).collectAndCompound(amount0Min, amount1Min);
   }
@@ -732,7 +737,8 @@ abstract contract V3Provider is
     uint160 targetSqrtPriceX96,
     uint256 expectedCenterRate,
     uint256 deadline,
-    bytes calldata swapData
+    bytes calldata swapData,
+    bool noOp
   ) internal {
     uint256 navBefore = _positionValueUsd();
     if (totalSupply() != 0 && navBefore == 0) revert OracleZero();
@@ -744,7 +750,8 @@ abstract contract V3Provider is
       targetSqrtPriceX96,
       expectedCenterRate,
       deadline,
-      swapData
+      swapData,
+      noOp
     );
 
     uint256 navAfter = _positionValueUsd();

@@ -23,9 +23,8 @@ import { IV3ProviderOracle } from "../interfaces/IV3ProviderOracle.sol";
  *         consistent with the rate-anchored composition — see the note in peek(). Chain/pair-agnostic:
  *         the pair is taken from the constructor and validated against the adapter.
  *
- * @dev When supply > 0, peek(share) reverts on a zero leg price (fail-closed on a broken feed) but floors
- *      a dust / zero-value position to a non-zero price rather than reverting (keeps liquidation live);
- *      supply == 0 returns 0 (pre-market).
+ * @dev When supply > 0, peek(share) reverts on a zero leg price (broken feed) but returns 0 for a dust /
+ *      zero-value position (liquidation stays live, nothing is overvalued); supply == 0 returns 0.
  */
 contract V3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable, IV3ProviderOracle {
   /* ─────────────────────────── immutables ─────────────────────────── */
@@ -69,6 +68,7 @@ contract V3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable
   error ZeroPrice();
   error AdapterPairMismatch();
   error ShareAdapterMismatch();
+  error ShareNotInitialized();
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor(address _adapter, address _providerShare, address _token0, address _token1) {
@@ -88,6 +88,8 @@ contract V3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     DECIMALS0 = IERC20Metadata(_token0).decimals();
     DECIMALS1 = IERC20Metadata(_token1).decimals();
     SHARE_DECIMALS = IERC20Metadata(_providerShare).decimals();
+    // An uninitialized share proxy reports 0 decimals; snapshotting that would mis-scale every price.
+    if (SHARE_DECIMALS == 0) revert ShareNotInitialized();
     _disableInitializers();
   }
 
@@ -145,11 +147,9 @@ contract V3ProviderOracle is UUPSUpgradeable, AccessControlEnumerableUpgradeable
     // 8-decimal USD price per ONE WHOLE share (10 ** SHARE_DECIMALS share-wei) — Moolah interprets peek()
     // using collateralToken.decimals() — minus the conservative haircut.
     uint256 raw = (totalValue * (10 ** SHARE_DECIMALS)) / supply;
-    uint256 price = (raw * (BPS - haircutBps)) / BPS;
-    // Dust position rounds to 0: floor, don't revert (a reverting peek bricks liquidation). Avoid 0 —
-    // Moolah's liquidation math degenerates at price 0.
-    if (price == 0) price = 1;
-    return price;
+    // A dust / collapsed position rounds to 0: no revert (bricks liquidation), no floor (overvalues).
+    // At 0 nothing can be borrowed and seize-by-amount liquidation still clears the position.
+    return (raw * (BPS - haircutBps)) / BPS;
   }
 
   /// @inheritdoc IOracle

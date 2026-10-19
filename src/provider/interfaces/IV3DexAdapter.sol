@@ -79,6 +79,8 @@ interface IV3DexAdapter {
   ) external view returns (uint128 liquidity, uint256 amount0, uint256 amount1);
 
   /// @notice Simulate removing `shares/totalShares` of the position (liquidity + idle) at spot.
+  /// @dev Upper bound: execution rounds the burn, the pool payout and the idle share separately and can
+  ///      deliver a few wei less. Size minAmount0/1 with a tolerance.
   function previewRemoveLiquidity(
     uint256 shares,
     uint256 totalShares
@@ -150,6 +152,16 @@ interface IV3DexAdapter {
   /// @notice Set the spot-vs-fair deviation gate (onlyRole MANAGER; bps of price, 0 disables).
   function setMaxSpotDeviationBps(uint256 maxSpotDeviationBps) external;
 
+  /// @notice Min blocks between liquidity-adding compounds; inside the window every compound attempt
+  ///         (compound() or the rebalance no-op path) reverts CompoundCooldown. Armed only on an add.
+  function cooldownBlocks() external view returns (uint256);
+
+  /// @notice Block of the last compound that actually added liquidity.
+  function lastCompoundBlock() external view returns (uint256);
+
+  /// @notice Set the compound cooldown (onlyRole MANAGER; blocks, 0 disables).
+  function setCooldownBlocks(uint256 cooldownBlocks) external;
+
   /// @notice Max |live center rate − BOT-supplied expectedCenterRate| deviation (bps) tolerated on
   ///         rebalance (0 disables the guard).
   function maxCenterRateDeviationBps() external view returns (uint256);
@@ -166,6 +178,9 @@ interface IV3DexAdapter {
   /// @notice Recenter the position and convert inventory to the optimal ratio. onlyProvider (the provider
   ///         gates on BOT). `expectedCenterRate` = the live rate the BOT built against (0 = skip); reverts
   ///         if it deviates from the on-chain rate by more than `maxCenterRateDeviationBps`.
+  ///         `noOp` = compound-only: compound into the existing range (minAmount0/1 as floors), revert
+  ///         RangeMoved if the range moved, InvalidParam if swapData / target / minLiquidity is set. The
+  ///         rate-drift / expectedCenterRate guards still apply; a plain keeper compound is compound().
   function rebalance(
     uint256 minAmount0,
     uint256 minAmount1,
@@ -173,6 +188,7 @@ interface IV3DexAdapter {
     uint160 targetSqrtPriceX96,
     uint256 expectedCenterRate,
     uint256 deadline,
-    bytes calldata swapData
+    bytes calldata swapData,
+    bool noOp
   ) external;
 }
