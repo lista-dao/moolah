@@ -9,7 +9,7 @@
     "fix": "prettier --write **.sol"
   },
   "author": "Lista",
-  "license": "MIT",
+  "license": "(MIT AND BUSL-1.1)",
   "devDependencies": {
     "husky": "^9.1.6",
     "lint-staged": "^15.2.4",
