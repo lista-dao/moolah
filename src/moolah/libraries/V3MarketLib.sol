@@ -62,9 +62,12 @@ library V3MarketLib {
   ) external returns (Id id) {
     IV3Liquidator v3Liq = d.v3Liquidator;
     require(address(v3Liq) != address(0), V3LiquidatorNotSet());
-    // the legs are whitelisted on the factory's vault, so the liquidator must reflow into it (or nowhere)
+    // reflow into the factory's vault (or nowhere), and draw from it only if registered there
     address fund = v3Liq.fundSource();
-    require(fund == address(0) || fund == address(d.liquidationVault), InvalidV3Liquidator());
+    require(
+      fund == address(0) || (fund == address(d.liquidationVault) && d.liquidationVault.liquidators(address(v3Liq))),
+      InvalidV3Liquidator()
+    );
 
     address share = m.params.collateralToken;
     address oracle = m.params.oracle;
@@ -129,13 +132,18 @@ library V3MarketLib {
     );
   }
 
-  /// @dev Per-provider switches: flash-loan blacklist, V3Liquidator provider whitelist and the legs.
+  /// @dev Per-provider switches: flash-loan blacklist, V3Liquidator provider whitelist and reflow blacklist,
+  ///      and the legs.
   function _wireProvider(Deps memory d, address share) private {
     if (!d.moolah.flashLoanTokenBlacklist(share)) {
       d.moolah.setFlashLoanTokenBlacklist(share, true);
     }
     if (!d.v3Liquidator.v3Providers(share)) {
       d.v3Liquidator.setV3ProviderWhitelist(share, true);
+    }
+    // the share never leaves the V3Liquidator; it is redeemed there
+    if (!d.v3Liquidator.reflowBlacklist(share)) {
+      d.v3Liquidator.setReflowBlacklist(share, true);
     }
     // redeemed legs are sold by the V3Liquidator or reflowed to the vault; the wrapped-native leg exits as native
     address token0 = IV3Provider(share).TOKEN0();

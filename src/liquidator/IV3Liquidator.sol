@@ -11,9 +11,13 @@ interface IV3Liquidator {
 
   function v3Providers(address provider) external view returns (bool);
 
+  function reflowBlacklist(address token) external view returns (bool);
+
   function setTokenWhitelist(address token, bool status) external;
 
   function setMarketWhitelist(bytes32 id, bool status) external;
 
   function setV3ProviderWhitelist(address provider, bool status) external;
+
+  function setReflowBlacklist(address token, bool status) external;
 }

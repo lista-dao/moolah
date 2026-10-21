@@ -812,14 +812,18 @@ contract MarketFactoryTest is Test {
 
   address constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
-  function _newV3Liquidator() internal returns (V3Liquidator v3Liq) {
+  function _newV3Liquidator() internal returns (V3Liquidator) {
+    return _newV3Liquidator(address(0));
+  }
+
+  function _newV3Liquidator(address fundSource) internal returns (V3Liquidator v3Liq) {
     V3Liquidator impl = new V3Liquidator(address(moolah));
     v3Liq = V3Liquidator(
       payable(
         address(
           new ERC1967Proxy(
             address(impl),
-            abi.encodeWithSelector(impl.initialize.selector, admin, manager, bot, address(0))
+            abi.encodeWithSelector(impl.initialize.selector, admin, manager, bot, fundSource)
           )
         )
       )
@@ -893,6 +897,7 @@ contract MarketFactoryTest is Test {
     assertEq(wl[1], bot);
     assertTrue(v3Liq.marketWhitelist(Id.unwrap(id)));
     assertTrue(v3Liq.v3Providers(address(share)));
+    assertTrue(v3Liq.reflowBlacklist(address(share)), "share reflow-blacklisted");
     assertEq(marketFactory.v3OracleOf(address(share)), address(v3Oracle), "oracle pinned");
 
     // loan + legs + native on the V3Liquidator; legs + native on the vault
@@ -927,6 +932,7 @@ contract MarketFactoryTest is Test {
     vm.startPrank(manager);
     moolah.setFlashLoanTokenBlacklist(address(share), true);
     v3Liq.setV3ProviderWhitelist(address(share), true);
+    v3Liq.setReflowBlacklist(address(share), true);
     v3Liq.setTokenWhitelist(address(lst), true);
     v3Liq.setTokenWhitelist(BNB_ADDRESS, true);
     liquidationVault.setTokenWhitelist(address(WBNB), true);
@@ -945,6 +951,7 @@ contract MarketFactoryTest is Test {
     // incident response: MANAGER pauses the provider and delists a leg
     vm.startPrank(manager);
     v3Liq.setV3ProviderWhitelist(address(share), false);
+    v3Liq.setReflowBlacklist(address(share), false);
     v3Liq.setTokenWhitelist(address(lst), false);
     liquidationVault.setTokenWhitelist(address(lst), false);
     vm.stopPrank();
@@ -954,6 +961,7 @@ contract MarketFactoryTest is Test {
 
     // like a smart provider, a new market turns the switches back on
     assertTrue(v3Liq.v3Providers(address(share)), "provider re-enabled");
+    assertTrue(v3Liq.reflowBlacklist(address(share)), "reflow blacklist restored");
     assertTrue(v3Liq.tokenWhitelist(address(lst)), "leg re-listed on the liquidator");
     assertTrue(liquidationVault.tokenWhitelist(address(lst)), "leg re-listed on the vault");
     assertEq(moolah.providers(m2.params.id(), address(share)), address(share), "second market still wired");
@@ -972,6 +980,7 @@ contract MarketFactoryTest is Test {
     _createV3(m2);
 
     assertTrue(second.v3Providers(address(share)), "new liquidator knows the provider");
+    assertTrue(second.reflowBlacklist(address(share)));
     assertTrue(second.tokenWhitelist(address(lst)));
     assertTrue(second.tokenWhitelist(BNB_ADDRESS));
     assertTrue(second.marketWhitelist(Id.unwrap(m2.params.id())));
@@ -1100,6 +1109,30 @@ contract MarketFactoryTest is Test {
     // the factory's vault moves while the liquidator still reflows into the old one
     vm.prank(admin);
     marketFactory.setLiquidationVault(makeAddr("newVault"));
+    V3MarketParams memory m2 = _v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra());
+    vm.expectRevert(MarketFactory.InvalidV3Liquidator.selector);
+    _createV3(m2);
+  }
+
+  function testCreateV3Market_requiresVaultRegistration() public {
+    // a fundSource set at initialize skips setFundSource's registration check
+    V3Liquidator v3Liq = _newV3Liquidator(address(liquidationVault));
+    vm.startPrank(admin);
+    v3Liq.grantRole(v3Liq.MANAGER(), address(marketFactory));
+    marketFactory.setV3Liquidator(address(v3Liq));
+    vm.stopPrank();
+    (MockV3Share share, MockV3Oracle v3Oracle) = _newV3Share(address(new ERC20Mock()));
+    V3MarketParams memory m = _v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra());
+    vm.expectRevert(MarketFactory.InvalidV3Liquidator.selector);
+    _createV3(m);
+
+    vm.prank(manager);
+    liquidationVault.setLiquidator(address(v3Liq), true);
+    _createV3(m);
+
+    // deregistered later: the next market is refused
+    vm.prank(manager);
+    liquidationVault.setLiquidator(address(v3Liq), false);
     V3MarketParams memory m2 = _v3Market(address(new ERC20Mock()), address(share), address(v3Oracle), _noExtra());
     vm.expectRevert(MarketFactory.InvalidV3Liquidator.selector);
     _createV3(m2);

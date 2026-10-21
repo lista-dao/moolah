@@ -485,7 +485,7 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
   }
 
   /**
-   * @dev Set the V3Liquidator of V3 LP share markets; it must sit on this Moolah.
+   * @dev Set the V3Liquidator of future V3 markets; it must sit on this Moolah. Live markets are not migrated.
    * @param _v3Liquidator The address of the V3Liquidator contract
    */
   function setV3Liquidator(address _v3Liquidator) external onlyRole(DEFAULT_ADMIN_ROLE) {
