@@ -96,3 +96,7 @@ $ forge --help
 $ anvil --help
 $ cast --help
 ```
+
+## License
+
+Files in this repository are licensed under MIT, see [`LICENSE`](./LICENSE), except the V3 LP collateral module, which is licensed under the Business Source License 1.1, see [`LICENSE-BUSL`](./LICENSE-BUSL). A file's SPDX header states which applies: `BUSL-1.1` covers `src/provider/v3/`, `src/provider/libraries/{V3PositionLib,SwapInventoryLib,V3ProviderLib}.sol` and `src/liquidator/V3Liquidator.sol`; their interfaces (`src/provider/interfaces/IV3*.sol`, `ISlisBNBV3DexAdapter.sol`) stay MIT. The Change License is MIT.
