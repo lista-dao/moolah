@@ -18,6 +18,7 @@ import { IBrokerLiquidator } from "../liquidator/IBrokerLiquidator.sol";
 import { IRateCalculator } from "../broker/interfaces/IRateCalculator.sol";
 import { ILiquidationVault } from "../liquidator/ILiquidationVault.sol";
 import { IStockOracleSwitch } from "../oracle/interfaces/IStockOracleSwitch.sol";
+import { IBrokerInterestRelayer } from "../broker/interfaces/IBrokerInterestRelayer.sol";
 
 contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, PausableUpgradeable {
   using MarketParamsLib for MarketParams;
@@ -220,14 +221,6 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     return ids;
   }
 
-  /**
-   * @dev Creates a new fixed term market with the given parameters and configures the related contracts
-   * @param param The FixedTermMarketParams for the market to be created
-   */
-  function createFixedTermMarket(FixedTermMarketParams calldata param) external onlyRole(OPERATOR) returns (Id) {
-    return _createFixedTermMarket(param);
-  }
-
   function _createMarket(
     MarketParams memory param,
     address[] memory liquidatorWhitelist,
@@ -319,8 +312,16 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     // broker set market id
     broker.setMarketId(id);
 
+    // relayer register broker (after setMarketId: addBroker checks broker.LOAN_TOKEN)
+    _registerBrokerToRelayer(broker);
+
     // broker set liquidator whitelist
     broker.toggleLiquidationWhitelist(address(brokerLiquidator), true);
+
+    // set BNBProvider for BNB markets
+    if (param.loanToken == WBNB || param.collateralToken == WBNB) {
+      moolah.setProvider(id, BNBProvider, true);
+    }
 
     // set slisBNBProvider for sliBNB markets
     if (slisBNBProvider != address(0) && param.collateralToken == sliBNB) {
@@ -342,6 +343,19 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
 
     emit BrokerMarketDeployed(param, id, param.broker);
     return id;
+  }
+
+  /// @dev Register the broker on its own relayer. Skips if already registered; reverts if this
+  ///      factory lacks MANAGER on the relayer.
+  function _registerBrokerToRelayer(IBroker broker) private {
+    address relayer = broker.RELAYER();
+    if (relayer == address(0)) return;
+
+    address[] memory registered = IBrokerInterestRelayer(relayer).getBrokers();
+    for (uint256 i = 0; i < registered.length; i++) {
+      if (registered[i] == address(broker)) return;
+    }
+    IBrokerInterestRelayer(relayer).addBroker(address(broker));
   }
 
   /**

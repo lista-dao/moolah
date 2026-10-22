@@ -22,6 +22,15 @@ interface IBrokerInterestRelayer {
    */
   function setFeeRecipient(address _feeRecipient) external;
 
+  /**
+   * @dev Whitelist a broker so it can forward interest to this relayer
+   * @param broker The broker to register
+   */
+  function addBroker(address broker) external;
+
+  /// @dev The registered brokers
+  function getBrokers() external view returns (address[] memory);
+
   /// @dev ------- Events
   event AddedBroker(address indexed broker);
   event RemovedBroker(address indexed broker);
