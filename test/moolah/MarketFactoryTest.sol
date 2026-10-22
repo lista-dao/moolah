@@ -532,7 +532,7 @@ contract MarketFactoryTest is Test {
     vm.stopPrank();
 
     vm.startPrank(operator);
-    Id id = marketFactory.createFixedTermMarket(params);
+    Id id = marketFactory.batchCreateFixedTermMarkets(asBatch(params))[0];
     vm.stopPrank();
 
     assertEq(Id.unwrap(id), Id.unwrap(broker.MARKET_ID()), "Market ID mismatch between broker and market factory");
@@ -859,9 +859,10 @@ contract MarketFactoryTest is Test {
     vm.prank(admin);
     broker.grantRole(brokerManager, address(marketFactory));
 
+    MarketFactory.FixedTermMarketParams[] memory batch = asBatch(params);
     vm.prank(operator);
     vm.expectRevert(bytes("relayer/not-manager"));
-    marketFactory.createFixedTermMarket(params);
+    marketFactory.batchCreateFixedTermMarkets(batch);
 
     assertEq(Id.unwrap(broker.MARKET_ID()), bytes32(0), "market id should not be set");
   }
@@ -917,9 +918,16 @@ contract MarketFactoryTest is Test {
     bytes32 brokerManager = broker.MANAGER();
     vm.prank(admin);
     broker.grantRole(brokerManager, address(marketFactory));
-    MarketFactory.FixedTermMarketParams memory params = fixedTermParams(broker, loanToken, collateralToken);
+    MarketFactory.FixedTermMarketParams[] memory batch = asBatch(fixedTermParams(broker, loanToken, collateralToken));
     vm.prank(operator);
-    return marketFactory.createFixedTermMarket(params);
+    return marketFactory.batchCreateFixedTermMarkets(batch)[0];
+  }
+
+  function asBatch(
+    MarketFactory.FixedTermMarketParams memory params
+  ) private pure returns (MarketFactory.FixedTermMarketParams[] memory batch) {
+    batch = new MarketFactory.FixedTermMarketParams[](1);
+    batch[0] = params;
   }
 
   function newRelayer(address loanToken) private returns (MockBrokerInterestRelayer) {

@@ -221,14 +221,6 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     return ids;
   }
 
-  /**
-   * @dev Creates a new fixed term market with the given parameters and configures the related contracts
-   * @param param The FixedTermMarketParams for the market to be created
-   */
-  function createFixedTermMarket(FixedTermMarketParams calldata param) external onlyRole(OPERATOR) returns (Id) {
-    return _createFixedTermMarket(param);
-  }
-
   function _createMarket(
     MarketParams memory param,
     address[] memory liquidatorWhitelist,
@@ -364,6 +356,8 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
       if (registered[i] == address(broker)) return;
     }
     IBrokerInterestRelayer(relayer).addBroker(address(broker));
+  }
+
   /**
    * @dev Batch create V3 LP share markets. A share's first market pins its oracle, and a later market on the
    *      same share cannot pick another. Per-provider switches are set (read-before-write) on every market.
