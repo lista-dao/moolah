@@ -11,6 +11,8 @@ import { IBuyBack } from "moolah/interfaces/IBuyBack.sol";
 import { IListaAutoBuyBack } from "moolah/interfaces/IListaAutoBuyBack.sol";
 import { IPublicLiquidator } from "liquidator/IPublicLiquidator.sol";
 import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
+import { IV3Liquidator } from "../liquidator/IV3Liquidator.sol";
+import { V3MarketLib, V3MarketParams } from "./libraries/V3MarketLib.sol";
 import { IBroker } from "../broker/interfaces/IBroker.sol";
 import { IBrokerLiquidator } from "../liquidator/IBrokerLiquidator.sol";
 import { IRateCalculator } from "../broker/interfaces/IRateCalculator.sol";
@@ -48,9 +50,22 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
   /// @dev Market-hours switch for tokenized stocks. Required only to create a bStock market
   ///      (`stockCollateral = true`); address(0) disables the wiring.
   IStockOracleSwitch public stockOracleSwitch;
+  /// @dev Liquidator of V3 LP share markets; address(0) disables V3 market creation.
+  IV3Liquidator public v3Liquidator;
+  /// @dev V3 share => its market oracle, pinned by the share's first market.
+  mapping(address => address) public v3OracleOf;
 
   bytes32 public constant OPERATOR = keccak256("OPERATOR");
   bytes32 public constant PAUSER = keccak256("PAUSER");
+
+  // V3 errors are raised by V3MarketLib; declared here so they decode against the factory ABI
+  error V3LiquidatorNotSet();
+  error InvalidV3Liquidator();
+  error InvalidV3Share();
+  error InvalidV3Oracle();
+  error V3DepositUnguarded();
+  error InvalidLiquidator();
+  error V3ShareMarket();
 
   event BrokerMarketDeployed(FixedTermMarketParams fixedTermMarketParams, Id marketId, address broker);
   event CommonMarketDeployed(MarketParams marketParams, Id marketId);
@@ -58,6 +73,8 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
   event BrokerLiquidatorUpdated(address indexed oldAddress, address indexed newAddress);
   event LiquidationVaultUpdated(address indexed oldAddress, address indexed newAddress);
   event StockOracleSwitchUpdated(address indexed oldAddress, address indexed newAddress);
+  event V3LiquidatorUpdated(address indexed oldAddress, address indexed newAddress);
+  event V3ProviderRegistered(address indexed share, address indexed oracle);
 
   /**
    * @dev constructor to set immutable variables
@@ -219,6 +236,7 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     bool liquidatorSmartProvider,
     bool stockCollateral
   ) private whenNotPaused {
+    require(v3OracleOf[param.collateralToken] == address(0), V3ShareMarket());
     Id id = param.id();
     // moolah create market
     moolah.createMarket(param);
@@ -240,20 +258,7 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     // Whitelisting the LP there would also open the BOT collect* path for it.
     _whitelistToken(param.loanToken, true);
     _whitelistToken(param.collateralToken, !liquidatorSmartProvider);
-    // revenue distributor set token whitelist
-    if (address(revenueDistributor) != address(0) && !revenueDistributor.tokenWhitelist(param.loanToken)) {
-      address[] memory tokens = new address[](1);
-      tokens[0] = param.loanToken;
-      revenueDistributor.addTokensToWhitelist(tokens);
-    }
-    // buyback set token whitelist
-    if (address(buyBack) != address(0) && !buyBack.tokenInWhitelist(param.loanToken)) {
-      buyBack.addTokenInWhitelist(param.loanToken);
-    }
-    // auto buyback set token whitelist
-    if (address(autoBuyBack) != address(0) && !autoBuyBack.tokenWhitelist(param.loanToken)) {
-      autoBuyBack.setTokenWhitelist(param.loanToken, true);
-    }
+    _wireLoanToken(param.loanToken);
     // set BNBProvider for BNB markets
     if (param.loanToken == WBNB || param.collateralToken == WBNB) {
       moolah.setProvider(id, BNBProvider, true);
@@ -337,6 +342,52 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
 
     emit BrokerMarketDeployed(param, id, param.broker);
     return id;
+  }
+
+  /**
+   * @dev Batch create V3 LP share markets. A share's first market pins its oracle, and a later market on the
+   *      same share cannot pick another. Per-provider switches are set (read-before-write) on every market.
+   * @param markets The V3 market params
+   */
+  function batchCreateV3Markets(V3MarketParams[] calldata markets) external onlyRole(OPERATOR) whenNotPaused {
+    require(markets.length > 0, "empty market params");
+    V3MarketLib.Deps memory d = V3MarketLib.Deps({
+      moolah: moolah,
+      liquidator: address(liquidator),
+      publicLiquidator: address(publicLiquidator),
+      brokerLiquidator: address(brokerLiquidator),
+      liquidationVault: liquidationVault,
+      v3Liquidator: v3Liquidator
+    });
+    for (uint256 i = 0; i < markets.length; i++) {
+      Id id = V3MarketLib.createV3Market(v3OracleOf, d, markets[i]);
+      MarketParams calldata param = markets[i].params;
+      _whitelistToken(param.loanToken, true);
+      _wireLoanToken(param.loanToken);
+      if (param.loanToken == WBNB) {
+        moolah.setProvider(id, BNBProvider, true);
+      }
+      address[] calldata suppliers = markets[i].supplyWhitelist;
+      for (uint256 j = 0; j < suppliers.length; j++) {
+        moolah.setWhiteList(id, suppliers[j], true);
+      }
+      emit CommonMarketDeployed(param, id);
+    }
+  }
+
+  /// @dev Revenue distributor / buyback / auto-buyback whitelists for the loan token.
+  function _wireLoanToken(address loanToken) private {
+    if (address(revenueDistributor) != address(0) && !revenueDistributor.tokenWhitelist(loanToken)) {
+      address[] memory tokens = new address[](1);
+      tokens[0] = loanToken;
+      revenueDistributor.addTokensToWhitelist(tokens);
+    }
+    if (address(buyBack) != address(0) && !buyBack.tokenInWhitelist(loanToken)) {
+      buyBack.addTokenInWhitelist(loanToken);
+    }
+    if (address(autoBuyBack) != address(0) && !autoBuyBack.tokenWhitelist(loanToken)) {
+      autoBuyBack.setTokenWhitelist(loanToken, true);
+    }
   }
 
   function _configSmartProvider(Id id, address provider, address collateral) private {
@@ -431,6 +482,29 @@ contract MarketFactory is UUPSUpgradeable, AccessControlEnumerableUpgradeable, P
     require(_stockOracleSwitch != address(0), "ZeroAddress");
     emit StockOracleSwitchUpdated(address(stockOracleSwitch), _stockOracleSwitch);
     stockOracleSwitch = IStockOracleSwitch(_stockOracleSwitch);
+  }
+
+  /**
+   * @dev Set the V3Liquidator of future V3 markets; it must sit on this Moolah. Live markets are not migrated.
+   * @param _v3Liquidator The address of the V3Liquidator contract
+   */
+  function setV3Liquidator(address _v3Liquidator) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    require(_v3Liquidator != address(0), "ZeroAddress");
+    require(IV3Liquidator(_v3Liquidator).MOOLAH() == address(moolah), InvalidV3Liquidator());
+    emit V3LiquidatorUpdated(address(v3Liquidator), _v3Liquidator);
+    v3Liquidator = IV3Liquidator(_v3Liquidator);
+  }
+
+  /**
+   * @dev Re-pin a registered share's oracle for its future markets; existing markets keep theirs.
+   * @param share The V3 share
+   * @param oracle Its new V3ProviderOracle
+   */
+  function setV3Oracle(address share, address oracle) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    require(v3OracleOf[share] != address(0), InvalidV3Share());
+    V3MarketLib.validate(address(moolah), share, oracle);
+    v3OracleOf[share] = oracle;
+    emit V3ProviderRegistered(share, oracle);
   }
 
   /**
