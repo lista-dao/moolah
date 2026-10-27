@@ -9,7 +9,7 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { OEVLiquidator } from "liquidator/OEVLiquidator.sol";
 
 /// @dev Deploys the OEVLiquidator (impl + UUPS proxy) with final roles set in initialize, so the
-///      deployer never holds any role. Market whitelist is set afterwards by MANAGER.
+///      deployer never holds any role.
 contract OEVLiquidatorDeploy is DeployBase {
   address moolah;
   address timelock;

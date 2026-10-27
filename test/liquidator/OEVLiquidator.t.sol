@@ -28,8 +28,6 @@ contract OEVLiquidatorTest is BaseTest {
       abi.encodeWithSelector(impl.initialize.selector, OWNER, OWNER, PAUSER, ATLAS)
     );
     liquidator = OEVLiquidator(address(proxy));
-    vm.prank(OWNER);
-    liquidator.setMarketWhitelist(marketId, true);
 
     // unhealthy position: 10 collateral, 8 debt, collateral price drops 90%
     loanToken.setBalance(address(this), 1e19);
@@ -64,15 +62,6 @@ contract OEVLiquidatorTest is BaseTest {
       abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, OWNER, liquidator.OEV())
     );
     vm.prank(OWNER);
-    liquidator.liquidate(marketId, address(this), 1e18, 0);
-  }
-
-  function testLiquidateMarketNotWhitelisted() public {
-    vm.prank(OWNER);
-    liquidator.setMarketWhitelist(marketId, false);
-
-    vm.expectRevert(OEVLiquidator.NotWhitelisted.selector);
-    vm.prank(ATLAS);
     liquidator.liquidate(marketId, address(this), 1e18, 0);
   }
 

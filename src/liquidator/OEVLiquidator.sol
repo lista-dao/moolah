@@ -19,17 +19,12 @@ contract OEVLiquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCon
   /// @dev Thrown when passing the zero address.
   string internal constant ZERO_ADDRESS = "zero address";
   error OnlyMoolah();
-  error WhitelistSameStatus();
-  error NotWhitelisted();
 
   address public immutable MOOLAH;
-  mapping(bytes32 => bool) public marketWhitelist;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant PAUSER = keccak256("PAUSER"); // pauser role
   bytes32 public constant OEV = keccak256("OEV"); // third-party OEV liquidator role, may only call liquidate
-
-  event MarketWhitelistChanged(bytes32 id, bool added);
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   /// @param moolah The address of the Moolah contract.
@@ -42,7 +37,7 @@ contract OEVLiquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCon
   /// @dev initializes the contract. OEV's role admin is MANAGER so rotating the searcher address is a
   ///      multisig operation rather than a TimeLock one.
   /// @param admin DEFAULT_ADMIN_ROLE (TimeLock): role management + UUPS upgrade authorization.
-  /// @param manager MANAGER (multisig): market whitelist, withdraw, unpause, OEV role rotation.
+  /// @param manager MANAGER (multisig): withdraw, unpause, OEV role rotation.
   /// @param pauser PAUSER: emergency pause.
   /// @param oev OEV: the third-party liquidator (Atlas).
   function initialize(address admin, address manager, address pauser, address oev) public initializer {
@@ -67,29 +62,6 @@ contract OEVLiquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCon
     token.safeTransfer(msg.sender, amount);
   }
 
-  /// @dev sets the market whitelist.
-  /// @param id The id of the market.
-  /// @param status The status of the market.
-  function setMarketWhitelist(bytes32 id, bool status) external onlyRole(MANAGER) {
-    _setMarketWhitelist(id, status);
-  }
-
-  /// @dev batch sets the market whitelist.
-  /// @param ids The array of market ids.
-  /// @param status The status to set for all markets.
-  function batchSetMarketWhitelist(bytes32[] calldata ids, bool status) external onlyRole(MANAGER) {
-    for (uint256 i = 0; i < ids.length; i++) {
-      _setMarketWhitelist(ids[i], status);
-    }
-  }
-
-  function _setMarketWhitelist(bytes32 id, bool status) internal {
-    require(IMoolah(MOOLAH).idToMarketParams(id).loanToken != address(0), "Invalid market");
-    require(marketWhitelist[id] != status, WhitelistSameStatus());
-    marketWhitelist[id] = status;
-    emit MarketWhitelistChanged(id, status);
-  }
-
   /// @dev liquidates a position. The caller pays the repayment in loan token (pulled in the Moolah
   ///      callback, so it must have approved this contract) and receives the seized collateral.
   /// @param id The id of the market.
@@ -103,7 +75,6 @@ contract OEVLiquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCon
     uint256 seizedAssets,
     uint256 repaidShares
   ) external nonReentrant whenNotPaused onlyRole(OEV) returns (uint256, uint256) {
-    require(marketWhitelist[id], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
     (uint256 _seizedAssets, uint256 _repaidAssets) = IMoolah(MOOLAH).liquidate(
       params,
