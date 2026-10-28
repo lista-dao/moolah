@@ -7,14 +7,13 @@ import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/P
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
-import { IMoolahLiquidateCallback } from "moolah/interfaces/IMoolahCallbacks.sol";
-import { IMoolah } from "./Interface.sol";
+import { IMoolah, IOEVLiquidateCallback } from "./Interface.sol";
 
 /// @title OEVLiquidator
 /// @notice Liquidation entry for a third-party OEV searcher (Atlas). The searcher bundles the oracle
 ///         update and the liquidation in one tx. Its OEV-role contract receives the seized collateral
 ///         inside the Moolah callback, then must send the repayment in loan token from its own
-///         onMoolahLiquidate. The OEV holder must be a contract implementing IMoolahLiquidateCallback.
+///         onOEVLiquidate. The OEV holder must be a contract implementing IOEVLiquidateCallback.
 /// @dev    Plain-collateral markets only: SmartProvider LP and V3Provider share collateral cannot be
 ///         transferred out to the payer, so liquidating those markets reverts. Which markets can be
 ///         liquidated is gated by Moolah's per-market liquidation whitelist.
@@ -69,15 +68,15 @@ contract OEVLiquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCon
     token.safeTransfer(msg.sender, amount);
   }
 
-  /// @dev liquidates a position. The caller must be a contract implementing IMoolahLiquidateCallback:
+  /// @dev liquidates a position. The caller must be a contract implementing IOEVLiquidateCallback:
   ///      inside the Moolah callback it first receives the seized collateral, then its
-  ///      onMoolahLiquidate(repaidAssets, payload) is called, in which it must transfer `repaidAssets`
+  ///      onOEVLiquidate(repaidAssets, payload) is called, in which it must transfer `repaidAssets`
   ///      of loan token to this contract.
   /// @param params The market params. Moolah reverts unless they hash to an existing market.
   /// @param borrower The address of the borrower.
   /// @param seizedAssets The amount of assets to seize.
   /// @param repaidShares The amount of shares to repay.
-  /// @param payload Arbitrary data passed through to the caller's onMoolahLiquidate.
+  /// @param payload Arbitrary data passed through to the caller's onOEVLiquidate.
   /// @return The actual seized assets and repaid assets.
   function liquidate(
     IMoolah.MarketParams calldata params,
@@ -103,7 +102,7 @@ contract OEVLiquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCon
   }
 
   /// @dev the function will be called by the Moolah contract when liquidate. Sends the collateral
-  ///      seized by this liquidation to the payer, calls the payer's onMoolahLiquidate (which must send
+  ///      seized by this liquidation to the payer, calls the payer's onOEVLiquidate (which must send
   ///      the repayment here), then approves Moolah to take the repayment.
   /// @param repaidAssets The amount of assets repaid.
   /// @param data The callback data: (loanToken, collateralToken, collateralTokenPreBalance, payer, payload).
@@ -119,7 +118,7 @@ contract OEVLiquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCon
     // transfer seized collateral to payer first
     collateralToken.safeTransfer(payer, collateralToken.balanceOf(address(this)) - collateralTokenPreBalance);
     // callback payer
-    IMoolahLiquidateCallback(payer).onMoolahLiquidate(repaidAssets, payload);
+    IOEVLiquidateCallback(payer).onOEVLiquidate(repaidAssets, payload);
     // Note: should be reverted if payer doesn't transfer sufficient loan token here
     loanToken.safeApprove(MOOLAH, repaidAssets);
   }

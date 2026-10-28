@@ -20,7 +20,7 @@ contract OEVPayerMock {
     LOAN_TOKEN = loanToken;
   }
 
-  function onMoolahLiquidate(uint256 repaidAssets, bytes calldata data) external {
+  function onOEVLiquidate(uint256 repaidAssets, bytes calldata data) external {
     collateralAtCallback = COLLATERAL_TOKEN.balanceOf(address(this));
     repaidAtCallback = repaidAssets;
     payloadAtCallback = data;

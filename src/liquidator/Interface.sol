@@ -39,3 +39,10 @@ interface IMoolah {
 
   function isHealthy(MarketParams memory marketParams, bytes32 id, address borrower) external view returns (bool);
 }
+
+/// @dev Callback the OEV payer implements. OEVLiquidator calls it inside the Moolah liquidate callback,
+///      after sending the seized collateral to the payer; the payer must transfer `repaidAssets` of loan
+///      token to OEVLiquidator before returning.
+interface IOEVLiquidateCallback {
+  function onOEVLiquidate(uint256 repaidAssets, bytes calldata data) external;
+}
