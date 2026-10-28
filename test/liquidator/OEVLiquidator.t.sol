@@ -5,22 +5,49 @@ import "../moolah/BaseTest.sol";
 
 import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { OEVLiquidator } from "liquidator/OEVLiquidator.sol";
-import { MarketParamsLib, MarketParams, Id } from "moolah/libraries/MarketParamsLib.sol";
+import { IMoolah as ILiquidatorMoolah } from "liquidator/Interface.sol";
+
+/// @dev OEV payer: records what it holds and receives when its callback runs, then pays the repayment.
+contract OEVPayerMock {
+  ERC20Mock immutable COLLATERAL_TOKEN;
+  ERC20Mock immutable LOAN_TOKEN;
+  uint256 public collateralAtCallback;
+  uint256 public repaidAtCallback;
+  bytes public payloadAtCallback;
+
+  constructor(ERC20Mock collateralToken, ERC20Mock loanToken) {
+    COLLATERAL_TOKEN = collateralToken;
+    LOAN_TOKEN = loanToken;
+  }
+
+  function onMoolahLiquidate(uint256 repaidAssets, bytes calldata data) external {
+    collateralAtCallback = COLLATERAL_TOKEN.balanceOf(address(this));
+    repaidAtCallback = repaidAssets;
+    payloadAtCallback = data;
+    require(LOAN_TOKEN.transfer(msg.sender, repaidAssets));
+  }
+}
 
 contract OEVLiquidatorTest is BaseTest {
-  using MarketParamsLib for MarketParams;
-
   OEVLiquidator liquidator;
+  OEVPayerMock payer;
   address ATLAS;
   address PAUSER;
-  bytes32 marketId;
+  ILiquidatorMoolah.MarketParams params;
 
   function setUp() public override {
     super.setUp();
 
-    ATLAS = makeAddr("Atlas");
+    payer = new OEVPayerMock(collateralToken, loanToken);
+    ATLAS = address(payer);
     PAUSER = makeAddr("Pauser");
-    marketId = Id.unwrap(marketParams.id());
+    params = ILiquidatorMoolah.MarketParams(
+      marketParams.loanToken,
+      marketParams.collateralToken,
+      marketParams.oracle,
+      marketParams.irm,
+      marketParams.lltv
+    );
 
     OEVLiquidator impl = new OEVLiquidator(address(moolah));
     ERC1967Proxy proxy = new ERC1967Proxy(
@@ -40,19 +67,24 @@ contract OEVLiquidatorTest is BaseTest {
     oracle.setPrice(address(collateralToken), ORACLE_PRICE_SCALE / 10);
 
     loanToken.setBalance(ATLAS, 1e19);
-    vm.prank(ATLAS);
-    loanToken.approve(address(liquidator), type(uint256).max);
   }
 
   function testLiquidate() public {
+    // stray collateral already on the liquidator must not be forwarded to the payer
+    collateralToken.setBalance(address(liquidator), 5e17);
+
     vm.prank(ATLAS);
-    (uint256 seized, uint256 repaid) = liquidator.liquidate(marketId, address(this), 1e18, 0);
+    (uint256 seized, uint256 repaid) = liquidator.liquidate(params, address(this), 1e18, 0, "atlas");
 
     assertEq(seized, 1e18, "seized");
     assertGt(repaid, 0, "repaid");
+    // collateral is delivered before the payer callback runs
+    assertEq(payer.collateralAtCallback(), seized, "collateral at callback");
+    assertEq(payer.repaidAtCallback(), repaid, "repaid at callback");
+    assertEq(payer.payloadAtCallback(), "atlas", "payload at callback");
     assertEq(collateralToken.balanceOf(ATLAS), seized, "atlas collateral");
     assertEq(loanToken.balanceOf(ATLAS), 1e19 - repaid, "atlas loan");
-    assertEq(collateralToken.balanceOf(address(liquidator)), 0, "liquidator collateral");
+    assertEq(collateralToken.balanceOf(address(liquidator)), 5e17, "liquidator collateral");
     assertEq(loanToken.balanceOf(address(liquidator)), 0, "liquidator loan");
     assertEq(loanToken.allowance(address(liquidator), address(moolah)), 0, "moolah allowance");
   }
@@ -62,7 +94,7 @@ contract OEVLiquidatorTest is BaseTest {
       abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, OWNER, liquidator.OEV())
     );
     vm.prank(OWNER);
-    liquidator.liquidate(marketId, address(this), 1e18, 0);
+    liquidator.liquidate(params, address(this), 1e18, 0, "");
   }
 
   function testPauseUnpause() public {
@@ -71,7 +103,7 @@ contract OEVLiquidatorTest is BaseTest {
 
     vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
     vm.prank(ATLAS);
-    liquidator.liquidate(marketId, address(this), 1e18, 0);
+    liquidator.liquidate(params, address(this), 1e18, 0, "");
 
     // PAUSER cannot unpause; MANAGER can
     vm.expectRevert(
@@ -83,12 +115,12 @@ contract OEVLiquidatorTest is BaseTest {
     vm.prank(OWNER);
     liquidator.unpause();
     vm.prank(ATLAS);
-    liquidator.liquidate(marketId, address(this), 1e18, 0);
+    liquidator.liquidate(params, address(this), 1e18, 0, "");
   }
 
   function testOnMoolahLiquidateOnlyMoolah() public {
     vm.expectRevert(OEVLiquidator.OnlyMoolah.selector);
     vm.prank(ATLAS);
-    liquidator.onMoolahLiquidate(1, abi.encode(address(loanToken), ATLAS));
+    liquidator.onMoolahLiquidate(1, abi.encode(address(loanToken), address(collateralToken), 0, ATLAS, ""));
   }
 }

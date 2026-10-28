@@ -7,12 +7,19 @@ import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/P
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
+import { IMoolahLiquidateCallback } from "moolah/interfaces/IMoolahCallbacks.sol";
 import { IMoolah } from "./Interface.sol";
 
 /// @title OEVLiquidator
 /// @notice Liquidation entry for a third-party OEV searcher (Atlas). The searcher bundles the oracle
-///         update and the liquidation in one tx, pays the repayment in loan token and receives the
-///         seized collateral. This contract holds no funds; it only gates who may liquidate which market.
+///         update and the liquidation in one tx. Its OEV-role contract receives the seized collateral
+///         inside the Moolah callback, then must send the repayment in loan token from its own
+///         onMoolahLiquidate. The OEV holder must be a contract implementing IMoolahLiquidateCallback.
+/// @dev    Plain-collateral markets only: SmartProvider LP and V3Provider share collateral cannot be
+///         transferred out to the payer, so liquidating those markets reverts. Which markets can be
+///         liquidated is gated by Moolah's per-market liquidation whitelist.
+///         Not meant to hold funds. The repayment is not pulled from the payer (gas), so any loan token
+///         left here could fund a later repayment; MANAGER sweeps stray balances via withdrawERC20.
 contract OEVLiquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessControlUpgradeable, PausableUpgradeable {
   using SafeTransferLib for address;
 
@@ -62,39 +69,58 @@ contract OEVLiquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCon
     token.safeTransfer(msg.sender, amount);
   }
 
-  /// @dev liquidates a position. The caller pays the repayment in loan token (pulled in the Moolah
-  ///      callback, so it must have approved this contract) and receives the seized collateral.
-  /// @param id The id of the market.
+  /// @dev liquidates a position. The caller must be a contract implementing IMoolahLiquidateCallback:
+  ///      inside the Moolah callback it first receives the seized collateral, then its
+  ///      onMoolahLiquidate(repaidAssets, payload) is called, in which it must transfer `repaidAssets`
+  ///      of loan token to this contract.
+  /// @param params The market params. Moolah reverts unless they hash to an existing market.
   /// @param borrower The address of the borrower.
   /// @param seizedAssets The amount of assets to seize.
   /// @param repaidShares The amount of shares to repay.
+  /// @param payload Arbitrary data passed through to the caller's onMoolahLiquidate.
   /// @return The actual seized assets and repaid assets.
   function liquidate(
-    bytes32 id,
+    IMoolah.MarketParams calldata params,
     address borrower,
     uint256 seizedAssets,
-    uint256 repaidShares
+    uint256 repaidShares,
+    bytes calldata payload
   ) external nonReentrant whenNotPaused onlyRole(OEV) returns (uint256, uint256) {
-    IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
-    (uint256 _seizedAssets, uint256 _repaidAssets) = IMoolah(MOOLAH).liquidate(
-      params,
-      borrower,
-      seizedAssets,
-      repaidShares,
-      abi.encode(params.loanToken, msg.sender)
-    );
-    params.collateralToken.safeTransfer(msg.sender, _seizedAssets);
-    return (_seizedAssets, _repaidAssets);
+    return
+      IMoolah(MOOLAH).liquidate(
+        params,
+        borrower,
+        seizedAssets,
+        repaidShares,
+        abi.encode(
+          params.loanToken,
+          params.collateralToken,
+          params.collateralToken.balanceOf(address(this)),
+          msg.sender,
+          payload
+        )
+      );
   }
 
-  /// @dev the function will be called by the Moolah contract when liquidate. Pulls the exact
-  ///      repayment from the OEV caller and approves Moolah to take it.
+  /// @dev the function will be called by the Moolah contract when liquidate. Sends the collateral
+  ///      seized by this liquidation to the payer, calls the payer's onMoolahLiquidate (which must send
+  ///      the repayment here), then approves Moolah to take the repayment.
   /// @param repaidAssets The amount of assets repaid.
-  /// @param data The callback data: (loanToken, payer).
+  /// @param data The callback data: (loanToken, collateralToken, collateralTokenPreBalance, payer, payload).
   function onMoolahLiquidate(uint256 repaidAssets, bytes calldata data) external {
     require(msg.sender == MOOLAH, OnlyMoolah());
-    (address loanToken, address payer) = abi.decode(data, (address, address));
-    loanToken.safeTransferFrom(payer, address(this), repaidAssets);
+    (
+      address loanToken,
+      address collateralToken,
+      uint256 collateralTokenPreBalance,
+      address payer,
+      bytes memory payload
+    ) = abi.decode(data, (address, address, uint256, address, bytes));
+    // transfer seized collateral to payer first
+    collateralToken.safeTransfer(payer, collateralToken.balanceOf(address(this)) - collateralTokenPreBalance);
+    // callback payer
+    IMoolahLiquidateCallback(payer).onMoolahLiquidate(repaidAssets, payload);
+    // Note: should be reverted if payer doesn't transfer sufficient loan token here
     loanToken.safeApprove(MOOLAH, repaidAssets);
   }
 
