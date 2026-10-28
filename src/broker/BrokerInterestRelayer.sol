@@ -140,27 +140,42 @@ contract BrokerInterestRelayer is
       emit ProtocolFeeCharged(msg.sender, feeRecipient, fee);
     }
 
-    // get minLoan
-    uint256 minLoan = MOOLAH.minLoan(MOOLAH.idToMarketParams(IBrokerBase(msg.sender).MARKET_ID()));
+    Id marketId = IBrokerBase(msg.sender).MARKET_ID();
 
-    // supply to moolah vault if the balance exceeds minLoan
-    // ignore the supply info of the vault after supplying,
-    // otherwise, keep the balance in this contract
     uint256 balance = IERC20(token).balanceOf(address(this));
     // records interest accumulated event
     emit InterestAccumulated(msg.sender, balance);
 
+    // keep the balance if the vault does not track this market (not in withdrawQueue => not in totalAssets);
+    // never revert here, this runs inside repay / liquidate
+    if (!_isMarketEnabled(marketId)) {
+      emit SupplySkippedMarketNotEnabled(msg.sender, marketId, balance);
+      return;
+    }
+
+    // get minLoan
+    MarketParams memory marketParams = MOOLAH.idToMarketParams(marketId);
+    uint256 minLoan = MOOLAH.minLoan(marketParams);
+
+    // supply to moolah vault if the balance exceeds minLoan
+    // ignore the supply info of the vault after supplying,
+    // otherwise, keep the balance in this contract
     if (balance >= minLoan) {
       // approve to moolah
       IERC20(token).safeIncreaseAllowance(address(MOOLAH), balance);
       // supply to moolah vault
-      MOOLAH.supply(MOOLAH.idToMarketParams(IBrokerBase(msg.sender).MARKET_ID()), balance, 0, vault, "");
+      MOOLAH.supply(marketParams, balance, 0, vault, "");
       // audit #08: atomic notify so totalAssets smooths the flush; no-op when vault has no buffer set.
       address buf = IMoolahVault(vault).lockBuffer();
       if (buf != address(0)) IBrokerInterestLockBuffer(buf).notifyBrokerInterest(balance);
       // records supplied to vault event
       emit SuppliedToMoolahVault(balance);
     }
+  }
+
+  /// @dev whether the vault has `id` enabled (listed in its withdrawQueue)
+  function _isMarketEnabled(Id id) internal view returns (bool) {
+    return IMoolahVault(vault).config(id).enabled;
   }
 
   /**
