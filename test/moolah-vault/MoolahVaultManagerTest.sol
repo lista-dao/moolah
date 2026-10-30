@@ -14,6 +14,35 @@ import { Moolah } from "moolah/Moolah.sol";
 import { MoolahVault } from "moolah-vault/MoolahVault.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { MoolahVaultManager } from "moolah-vault/MoolahVaultManager.sol";
+import { BrokerInterestRelayer } from "../../src/broker/BrokerInterestRelayer.sol";
+
+/// @dev Broker stand-in without RELAYER(): Moolah accepts it, the vault manager must reject it.
+contract MockBrokerNoRelayer {
+  address public immutable LOAN_TOKEN;
+  address public immutable COLLATERAL_TOKEN;
+  Id public immutable MARKET_ID;
+
+  constructor(address loan, address collateral, Id id) {
+    LOAN_TOKEN = loan;
+    COLLATERAL_TOKEN = collateral;
+    MARKET_ID = id;
+  }
+}
+
+/// @dev Minimal fixed-term broker stand-in: just what Moolah.setMarketBroker and the relayer need.
+contract MockFixedTermBroker {
+  address public immutable LOAN_TOKEN;
+  address public immutable COLLATERAL_TOKEN;
+  Id public immutable MARKET_ID;
+  address public immutable RELAYER;
+
+  constructor(address loan, address collateral, Id id, address relayer) {
+    LOAN_TOKEN = loan;
+    COLLATERAL_TOKEN = collateral;
+    MARKET_ID = id;
+    RELAYER = relayer;
+  }
+}
 
 contract MoolahVaultManagerTest is Test {
   using MarketParamsLib for MarketParams;
@@ -624,5 +653,119 @@ contract MoolahVaultManagerTest is Test {
     assertEq(vault.supplyQueueLength(), 2, "supply queue length should be 2");
     (uint184 cap, bool enabled, ) = vault.config(marketParams1.id());
     assertTrue(cap == 0 && !enabled, "market1 should be disabled with cap 0");
+  }
+
+  /// @dev A market whose broker still relays interest into this vault cannot be removed: the relayed supply
+  ///      would stop counting toward totalAssets() while the lock buffer keeps deducting it.
+  function test_removeMarketFromVault_revertsWhileBrokerStillRelaying() public {
+    ERC20Mock loanToken = ERC20Mock(marketParams1.loanToken);
+    loanToken.setBalance(address(vaultManager), 1000 ether);
+    test_setMarket();
+    address[] memory vaults = new address[](1);
+    vaults[0] = address(vault);
+    vm.prank(manager);
+    vaultManager.batchSetVaultWhitelist(vaults, true);
+
+    // relayer feeding this vault, with a broker registered for market 1
+    BrokerInterestRelayer relayerImpl = new BrokerInterestRelayer();
+    ERC1967Proxy relayerProxy = new ERC1967Proxy(
+      address(relayerImpl),
+      abi.encodeWithSelector(
+        BrokerInterestRelayer.initialize.selector,
+        admin,
+        manager,
+        address(moolah),
+        address(vault),
+        address(loanToken)
+      )
+    );
+    BrokerInterestRelayer relayer = BrokerInterestRelayer(address(relayerProxy));
+    Id id1 = marketParams1.id();
+    MockFixedTermBroker broker = new MockFixedTermBroker(
+      address(loanToken),
+      marketParams1.collateralToken,
+      id1,
+      address(relayer)
+    );
+    vm.startPrank(manager);
+    moolah.setMarketBroker(id1, address(broker), true);
+    relayer.addBroker(address(broker));
+    vm.stopPrank();
+
+    vm.prank(bot);
+    vm.expectRevert(bytes("Broker still registered in relayer"));
+    vaultManager.removeMarketFromVault(address(vault), id1);
+
+    // detach the broker from its relayer first, then removal goes through
+    vm.prank(manager);
+    relayer.removeBroker(address(broker));
+    vm.prank(bot);
+    vaultManager.removeMarketFromVault(address(vault), id1);
+    assertFalse(_enabled(id1), "market 1 dropped from the vault");
+  }
+
+  /// @dev A broker whose relayer feeds a different vault does not block removal here.
+  function test_removeMarketFromVault_ignoresRelayerOfOtherVault() public {
+    ERC20Mock loanToken = ERC20Mock(marketParams1.loanToken);
+    loanToken.setBalance(address(vaultManager), 1000 ether);
+    test_setMarket();
+    address[] memory vaults = new address[](1);
+    vaults[0] = address(vault);
+    vm.prank(manager);
+    vaultManager.batchSetVaultWhitelist(vaults, true);
+
+    MoolahVault otherVault = newVault(address(loanToken));
+    BrokerInterestRelayer relayerImpl = new BrokerInterestRelayer();
+    ERC1967Proxy relayerProxy = new ERC1967Proxy(
+      address(relayerImpl),
+      abi.encodeWithSelector(
+        BrokerInterestRelayer.initialize.selector,
+        admin,
+        manager,
+        address(moolah),
+        address(otherVault),
+        address(loanToken)
+      )
+    );
+    BrokerInterestRelayer relayer = BrokerInterestRelayer(address(relayerProxy));
+    Id id1 = marketParams1.id();
+    MockFixedTermBroker broker = new MockFixedTermBroker(
+      address(loanToken),
+      marketParams1.collateralToken,
+      id1,
+      address(relayer)
+    );
+    vm.startPrank(manager);
+    moolah.setMarketBroker(id1, address(broker), true);
+    relayer.addBroker(address(broker));
+    vm.stopPrank();
+
+    vm.prank(bot);
+    vaultManager.removeMarketFromVault(address(vault), id1);
+    assertFalse(_enabled(id1), "removal unaffected by a relayer of another vault");
+  }
+
+  function _enabled(Id id) internal view returns (bool enabled) {
+    (, enabled, ) = vault.config(id);
+  }
+
+  /// @dev A registered broker that does not expose RELAYER() blocks removal outright.
+  function test_removeMarketFromVault_revertsOnBrokerWithoutRelayer() public {
+    ERC20Mock loanToken = ERC20Mock(marketParams1.loanToken);
+    loanToken.setBalance(address(vaultManager), 1000 ether);
+    test_setMarket();
+    address[] memory vaults = new address[](1);
+    vaults[0] = address(vault);
+    vm.prank(manager);
+    vaultManager.batchSetVaultWhitelist(vaults, true);
+
+    Id id1 = marketParams1.id();
+    MockBrokerNoRelayer broker = new MockBrokerNoRelayer(address(loanToken), marketParams1.collateralToken, id1);
+    vm.prank(manager);
+    moolah.setMarketBroker(id1, address(broker), true);
+
+    vm.prank(bot);
+    vm.expectRevert(bytes("invalid broker"));
+    vaultManager.removeMarketFromVault(address(vault), id1);
   }
 }
