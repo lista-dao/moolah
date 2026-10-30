@@ -14,6 +14,7 @@ import { ERC20Mock } from "../../src/moolah/mocks/ERC20Mock.sol";
 
 import { CreditBroker } from "../../src/credit-loan/CreditBroker.sol";
 import { CreditBrokerInterestRelayer } from "../../src/credit-loan/CreditBrokerInterestRelayer.sol";
+import { ICreditBrokerInterestRelayer } from "../../src/credit-loan/interfaces/ICreditBrokerInterestRelayer.sol";
 import { ICreditBroker, FixedLoanPosition, FixedTermAndRate, GraceConfig, FixedTermType } from "../../src/credit-loan/interfaces/ICreditBroker.sol";
 import { CreditBrokerMath, RATE_SCALE } from "../../src/credit-loan/libraries/CreditBrokerMath.sol";
 import { CreditBrokerOperatorLib } from "../../src/credit-loan/libraries/CreditBrokerOperatorLib.sol";
@@ -2674,5 +2675,58 @@ contract CreditBrokerTest is Test {
     vm.prank(borrower);
     broker.repayAll(borrower);
     assertEq(broker.userFixedPositions(borrower).length, 0, "positions not cleared");
+  }
+
+  // ===== withdraw-queue guard (credit side) =====
+
+  /// @dev drop the market from the vault: cap 0, mark removable, rebuild an empty withdrawQueue
+  function _removeMarketFromVault() internal {
+    vm.startPrank(MANAGER);
+    vault.setCap(marketParams, 0);
+    vault.setMarketRemoval(marketParams);
+    vault.updateWithdrawQueue(new uint256[](0));
+    vm.stopPrank();
+    (, bool enabled, ) = vault.config(id);
+    assertFalse(enabled, "market no longer tracked");
+  }
+
+  function test_queueGuard_relayKeptWhenMarketNotEnabled() public {
+    _enableLockBuffer();
+    _removeMarketFromVault();
+    uint256 amount = 50 ether;
+    uint256 navBefore = vault.totalAssets();
+    uint256 posBefore = moolah.position(id, address(vault)).supplyShares;
+
+    USDT.setBalance(address(broker), amount);
+    vm.startPrank(address(broker));
+    IERC20(address(USDT)).approve(address(relayer), amount);
+    vm.expectEmit(true, true, false, true);
+    emit ICreditBrokerInterestRelayer.SupplySkippedMarketNotEnabled(address(broker), id, amount);
+    relayer.supplyToVault(amount);
+    vm.stopPrank();
+
+    assertEq(relayer.supplyAmount(), amount, "accumulated amount kept");
+    assertEq(USDT.balanceOf(address(relayer)), amount, "tokens kept in relayer");
+    assertEq(moolah.position(id, address(vault)).supplyShares, posBefore, "nothing supplied");
+    assertEq(lockBuffer.currentLocked(), 0, "lock buffer not notified");
+    assertEq(vault.totalAssets(), navBefore, "NAV untouched");
+  }
+
+  function test_queueGuard_flushResumesOnceMarketReenabled() public {
+    _enableLockBuffer();
+    _removeMarketFromVault();
+    _triggerInterestFlush(50 ether); // kept
+    assertEq(relayer.supplyAmount(), 50 ether);
+
+    vm.prank(MANAGER);
+    vault.setCap(marketParams, type(uint184).max); // back in the queue
+    uint256 posBefore = moolah.position(id, address(vault)).supplyShares;
+
+    _triggerInterestFlush(20 ether);
+
+    assertEq(relayer.supplyAmount(), 0, "accumulated amount flushed");
+    assertEq(USDT.balanceOf(address(relayer)), 0, "relayer drained");
+    assertGt(moolah.position(id, address(vault)).supplyShares, posBefore, "supplied into the market");
+    assertEq(lockBuffer.currentLocked(), 70 ether, "whole accumulated amount locked");
   }
 }
