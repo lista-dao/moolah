@@ -32,6 +32,16 @@ contract OEVLiquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCon
   bytes32 public constant PAUSER = keccak256("PAUSER"); // pauser role
   bytes32 public constant OEV = keccak256("OEV"); // third-party OEV liquidator role, may only call liquidate
 
+  /// @dev Same signature as PublicLiquidator.Liquidated; `liquidator` is the OEV searcher (msg.sender).
+  event Liquidated(
+    bytes32 indexed id,
+    address indexed borrower,
+    uint256 seizedAssets,
+    uint256 repaidAssets,
+    uint256 repaidShares,
+    address liquidator
+  );
+
   /// @custom:oz-upgrades-unsafe-allow constructor
   /// @param moolah The address of the Moolah contract.
   constructor(address moolah) {
@@ -77,28 +87,29 @@ contract OEVLiquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCon
   /// @param seizedAssets The amount of assets to seize.
   /// @param repaidShares The amount of shares to repay.
   /// @param payload Arbitrary data passed through to the caller's onOEVLiquidate.
-  /// @return The actual seized assets and repaid assets.
+  /// @return _seizedAssets The actual seized assets.
+  /// @return _repaidAssets The actual repaid assets.
   function liquidate(
     IMoolah.MarketParams calldata params,
     address borrower,
     uint256 seizedAssets,
     uint256 repaidShares,
     bytes calldata payload
-  ) external nonReentrant whenNotPaused onlyRole(OEV) returns (uint256, uint256) {
-    return
-      IMoolah(MOOLAH).liquidate(
-        params,
-        borrower,
-        seizedAssets,
-        repaidShares,
-        abi.encode(
-          params.loanToken,
-          params.collateralToken,
-          params.collateralToken.balanceOf(address(this)),
-          msg.sender,
-          payload
-        )
-      );
+  ) external nonReentrant whenNotPaused onlyRole(OEV) returns (uint256 _seizedAssets, uint256 _repaidAssets) {
+    (_seizedAssets, _repaidAssets) = IMoolah(MOOLAH).liquidate(
+      params,
+      borrower,
+      seizedAssets,
+      repaidShares,
+      abi.encode(
+        params.loanToken,
+        params.collateralToken,
+        params.collateralToken.balanceOf(address(this)),
+        msg.sender,
+        payload
+      )
+    );
+    emit Liquidated(keccak256(abi.encode(params)), borrower, _seizedAssets, _repaidAssets, repaidShares, msg.sender);
   }
 
   /// @dev the function will be called by the Moolah contract when liquidate. Sends the collateral
