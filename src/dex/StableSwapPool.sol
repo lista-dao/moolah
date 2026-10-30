@@ -281,7 +281,7 @@ contract StableSwapPool is
   function add_liquidity(
     uint256[N_COINS] calldata amounts,
     uint256 min_mint_amount
-  ) external payable whenNotPaused nonReentrant {
+  ) external payable nonReentrant {
     //Amounts is amounts of c-tokens
     if (!support_BNB) {
       require(msg.value == 0, "Inconsistent quantity"); // Avoid sending BNB by mistake.
@@ -806,7 +806,7 @@ contract StableSwapPool is
   }
 
   /// @dev donate admin fees as pool reserves
-  function donate_admin_fees() external onlyRole(MANAGER) {
+  function donate_admin_fees() external whenNotPaused onlyRole(MANAGER) {
     for (uint256 i = 0; i < N_COINS; i++) {
       if (coins[i] == BNB_ADDRESS) {
         balances[i] = address(this).balance;
