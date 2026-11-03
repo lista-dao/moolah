@@ -120,11 +120,21 @@ contract CreditBrokerInterestRelayer is
     // transfer interest from broker
     IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
 
-    // get minLoan
-    uint256 minLoan = MOOLAH.minLoan(MOOLAH.idToMarketParams(ICreditBrokerBase(msg.sender).MARKET_ID()));
+    Id marketId = ICreditBrokerBase(msg.sender).MARKET_ID();
 
     // records interest accumulated event
     emit InterestAccumulated(msg.sender, supplyAmount);
+
+    // keep the accumulated amount if the vault does not track this market (not in withdrawQueue => not in
+    // totalAssets); never revert here, this runs inside repay / liquidate
+    if (!_isMarketEnabled(marketId)) {
+      emit SupplySkippedMarketNotEnabled(msg.sender, marketId, supplyAmount);
+      return;
+    }
+
+    // get minLoan
+    MarketParams memory marketParams = MOOLAH.idToMarketParams(marketId);
+    uint256 minLoan = MOOLAH.minLoan(marketParams);
 
     // supply to moolah vault if accumulated amount exceeds minLoan
     if (supplyAmount >= minLoan) {
@@ -133,13 +143,18 @@ contract CreditBrokerInterestRelayer is
       // approve to moolah
       IERC20(token).safeIncreaseAllowance(address(MOOLAH), _supplyToVault);
       // supply to moolah vault
-      MOOLAH.supply(MOOLAH.idToMarketParams(ICreditBrokerBase(msg.sender).MARKET_ID()), _supplyToVault, 0, vault, "");
+      MOOLAH.supply(marketParams, _supplyToVault, 0, vault, "");
       // audit #08: atomic notify so totalAssets smooths the flush; no-op when vault has no buffer set.
       address buf = IMoolahVault(vault).lockBuffer();
       if (buf != address(0)) IBrokerInterestLockBuffer(buf).notifyBrokerInterest(_supplyToVault);
       // records supplied to vault event
       emit SuppliedToMoolahVault(_supplyToVault);
     }
+  }
+
+  /// @dev whether the vault has `id` enabled (listed in its withdrawQueue)
+  function _isMarketEnabled(Id id) internal view returns (bool) {
+    return IMoolahVault(vault).config(id).enabled;
   }
 
   /**

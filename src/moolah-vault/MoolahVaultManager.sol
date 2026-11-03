@@ -13,6 +13,8 @@ import { MathLib } from "../moolah/libraries/MathLib.sol";
 import { SharesMathLib } from "../moolah/libraries/SharesMathLib.sol";
 
 import { MoolahBalancesLib } from "../moolah/libraries/periphery/MoolahBalancesLib.sol";
+import { IBroker } from "../broker/interfaces/IBroker.sol";
+import { IBrokerInterestRelayer } from "../broker/interfaces/IBrokerInterestRelayer.sol";
 
 contract MoolahVaultManager is UUPSUpgradeable, AccessControlEnumerableUpgradeable {
   using MathLib for uint256;
@@ -81,6 +83,7 @@ contract MoolahVaultManager is UUPSUpgradeable, AccessControlEnumerableUpgradeab
   /// @param id The ID of the market to remove.
   function removeMarketFromVault(address vault, Id id) external onlyRole(BOT) {
     require(vaultWhitelist[vault], "Vault not whitelisted");
+    require(!_isBrokerActive(vault, id), "Broker still registered in relayer");
     // query market params and expected supply assets
     MarketParams memory marketParams = MOOLAH.idToMarketParams(id);
     uint256 vaultSupplyAssets = MOOLAH.expectedSupplyAssets(marketParams, vault);
@@ -171,6 +174,25 @@ contract MoolahVaultManager is UUPSUpgradeable, AccessControlEnumerableUpgradeab
     }
 
     emit MarketRemovedFromVault(vault, id, actualSupplyAssets, actualSupplyShares);
+  }
+
+  /// @dev true if the market's broker is still registered on a relayer feeding `vault`; detach it
+  ///      (relayer.removeBroker) first, otherwise its relayed interest stops counting toward totalAssets()
+  function _isBrokerActive(address vault, Id id) private view returns (bool) {
+    address broker = MOOLAH.brokers(id);
+    if (broker == address(0)) return false;
+    address relayer;
+    try IBroker(broker).RELAYER() returns (address r) {
+      relayer = r;
+    } catch {
+      revert("invalid broker");
+    }
+    if (relayer == address(0) || IBrokerInterestRelayer(relayer).vault() != vault) return false;
+    address[] memory brokers = IBrokerInterestRelayer(relayer).getBrokers();
+    for (uint256 i = 0; i < brokers.length; i++) {
+      if (brokers[i] == broker) return true;
+    }
+    return false;
   }
 
   /// @dev Withdraws all supplied assets of a market from Moolah to this contract.
