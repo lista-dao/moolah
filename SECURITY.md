@@ -5,7 +5,7 @@
 Please do not open a public issue or pull request for a security vulnerability.
 
 - **Bug bounty:** submit through the [Lista DAO bug bounty on Immunefi](https://immunefi.com/bug-bounty/listadao/information/) or the [BNB Chain Bug Bounty](https://bugbounty.bnbchain.org/). Rewards, scope and rules are listed on each platform.
-- **Security contact:** email lawson.c@lista.org for anything outside the bounty, or to reach the maintainers directly.
+- **Security contact:** email security@lista.org for anything outside the bounty, or to reach the maintainers directly.
 
 Please include the affected contract and commit, the impact, and a proof of concept (a Foundry test is ideal).
 
