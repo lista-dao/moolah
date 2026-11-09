@@ -211,7 +211,9 @@ library LendingBrokerOperatorLib {
       if (msg.value < totalDebt) revert InsufficientAmount();
       IWBNB(ctx.wbnb).deposit{ value: msg.value }();
     } else {
+      uint256 pre = IERC20(ctx.loanToken).balanceOf(address(this));
       IERC20(ctx.loanToken).safeTransferFrom(user, address(this), totalDebt);
+      if (IERC20(ctx.loanToken).balanceOf(address(this)) - pre < totalDebt) revert InsufficientAmount();
     }
 
     // supply broker revenue (interest + penalty) to the vault
@@ -257,8 +259,9 @@ library LendingBrokerOperatorLib {
       finalAmount = msg.value;
       IWBNB(ctx.wbnb).deposit{ value: finalAmount }();
     } else {
+      uint256 pre = IERC20(ctx.loanToken).balanceOf(address(this));
       IERC20(ctx.loanToken).safeTransferFrom(user, address(this), amount);
-      finalAmount = amount;
+      finalAmount = IERC20(ctx.loanToken).balanceOf(address(this)) - pre;
     }
   }
 
@@ -306,8 +309,9 @@ library LendingBrokerOperatorLib {
     address user,
     uint256 posId
   ) internal view returns (FixedLoanPosition memory) {
-    FixedLoanPosition[] memory positions = fixedLoanPositions[user];
-    for (uint256 i = 0; i < positions.length; i++) {
+    FixedLoanPosition[] storage positions = fixedLoanPositions[user];
+    uint256 len = positions.length;
+    for (uint256 i = 0; i < len; i++) {
       if (positions[i].posId == posId) return positions[i];
     }
     revert PositionNotFound();
@@ -319,9 +323,10 @@ library LendingBrokerOperatorLib {
     uint256 posId
   ) internal {
     FixedLoanPosition[] storage positions = fixedLoanPositions[user];
-    for (uint256 i = 0; i < positions.length; i++) {
+    uint256 len = positions.length;
+    for (uint256 i = 0; i < len; i++) {
       if (positions[i].posId == posId) {
-        positions[i] = positions[positions.length - 1];
+        positions[i] = positions[len - 1];
         positions.pop();
         emit FixedLoanPositionRemoved(user, posId);
         return;
@@ -336,7 +341,8 @@ library LendingBrokerOperatorLib {
     FixedLoanPosition memory position
   ) internal {
     FixedLoanPosition[] storage positions = fixedLoanPositions[user];
-    for (uint256 i = 0; i < positions.length; i++) {
+    uint256 len = positions.length;
+    for (uint256 i = 0; i < len; i++) {
       if (positions[i].posId == position.posId) {
         positions[i] = position;
         return;
