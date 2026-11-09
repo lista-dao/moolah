@@ -25,6 +25,7 @@ import { MarketAllocation } from "../../src/moolah-vault/interfaces/IMoolahVault
 import { BrokerInterestLockBuffer } from "../../src/utils/BrokerInterestLockBuffer.sol";
 import { IBrokerInterestLockBuffer } from "../../src/utils/interfaces/IBrokerInterestLockBuffer.sol";
 import { ErrorsLib as VaultErrorsLib } from "../../src/moolah-vault/libraries/ErrorsLib.sol";
+import { ErrorsLib as MoolahErrorsLib } from "moolah/libraries/ErrorsLib.sol";
 
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
@@ -2218,7 +2219,7 @@ contract LendingBrokerTest is Test {
     lockBuffer.setDuration(uint64(1 minutes));
 
     vm.expectRevert(BrokerInterestLockBuffer.InvalidDuration.selector);
-    lockBuffer.setDuration(uint64(30 days));
+    lockBuffer.setDuration(uint64(32 days));
     vm.stopPrank();
   }
 
@@ -3158,6 +3159,284 @@ contract LendingBrokerTest is Test {
     vm.prank(MANAGER);
     vm.expectRevert(bytes("relayer/zero-address-provided"));
     relayer.setFeeRecipient(address(0));
+  }
+
+  // ===== dynamic interest settlement (settleDynamicInterest) =====
+
+  function _openDynamicWithInterest(uint256 amount) internal {
+    vm.prank(borrower);
+    broker.borrow(amount);
+    vm.prank(MANAGER);
+    rateCalc.setMaxRatePerSecond(address(broker), RATE_SCALE + 30301 * 10 ** 14);
+    vm.prank(BOT);
+    rateCalc.setRatePerSecond(address(broker), RATE_SCALE + 30300 * 10 ** 14);
+    skip(30 days);
+  }
+
+  function _dynamicInterestOf(address user) internal returns (uint256) {
+    (uint256 principal, uint256 normalized) = broker.dynamicLoanPositions(user);
+    uint256 rate = rateCalc.accrueRate(address(broker));
+    uint256 debt = BrokerMath.denormalizeBorrowAmount(normalized, rate);
+    return debt > principal ? debt - principal : 0;
+  }
+
+  function _drainMarketLiquidity() internal {
+    Market memory m = moolah.market(id);
+    uint256 idle = uint256(m.totalSupplyAssets) - uint256(m.totalBorrowAssets);
+    vm.prank(supplier);
+    moolah.withdraw(marketParams, idle, 0, supplier, supplier);
+  }
+
+  function test_settleDynamicInterest_capitalisesInterest() public {
+    _openDynamicWithInterest(10_000 ether);
+    uint256 interest = _dynamicInterestOf(borrower);
+    assertGt(interest, 15 ether, "interest must exceed minLoan so the relayer flushes");
+
+    (uint256 principalBefore, uint256 normBefore) = broker.dynamicLoanPositions(borrower);
+    uint256 totalDebtBefore = broker.getUserTotalDebt(borrower);
+    uint256 moolahDebtBefore = _principalAtMoolah(borrower);
+    uint256 vaultBefore = vault.totalAssets();
+    uint256 fee = (interest * relayer.feeRate()) / 1e18;
+
+    vm.expectEmit(true, false, false, true, address(broker));
+    emit IBroker.DynamicInterestSettled(borrower, interest, principalBefore + interest);
+    vm.prank(BOT);
+    broker.settleDynamicInterest(borrower);
+
+    (uint256 principalAfter, uint256 normAfter) = broker.dynamicLoanPositions(borrower);
+    assertEq(principalAfter, principalBefore + interest, "principal must grow by the interest");
+    assertEq(normAfter, normBefore, "normalizedDebt must not move");
+    assertEq(broker.getUserTotalDebt(borrower), totalDebtBefore, "total debt must be unchanged");
+    assertApproxEqAbs(_principalAtMoolah(borrower), moolahDebtBefore + interest, 1, "moolah debt +interest");
+    assertEq(_dynamicInterestOf(borrower), 0, "no interest left at broker");
+    // whole balance flushed into the market on behalf of the vault (no lock buffer attached)
+    assertApproxEqAbs(vault.totalAssets(), vaultBefore + interest - fee, 1, "vault NAV");
+
+    vm.prank(BOT);
+    vm.expectRevert(LendingBroker.NothingToSettle.selector);
+    broker.settleDynamicInterest(borrower);
+  }
+
+  function test_settleDynamicInterest_revertsWhenNoPosition() public {
+    vm.prank(BOT);
+    vm.expectRevert(LendingBroker.NothingToSettle.selector);
+    broker.settleDynamicInterest(address(0xBEEF));
+  }
+
+  function test_settleDynamicInterest_onlyBot() public {
+    _openDynamicWithInterest(10_000 ether);
+    address[] memory users = new address[](1);
+    users[0] = borrower;
+    vm.startPrank(borrower);
+    vm.expectRevert(); // AccessControlUnauthorizedAccount
+    broker.settleDynamicInterest(borrower);
+    vm.expectRevert(); // AccessControlUnauthorizedAccount
+    broker.batchSettleDynamicInterest(users);
+    vm.stopPrank();
+  }
+
+  function test_settleDynamicInterest_respectsPauses() public {
+    _openDynamicWithInterest(10_000 ether);
+
+    vm.prank(MANAGER);
+    broker.setBorrowPaused(true);
+    vm.prank(BOT);
+    vm.expectRevert(LendingBroker.BorrowIsPaused.selector);
+    broker.settleDynamicInterest(borrower);
+    vm.prank(MANAGER);
+    broker.setBorrowPaused(false);
+
+    bytes32 pauserRole = broker.PAUSER();
+    vm.prank(ADMIN);
+    broker.grantRole(pauserRole, PAUSER);
+    vm.prank(PAUSER);
+    broker.pause();
+    vm.prank(BOT);
+    vm.expectRevert(); // EnforcedPause
+    broker.settleDynamicInterest(borrower);
+  }
+
+  function test_settleDynamicInterest_noLiquidity_revertsAndBatchSkips() public {
+    _openDynamicWithInterest(10_000 ether);
+    _drainMarketLiquidity();
+    (uint256 pBefore, uint256 nBefore) = broker.dynamicLoanPositions(borrower);
+
+    vm.prank(BOT);
+    vm.expectRevert(bytes(MoolahErrorsLib.INSUFFICIENT_LIQUIDITY));
+    broker.settleDynamicInterest(borrower);
+
+    address[] memory users = new address[](1);
+    users[0] = borrower;
+    vm.prank(BOT);
+    (uint256 count, uint256 amount) = broker.batchSettleDynamicInterest(users);
+    assertEq(count, 0);
+    assertEq(amount, 0);
+    (uint256 pAfter, uint256 nAfter) = broker.dynamicLoanPositions(borrower);
+    assertEq(pAfter, pBefore);
+    assertEq(nAfter, nBefore);
+  }
+
+  function test_settleDynamicInterest_unhealthy_revertsAndBatchSkips() public {
+    _openDynamicWithInterest(10_000 ether);
+    // 1 BTCB collateral, 10k debt: below 12.5k the position is past the 80% LLTV
+    oracle.setPrice(address(BTCB), 12_000e8);
+    (uint256 pBefore, uint256 nBefore) = broker.dynamicLoanPositions(borrower);
+
+    vm.prank(BOT);
+    vm.expectRevert(bytes(MoolahErrorsLib.INSUFFICIENT_COLLATERAL));
+    broker.settleDynamicInterest(borrower);
+
+    address[] memory users = new address[](1);
+    users[0] = borrower;
+    vm.prank(BOT);
+    (uint256 count, uint256 amount) = broker.batchSettleDynamicInterest(users);
+    assertEq(count, 0);
+    assertEq(amount, 0);
+    (uint256 pAfter, uint256 nAfter) = broker.dynamicLoanPositions(borrower);
+    assertEq(pAfter, pBefore);
+    assertEq(nAfter, nBefore);
+  }
+
+  function test_batchSettleDynamicInterest_skipsUnsettleableAndSettlesRest() public {
+    _openDynamicWithInterest(10_000 ether);
+    uint256 interest = _dynamicInterestOf(borrower);
+    (uint256 principalBefore, ) = broker.dynamicLoanPositions(borrower);
+
+    // no position, the borrower, and the borrower again (nothing left after the first pass)
+    address[] memory users = new address[](3);
+    users[0] = address(0xBEEF);
+    users[1] = borrower;
+    users[2] = borrower;
+
+    vm.expectEmit(true, false, false, true, address(broker));
+    emit IBroker.DynamicInterestSettled(borrower, interest, principalBefore + interest);
+    vm.prank(BOT);
+    (uint256 count, uint256 amount) = broker.batchSettleDynamicInterest(users);
+    assertEq(count, 1, "exactly one user settled");
+    assertEq(amount, interest, "settled amount");
+    (uint256 principalAfter, ) = broker.dynamicLoanPositions(borrower);
+    assertEq(principalAfter, principalBefore + interest);
+    assertEq(_dynamicInterestOf(borrower), 0);
+  }
+
+  function test_settleDynamicInterest_thenRepayAllClears() public {
+    _openDynamicWithInterest(10_000 ether);
+    vm.prank(BOT);
+    broker.settleDynamicInterest(borrower);
+    skip(1 days);
+
+    LISUSD.setBalance(borrower, 1_000_000 ether);
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+
+    (uint256 p, uint256 n) = broker.dynamicLoanPositions(borrower);
+    assertEq(p, 0);
+    assertEq(n, 0);
+    assertEq(moolah.position(id, borrower).borrowShares, 0, "moolah debt not cleared");
+  }
+
+  function test_settleDynamicInterest_afterRefinance() public {
+    FixedTermAndRate memory term = FixedTermAndRate({ termId: 7001, duration: 30 days, apr: 105 * 1e25 });
+    vm.prank(BOT);
+    broker.updateFixedTermAndRate(term, false);
+    vm.prank(borrower);
+    broker.borrow(10_000 ether, 7001);
+    skip(31 days);
+
+    FixedLoanPosition[] memory positions = broker.userFixedPositions(borrower);
+    uint256 fixedInterest = BrokerMath.getAccruedInterestForFixedPosition(positions[0]) - positions[0].interestRepaid;
+    uint256 totalDebtBefore = broker.getUserTotalDebt(borrower);
+
+    uint256[] memory posIds = new uint256[](1);
+    posIds[0] = positions[0].posId;
+    vm.prank(BOT);
+    broker.refinanceMaturedFixedPositions(borrower, posIds);
+
+    (uint256 principal, uint256 normalized) = broker.dynamicLoanPositions(borrower);
+    assertEq(principal, 10_000 ether, "refinanced principal");
+    uint256 interest = _dynamicInterestOf(borrower);
+    assertApproxEqRel(interest, fixedInterest, 1e12, "fixed interest carried into dynamic");
+    assertGt(interest, 15 ether);
+
+    vm.prank(BOT);
+    broker.settleDynamicInterest(borrower);
+
+    (uint256 principalAfter, uint256 normAfter) = broker.dynamicLoanPositions(borrower);
+    assertEq(principalAfter, 10_000 ether + interest);
+    assertEq(normAfter, normalized);
+    assertApproxEqAbs(_principalAtMoolah(borrower), 10_000 ether + interest, 1);
+    assertApproxEqAbs(broker.getUserTotalDebt(borrower), totalDebtBefore, 2, "total debt unchanged");
+    assertEq(broker.userFixedPositions(borrower).length, 0);
+  }
+
+  /// @dev a partial liquidation can leave `principal == 0 && normalizedDebt > 0`; settling turns that
+  ///      interest-only residual into a regular principal (>= minLoan) backed by Moolah debt.
+  function test_settleDynamicInterest_settlesInterestOnlyResidual() public {
+    _prepareLiquidatablePosition(false);
+    Position memory posBefore = moolah.position(id, borrower);
+    uint256 userRepayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, 50 * 1e8, 100 * 1e8);
+    LISUSD.setBalance(address(liquidator), 1_000_000 ether);
+    vm.prank(BOT);
+    liquidator.liquidate(Id.unwrap(id), borrower, 0, userRepayShares);
+
+    (uint256 dynPrincipal, uint256 dynNorm) = broker.dynamicLoanPositions(borrower);
+    assertEq(dynPrincipal, 0, "residual expected");
+    assertGt(dynNorm, 0, "residual expected");
+
+    // back to a healthy price
+    oracle.setPrice(address(BTCB), 120000e8);
+    uint256 interest = _dynamicInterestOf(borrower);
+    assertGe(interest, 15 ether, "residual must clear minLoan to be settled");
+
+    vm.prank(BOT);
+    broker.settleDynamicInterest(borrower);
+
+    (uint256 pAfter, uint256 nAfter) = broker.dynamicLoanPositions(borrower);
+    assertEq(pAfter, interest, "residual became principal");
+    assertEq(nAfter, dynNorm);
+    assertEq(_dynamicInterestOf(borrower), 0);
+  }
+
+  function test_settleDynamicInterest_flushGoesThroughLockBuffer() public {
+    _enableLockBuffer();
+    _depositToVault(address(0xA), 10_000 ether);
+    _openDynamicWithInterest(10_000 ether);
+    uint256 interest = _dynamicInterestOf(borrower);
+    uint256 fee = (interest * relayer.feeRate()) / 1e18;
+    uint256 before = vault.totalAssets();
+
+    vm.prank(BOT);
+    broker.settleDynamicInterest(borrower);
+
+    assertApproxEqAbs(vault.totalAssets(), before, 1, "flush fully locked at t0");
+    assertApproxEqAbs(lockBuffer.currentLocked(), interest - fee, 1, "locked = flushed amount");
+
+    vm.warp(block.timestamp + LOCK_DURATION + 1);
+    assertApproxEqAbs(vault.totalAssets(), before + interest - fee, 1, "fully released");
+  }
+
+  function test_lockBuffer_maxDurationIs31Days() public {
+    assertEq(lockBuffer.MAX_DURATION(), 31 days);
+
+    _enableLockBuffer();
+    _depositToVault(address(0xA), 10_000 ether);
+    _triggerInterestFlush(100 ether);
+    vm.warp(block.timestamp + LOCK_DURATION / 2);
+    uint256 lockedBefore = lockBuffer.currentLocked();
+
+    vm.prank(MANAGER);
+    lockBuffer.setDuration(15 days);
+    assertEq(lockBuffer.duration(), 15 days);
+    assertApproxEqAbs(lockBuffer.currentLocked(), lockedBefore, 1, "rebase keeps currentLocked continuous");
+
+    vm.warp(block.timestamp + 15 days + 1);
+    assertEq(lockBuffer.currentLocked(), 0);
+
+    vm.prank(MANAGER);
+    lockBuffer.setDuration(31 days);
+    vm.prank(MANAGER);
+    vm.expectRevert(BrokerInterestLockBuffer.InvalidDuration.selector);
+    lockBuffer.setDuration(31 days + 1);
   }
 }
 

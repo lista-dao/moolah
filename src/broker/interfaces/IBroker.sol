@@ -77,6 +77,7 @@ interface IBroker is IBrokerBase {
   /// ------------------------------
   event DynamicLoanPositionBorrowed(address indexed user, uint256 borrowed, uint256 principalLeft);
   event DynamicLoanPositionRepaid(address indexed user, uint256 repaid, uint256 principalLeft);
+  event DynamicInterestSettled(address indexed user, uint256 interest, uint256 principal);
   event FixedLoanPositionCreated(
     address indexed user,
     uint256 posId,
@@ -182,6 +183,21 @@ interface IBroker is IBrokerBase {
   /// @param amount The amount to convert from dynamic to fixed
   /// @param termId The ID of the fixed term to use
   function convertDynamicToFixed(uint256 amount, uint256 termId) external;
+
+  /// @dev Settle the accrued interest of a user's dynamic position into Moolah principal (BOT only).
+  ///      The interest is borrowed from Moolah on behalf of the user and forwarded to the vault via the
+  ///      relayer; the user's total debt is unchanged.
+  /// @param user The address of the user to settle
+  function settleDynamicInterest(address user) external;
+
+  /// @dev Batch variant of `settleDynamicInterest`. Users that cannot be settled right now
+  ///      (no interest, idle liquidity below the interest, unhealthy, or principal below minLoan) are skipped.
+  /// @param users The addresses to settle
+  /// @return settledCount Number of users settled
+  /// @return settledInterest Total interest settled
+  function batchSettleDynamicInterest(
+    address[] calldata users
+  ) external returns (uint256 settledCount, uint256 settledInterest);
 
   /// @dev get the total debt of a user including principal and interest
   /// @param user The address of the user
