@@ -3,6 +3,7 @@ pragma solidity 0.8.34;
 
 import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
@@ -16,7 +17,9 @@ interface IHasMinter {
   function minter() external view returns (address);
 }
 
-contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerLiquidator {
+/// @dev PausableUpgradeable (OZ v5) keeps its state in an ERC-7201 namespaced slot, so adding it to
+///      the live proxy moves no existing storage; the proxy starts unpaused.
+contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, PausableUpgradeable, IBrokerLiquidator {
   using MarketParamsLib for MarketParams;
 
   /// @dev Thrown when passing the zero address.
@@ -60,6 +63,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // bot role
+  bytes32 public constant PAUSER = keccak256("PAUSER"); // pauser role
   /// @dev sentinel address representing native BNB
   address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
@@ -110,6 +114,16 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
   ///      already set this in initialize; call this via upgradeToAndCall for existing ones.
   function setBotRoleAdmin() external onlyRole(DEFAULT_ADMIN_ROLE) {
     _setRoleAdmin(BOT, MANAGER);
+  }
+
+  /// @dev Emergency kill switch (PAUSER). Halts every BOT entry point: liquidations, smart-collateral
+  ///      redemption and token sales. withdraw* and admin setters stay callable.
+  function pause() external onlyRole(PAUSER) {
+    _pause();
+  }
+
+  function unpause() external onlyRole(MANAGER) {
+    _unpause();
   }
 
   /// @dev Local reentrancy lock. Guards BOT entry points; deliberately NOT applied to
@@ -239,7 +253,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     uint256 amountIn,
     uint256 amountOutMin,
     bytes calldata swapData
-  ) external onlyRole(BOT) nonReentrant {
+  ) external onlyRole(BOT) whenNotPaused nonReentrant {
     require(tokenWhitelist[tokenIn], NotWhitelisted());
     require(tokenWhitelist[tokenOut], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());
@@ -278,7 +292,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     uint256 amountIn,
     uint256 amountOutMin,
     bytes calldata swapData
-  ) external onlyRole(BOT) nonReentrant {
+  ) external onlyRole(BOT) whenNotPaused nonReentrant {
     require(tokenWhitelist[BNB_ADDRESS], NotWhitelisted());
     require(tokenWhitelist[tokenOut], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());
@@ -313,7 +327,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     uint256 seizedAssets,
     address pair,
     bytes calldata swapCollateralData
-  ) external onlyRole(BOT) nonReentrant {
+  ) external onlyRole(BOT) whenNotPaused nonReentrant {
     address broker = marketIdToBroker[id];
     require(broker != address(0), NotWhitelisted());
     require(_checkBrokerMarketId(broker, id), BrokerMarketIdMismatch());
@@ -359,7 +373,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     address borrower,
     uint256 seizedAssets,
     uint256 repaidShares
-  ) external onlyRole(BOT) nonReentrant {
+  ) external onlyRole(BOT) whenNotPaused nonReentrant {
     address broker = marketIdToBroker[id];
     require(broker != address(0), NotWhitelisted());
     require(_checkBrokerMarketId(broker, id), BrokerMarketIdMismatch());
@@ -410,7 +424,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     uint256 seizedAssets,
     uint256 repaidShares,
     bytes memory payload
-  ) external onlyRole(BOT) nonReentrant returns (uint256, uint256) {
+  ) external onlyRole(BOT) whenNotPaused nonReentrant returns (uint256, uint256) {
     address broker = marketIdToBroker[id];
     require(broker != address(0), NotWhitelisted());
     require(_checkBrokerMarketId(broker, id), BrokerMarketIdMismatch());
@@ -489,7 +503,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     bytes calldata swapToken0Data,
     bytes calldata swapToken1Data,
     bytes memory payload
-  ) external onlyRole(BOT) nonReentrant returns (uint256, uint256) {
+  ) external onlyRole(BOT) whenNotPaused nonReentrant returns (uint256, uint256) {
     address broker = marketIdToBroker[id];
     require(broker != address(0), NotWhitelisted());
     require(_checkBrokerMarketId(broker, id), BrokerMarketIdMismatch());
@@ -605,7 +619,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, IBrokerL
     uint256 lpAmount,
     uint256 minToken0Amt,
     uint256 minToken1Amt
-  ) external onlyRole(BOT) nonReentrant returns (uint256, uint256) {
+  ) external onlyRole(BOT) whenNotPaused nonReentrant returns (uint256, uint256) {
     require(smartProviders[smartProvider], NotWhitelisted());
     (uint256 amount0, uint256 amount1) = ISmartProvider(smartProvider).redeemLpCollateral(
       lpAmount,

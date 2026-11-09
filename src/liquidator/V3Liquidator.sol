@@ -5,6 +5,7 @@ import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgr
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 
 import { IV3Provider } from "../provider/interfaces/IV3Provider.sol";
@@ -22,8 +23,16 @@ import "./Interface.sol";
  *                             V3 shares → TOKEN0 / TOKEN1, swap to loanToken, repay.
  *   3. redeemV3Shares()     — standalone: redeem shares held by this contract.
  *   4. sellToken/sellBNB()  — swap any token/BNB held by this contract (e.g. post-redeem).
+ *
+ *   PAUSER can halt all of the above in one call (pause); MANAGER resumes (unpause).
+ *   PausableUpgradeable (OZ v5) uses an ERC-7201 namespaced slot, so no existing storage moves.
  */
-contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessControlEnumerableUpgradeable {
+contract V3Liquidator is
+  ReentrancyGuardUpgradeable,
+  UUPSUpgradeable,
+  AccessControlEnumerableUpgradeable,
+  PausableUpgradeable
+{
   using SafeTransferLib for address;
 
   /* ──────────────────────────── errors ────────────────────────────── */
@@ -42,6 +51,7 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
 
   bytes32 public constant MANAGER = keccak256("MANAGER");
   bytes32 public constant BOT = keccak256("BOT");
+  bytes32 public constant PAUSER = keccak256("PAUSER");
 
   /// @dev Virtual address used to represent the native coin in token whitelists.
   address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
@@ -192,6 +202,18 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
 
   receive() external payable {}
 
+  /* ─────────────────────── pause ──────────────────────────────────── */
+
+  /// @dev Emergency kill switch (PAUSER). Halts every BOT entry point: liquidations, V3 share
+  ///      redemption and token sales. withdraw* and admin setters stay callable.
+  function pause() external onlyRole(PAUSER) {
+    _pause();
+  }
+
+  function unpause() external onlyRole(MANAGER) {
+    _unpause();
+  }
+
   /* ─────────────────────── withdrawals ────────────────────────────── */
 
   /// @dev Gate relaxed for the shared fund pool: MANAGER or fundSource (the vault's collect* call).
@@ -293,7 +315,7 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
     address borrower,
     uint256 seizedAssets,
     uint256 repaidShares
-  ) external nonReentrant onlyRole(BOT) {
+  ) external nonReentrant whenNotPaused onlyRole(BOT) {
     require(marketWhitelist[id], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
 
@@ -353,7 +375,7 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
     address borrower,
     uint256 seizedAssets,
     FlashLiquidateParams calldata params
-  ) external nonReentrant onlyRole(BOT) {
+  ) external nonReentrant whenNotPaused onlyRole(BOT) {
     require(marketWhitelist[id], NotWhitelisted());
     require(v3Providers[params.v3Provider], NotWhitelisted());
     _requirePairWhitelisted(params.token0Pair, params.token0Spender);
@@ -421,7 +443,7 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
     uint256 minAmt0,
     uint256 minAmt1,
     address receiver
-  ) external nonReentrant onlyRole(BOT) returns (uint256 amount0, uint256 amount1) {
+  ) external nonReentrant whenNotPaused onlyRole(BOT) returns (uint256 amount0, uint256 amount1) {
     require(v3Providers[v3Provider], NotWhitelisted());
     require(fundSource == address(0) || receiver == address(this), ReceiverNotSelf());
     (amount0, amount1) = IV3Provider(v3Provider).redeemShares(shares, minAmt0, minAmt1, receiver);
@@ -443,7 +465,7 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
     uint256 amountIn,
     uint256 amountOutMin,
     bytes calldata swapData
-  ) external nonReentrant onlyRole(BOT) {
+  ) external nonReentrant whenNotPaused onlyRole(BOT) {
     _sellToken(pair, pair, tokenIn, tokenOut, amountIn, amountOutMin, swapData);
   }
 
@@ -456,7 +478,7 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
     uint256 amountIn,
     uint256 amountOutMin,
     bytes calldata swapData
-  ) external nonReentrant onlyRole(BOT) {
+  ) external nonReentrant whenNotPaused onlyRole(BOT) {
     require(pair != spender, "pair and spender cannot be same address");
     require(pairWhitelist[spender], NotWhitelisted());
     _sellToken(pair, spender, tokenIn, tokenOut, amountIn, amountOutMin, swapData);
@@ -469,7 +491,7 @@ contract V3Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessCont
     uint256 amountIn,
     uint256 amountOutMin,
     bytes calldata swapData
-  ) external nonReentrant onlyRole(BOT) {
+  ) external nonReentrant whenNotPaused onlyRole(BOT) {
     require(tokenWhitelist[BNB_ADDRESS], NotWhitelisted());
     require(tokenWhitelist[tokenOut], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());

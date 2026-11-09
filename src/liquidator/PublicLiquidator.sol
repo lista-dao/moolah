@@ -5,6 +5,7 @@ import { AccessControlEnumerableUpgradeable } from "@openzeppelin/contracts-upgr
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 import "./IPublicLiquidator.sol";
 
@@ -16,10 +17,13 @@ import { SharesMathLib } from "moolah/libraries/SharesMathLib.sol";
 import "moolah/libraries/ConstantsLib.sol";
 import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
 
+/// @dev PausableUpgradeable (OZ v5) keeps its state in an ERC-7201 namespaced slot, so adding it to
+///      the live proxy moves no existing storage; the proxy starts unpaused.
 contract PublicLiquidator is
   ReentrancyGuardUpgradeable,
   UUPSUpgradeable,
   AccessControlEnumerableUpgradeable,
+  PausableUpgradeable,
   IPublicLiquidator
 {
   using MarketParamsLib for IMoolah.MarketParams;
@@ -47,6 +51,7 @@ contract PublicLiquidator is
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // bot role
+  bytes32 public constant PAUSER = keccak256("PAUSER"); // pauser role
   address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
   event MarketWhitelistChanged(bytes32 id, bool added);
@@ -82,6 +87,16 @@ contract PublicLiquidator is
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
     _grantRole(MANAGER, manager);
     _grantRole(BOT, bot);
+  }
+
+  /// @dev Emergency kill switch (PAUSER). Halts all liquidation entry points. redeemSmartCollateral
+  ///      stays open so liquidators can still claim LP they already seized; admin setters stay callable.
+  function pause() external onlyRole(PAUSER) {
+    _pause();
+  }
+
+  function unpause() external onlyRole(MANAGER) {
+    _unpause();
   }
 
   /// @dev sets the market whitelist.
@@ -143,7 +158,7 @@ contract PublicLiquidator is
     uint256 seizedAssets,
     address pair,
     bytes calldata swapCollateralData
-  ) external nonReentrant {
+  ) external nonReentrant whenNotPaused {
     require(pairWhitelist[pair], NotWhitelisted());
     require(isLiquidatable(id, borrower), NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
@@ -211,7 +226,7 @@ contract PublicLiquidator is
     bytes calldata swapToken0Data,
     bytes calldata swapToken1Data,
     bytes memory payload
-  ) external nonReentrant returns (uint256, uint256) {
+  ) external nonReentrant whenNotPaused returns (uint256, uint256) {
     require(pairWhitelist[token0Pair], NotWhitelisted());
     require(pairWhitelist[token1Pair], NotWhitelisted());
     require(smartProviders[smartProvider], NotWhitelisted());
@@ -283,7 +298,7 @@ contract PublicLiquidator is
     uint256 seizedAssets,
     uint256 repaidShares,
     bool doTransferColl
-  ) public nonReentrant {
+  ) public nonReentrant whenNotPaused {
     require(isLiquidatable(id, borrower), NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
 
@@ -361,7 +376,7 @@ contract PublicLiquidator is
     uint256 seizedAssets,
     uint256 repaidShares,
     bytes memory payload
-  ) external nonReentrant returns (uint256, uint256) {
+  ) external nonReentrant whenNotPaused returns (uint256, uint256) {
     require(isLiquidatable(id, borrower), NotWhitelisted());
     require(smartProviders[smartProvider], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
