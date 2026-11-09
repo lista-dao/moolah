@@ -103,6 +103,7 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, Pausable
     require(manager != address(0), ZERO_ADDRESS);
     require(bot != address(0), ZERO_ADDRESS);
     __AccessControl_init();
+    __Pausable_init();
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
     _grantRole(MANAGER, manager);
     _grantRole(BOT, bot);

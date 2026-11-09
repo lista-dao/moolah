@@ -186,6 +186,7 @@ contract V3Liquidator is
     require(admin != address(0) && manager != address(0) && bot != address(0), "zero address");
     __AccessControl_init();
     __ReentrancyGuard_init();
+    __Pausable_init();
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
     _grantRole(MANAGER, manager);
     _grantRole(BOT, bot);
