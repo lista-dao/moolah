@@ -1763,7 +1763,7 @@ contract CreditBrokerTest is Test {
     lockBuffer.setDuration(uint64(1 minutes));
 
     vm.expectRevert(BrokerInterestLockBuffer.InvalidDuration.selector);
-    lockBuffer.setDuration(uint64(30 days));
+    lockBuffer.setDuration(uint64(32 days));
     vm.stopPrank();
   }
 
