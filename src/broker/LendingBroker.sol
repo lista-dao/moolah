@@ -69,7 +69,6 @@ contract LendingBroker is
   error MarketNotSet();
   error BorrowIsPaused();
   error InvalidRepaidShares();
-  error NothingToSettle();
 
   // ------- Roles -------
   bytes32 public constant MANAGER = keccak256("MANAGER");
@@ -334,23 +333,13 @@ contract LendingBroker is
   }
 
   /**
-   * @dev Settle the accrued interest of a user's dynamic position: the interest is borrowed from Moolah
+   * @dev Settle the accrued interest of each user's dynamic position: the interest is borrowed from Moolah
    *      on behalf of the user and supplied to the vault via the relayer, and the dynamic principal grows
    *      by the same amount. The user's total debt is unchanged; only its split between Moolah principal
    *      and broker-side interest moves (same path as the interest leg of `convertDynamicToFixed`).
-   * @param user The address of the user to settle
-   */
-  function settleDynamicInterest(
-    address user
-  ) external override marketIdSet whenBorrowNotPaused whenNotPaused nonReentrant onlyRole(BOT) {
-    uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
-    if (_settleDynamicInterest(user, rate) == 0) revert NothingToSettle();
-  }
-
-  /**
-   * @dev Batch version of `settleDynamicInterest`. Users that cannot be settled right now are skipped
-   *      instead of reverting the whole batch: no accrued interest, market idle liquidity below the
-   *      interest, position unhealthy, or resulting principal below minLoan.
+   *      Users that cannot be settled right now are skipped instead of reverting the whole batch:
+   *      no accrued interest, not whitelisted in the market, market idle liquidity below the interest,
+   *      position unhealthy, or resulting principal below minLoan.
    * @param users The addresses to settle
    * @return settledCount Number of users settled
    * @return settledInterest Total interest settled
@@ -875,6 +864,7 @@ contract LendingBroker is
     uint256 interest = _dynamicInterest(position, rate);
     if (interest == 0) return false;
     if (position.principal + interest < minLoan) return false;
+    if (!MOOLAH.isWhiteList(MARKET_ID, user)) return false;
     Market memory market = MOOLAH.market(MARKET_ID);
     if (uint256(market.totalSupplyAssets).zeroFloorSub(market.totalBorrowAssets) < interest) return false;
     return MOOLAH.isHealthy(marketParams, MARKET_ID, user);

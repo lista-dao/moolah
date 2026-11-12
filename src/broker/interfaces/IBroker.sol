@@ -184,14 +184,10 @@ interface IBroker is IBrokerBase {
   /// @param termId The ID of the fixed term to use
   function convertDynamicToFixed(uint256 amount, uint256 termId) external;
 
-  /// @dev Settle the accrued interest of a user's dynamic position into Moolah principal (BOT only).
+  /// @dev Settle the accrued interest of each user's dynamic position into Moolah principal (BOT only).
   ///      The interest is borrowed from Moolah on behalf of the user and forwarded to the vault via the
-  ///      relayer; the user's total debt is unchanged.
-  /// @param user The address of the user to settle
-  function settleDynamicInterest(address user) external;
-
-  /// @dev Batch variant of `settleDynamicInterest`. Users that cannot be settled right now
-  ///      (no interest, idle liquidity below the interest, unhealthy, or principal below minLoan) are skipped.
+  ///      relayer; the user's total debt is unchanged. Users that cannot be settled right now (no interest,
+  ///      not whitelisted, idle liquidity below the interest, unhealthy, or principal below minLoan) are skipped.
   /// @param users The addresses to settle
   /// @return settledCount Number of users settled
   /// @return settledInterest Total interest settled
