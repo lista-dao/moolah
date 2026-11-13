@@ -227,7 +227,7 @@ contract BrokerInterestRelayerQueueGuardTest is Test {
     vm.startPrank(address(broker1));
     IERC20(address(LISUSD)).approve(address(relayer), RELAY);
     vm.expectEmit(true, true, false, true);
-    emit IBrokerInterestRelayer.SupplySkippedMarketNotEnabled(address(broker1), id1, RELAY);
+    emit IBrokerInterestRelayer.SupplySkipped(address(broker1), id1, RELAY, RELAY);
     relayer.supplyToVault(RELAY);
     vm.stopPrank();
 
@@ -247,6 +247,48 @@ contract BrokerInterestRelayerQueueGuardTest is Test {
     assertEq(LISUSD.balanceOf(address(relayer)), 0, "whole balance flushed");
     assertApproxEqAbs(_vaultAssetsIn(id2, mp2) - posBefore, RELAY + RELAY / 2, 1, "both relays land in market 2");
     assertEq(lockBuffer.currentLocked(), RELAY + RELAY / 2, "lock covers the carried-over amount too");
+  }
+
+  /// @dev cap 0 (curator winding the market down) keeps the relay even while the market is still in the withdrawQueue
+  function test_capZeroMarket_relayIsKeptInRelayer() public {
+    vm.prank(MANAGER);
+    vault.setCap(mp1, 0);
+    assertTrue(_enabled(id1), "market 1 still tracked");
+    uint256 posBefore = _vaultAssetsIn(id1, mp1);
+
+    _relay(broker1, RELAY);
+
+    assertEq(LISUSD.balanceOf(address(relayer)), RELAY, "balance kept in relayer");
+    assertEq(_vaultAssetsIn(id1, mp1), posBefore, "nothing supplied into the cap-0 market");
+    assertEq(lockBuffer.currentLocked(), 0, "lock buffer not notified");
+  }
+
+  /// @dev the skip event reports this relay net of the fee and the running balance separately
+  function test_removedMarket_skipEventReportsNetAmountAndBalance() public {
+    address feeRecipient = address(0xFEE);
+    vm.prank(ADMIN);
+    relayer.initializeV2(feeRecipient); // 10% fee
+    _removeMarketWithReallocate();
+    _relay(broker1, RELAY); // kept: 90
+
+    LISUSD.setBalance(address(broker1), RELAY);
+    vm.startPrank(address(broker1));
+    IERC20(address(LISUSD)).approve(address(relayer), RELAY);
+    vm.expectEmit(true, true, false, true);
+    emit IBrokerInterestRelayer.SupplySkipped(address(broker1), id1, 90 ether, 180 ether);
+    relayer.supplyToVault(RELAY);
+    vm.stopPrank();
+
+    assertEq(LISUSD.balanceOf(feeRecipient), 20 ether, "fee charged on skipped relays");
+  }
+
+  /// @dev a broker of a removed market stays registered: repay / liquidate keep working and are held back
+  function test_removedMarket_brokerStaysRegistered() public {
+    _removeMarketWithReallocate();
+    _relay(broker1, RELAY);
+    _relay(broker1, RELAY);
+    assertEq(LISUSD.balanceOf(address(relayer)), 2 * RELAY, "both relays kept");
+    assertEq(relayer.getBrokers().length, 2, "no broker detached");
   }
 
   // ===== market removal helper (cap 0 → reallocate out → drop from withdrawQueue) =====

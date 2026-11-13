@@ -13,7 +13,7 @@ import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { Id, IMoolah, MarketParams, Market, Position } from "../moolah/interfaces/IMoolah.sol";
 import { IBrokerBase } from "./interfaces/IBroker.sol";
 import { IBrokerInterestRelayer } from "./interfaces/IBrokerInterestRelayer.sol";
-import { IMoolahVault } from "../moolah-vault/interfaces/IMoolahVault.sol";
+import { IMoolahVault, MarketConfig } from "../moolah-vault/interfaces/IMoolahVault.sol";
 import { IBrokerInterestLockBuffer } from "../utils/interfaces/IBrokerInterestLockBuffer.sol";
 
 /// @title Broker Interest Relayer
@@ -134,9 +134,13 @@ contract BrokerInterestRelayer is
 
     // skim the protocol fee on incoming revenue (interest + penalty) before it accrues to the vault.
     // Fee is floored so rounding dust stays with the vault (suppliers), never the fee recipient.
+    // The fee is also charged when the supply below is skipped: the revenue was paid by the borrower either way,
+    // only the net amount is held back until it can reach an active market.
+    uint256 net = amount;
     uint256 fee = Math.mulDiv(amount, feeRate, WAD, Math.Rounding.Floor);
     if (fee > 0 && feeRecipient != address(0)) {
       IERC20(token).safeTransfer(feeRecipient, fee);
+      net -= fee;
       emit ProtocolFeeCharged(msg.sender, feeRecipient, fee);
     }
 
@@ -146,10 +150,11 @@ contract BrokerInterestRelayer is
     // records interest accumulated event
     emit InterestAccumulated(msg.sender, balance);
 
-    // keep the balance if the vault does not track this market (not in withdrawQueue => not in totalAssets);
-    // never revert here, this runs inside repay / liquidate
-    if (!_isMarketEnabled(marketId)) {
-      emit SupplySkippedMarketNotEnabled(msg.sender, marketId, balance);
+    // keep the balance if the vault does not track this market (not in withdrawQueue => not in totalAssets)
+    // or is winding it down (cap 0); never revert here, this runs inside repay / liquidate.
+    // The held balance leaves with the next relay into an active market.
+    if (!_isMarketActive(marketId)) {
+      emit SupplySkipped(msg.sender, marketId, net, balance);
       return;
     }
 
@@ -165,7 +170,7 @@ contract BrokerInterestRelayer is
       IERC20(token).safeIncreaseAllowance(address(MOOLAH), balance);
       // supply to moolah vault
       MOOLAH.supply(marketParams, balance, 0, vault, "");
-      // audit #08: atomic notify so totalAssets smooths the flush; no-op when vault has no buffer set.
+      // atomic notify so totalAssets smooths the flush; no-op when vault has no buffer set.
       address buf = IMoolahVault(vault).lockBuffer();
       if (buf != address(0)) IBrokerInterestLockBuffer(buf).notifyBrokerInterest(balance);
       // records supplied to vault event
@@ -173,9 +178,10 @@ contract BrokerInterestRelayer is
     }
   }
 
-  /// @dev whether the vault has `id` enabled (listed in its withdrawQueue)
-  function _isMarketEnabled(Id id) internal view returns (bool) {
-    return IMoolahVault(vault).config(id).enabled;
+  /// @dev whether the vault tracks `id` (listed in its withdrawQueue) and still allocates to it (cap > 0)
+  function _isMarketActive(Id id) internal view returns (bool) {
+    MarketConfig memory cfg = IMoolahVault(vault).config(id);
+    return cfg.enabled && cfg.cap > 0;
   }
 
   /**

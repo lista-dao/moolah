@@ -12,7 +12,7 @@ import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import { Id, IMoolah, MarketParams, Market, Position } from "../moolah/interfaces/IMoolah.sol";
 import { ICreditBrokerBase } from "./interfaces/ICreditBroker.sol";
 import { ICreditBrokerInterestRelayer } from "./interfaces/ICreditBrokerInterestRelayer.sol";
-import { IMoolahVault } from "../moolah-vault/interfaces/IMoolahVault.sol";
+import { IMoolahVault, MarketConfig } from "../moolah-vault/interfaces/IMoolahVault.sol";
 import { IBrokerInterestLockBuffer } from "../utils/interfaces/IBrokerInterestLockBuffer.sol";
 
 /// @title Credit Broker Interest Relayer
@@ -126,9 +126,10 @@ contract CreditBrokerInterestRelayer is
     emit InterestAccumulated(msg.sender, supplyAmount);
 
     // keep the accumulated amount if the vault does not track this market (not in withdrawQueue => not in
-    // totalAssets); never revert here, this runs inside repay / liquidate
-    if (!_isMarketEnabled(marketId)) {
-      emit SupplySkippedMarketNotEnabled(msg.sender, marketId, supplyAmount);
+    // totalAssets) or is winding it down (cap 0); never revert here, this runs inside repay / liquidate.
+    // The held amount leaves with the next relay into an active market.
+    if (!_isMarketActive(marketId)) {
+      emit SupplySkipped(msg.sender, marketId, amount, supplyAmount);
       return;
     }
 
@@ -144,7 +145,7 @@ contract CreditBrokerInterestRelayer is
       IERC20(token).safeIncreaseAllowance(address(MOOLAH), _supplyToVault);
       // supply to moolah vault
       MOOLAH.supply(marketParams, _supplyToVault, 0, vault, "");
-      // audit #08: atomic notify so totalAssets smooths the flush; no-op when vault has no buffer set.
+      // atomic notify so totalAssets smooths the flush; no-op when vault has no buffer set.
       address buf = IMoolahVault(vault).lockBuffer();
       if (buf != address(0)) IBrokerInterestLockBuffer(buf).notifyBrokerInterest(_supplyToVault);
       // records supplied to vault event
@@ -152,9 +153,10 @@ contract CreditBrokerInterestRelayer is
     }
   }
 
-  /// @dev whether the vault has `id` enabled (listed in its withdrawQueue)
-  function _isMarketEnabled(Id id) internal view returns (bool) {
-    return IMoolahVault(vault).config(id).enabled;
+  /// @dev whether the vault tracks `id` (listed in its withdrawQueue) and still allocates to it (cap > 0)
+  function _isMarketActive(Id id) internal view returns (bool) {
+    MarketConfig memory cfg = IMoolahVault(vault).config(id);
+    return cfg.enabled && cfg.cap > 0;
   }
 
   /**

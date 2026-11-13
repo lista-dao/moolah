@@ -2701,7 +2701,7 @@ contract CreditBrokerTest is Test {
     vm.startPrank(address(broker));
     IERC20(address(USDT)).approve(address(relayer), amount);
     vm.expectEmit(true, true, false, true);
-    emit ICreditBrokerInterestRelayer.SupplySkippedMarketNotEnabled(address(broker), id, amount);
+    emit ICreditBrokerInterestRelayer.SupplySkipped(address(broker), id, amount, amount);
     relayer.supplyToVault(amount);
     vm.stopPrank();
 
@@ -2728,5 +2728,35 @@ contract CreditBrokerTest is Test {
     assertEq(USDT.balanceOf(address(relayer)), 0, "relayer drained");
     assertGt(moolah.position(id, address(vault)).supplyShares, posBefore, "supplied into the market");
     assertEq(lockBuffer.currentLocked(), 70 ether, "whole accumulated amount locked");
+  }
+
+  /// @dev cap 0 (curator winding the market down) keeps the relay even while the market is still in the withdrawQueue
+  function test_queueGuard_relayKeptWhenCapZero() public {
+    _enableLockBuffer();
+    vm.prank(MANAGER);
+    vault.setCap(marketParams, 0);
+    (uint184 cap, bool enabled, ) = vault.config(id);
+    assertTrue(enabled && cap == 0, "still tracked, cap 0");
+    uint256 posBefore = moolah.position(id, address(vault)).supplyShares;
+
+    _triggerInterestFlush(50 ether);
+
+    assertEq(relayer.supplyAmount(), 50 ether, "accumulated amount kept");
+    assertEq(moolah.position(id, address(vault)).supplyShares, posBefore, "nothing supplied");
+    assertEq(lockBuffer.currentLocked(), 0, "lock buffer not notified");
+  }
+
+  /// @dev the skip event reports this relay and the running total separately
+  function test_queueGuard_skipEventReportsIncomingAndAccumulated() public {
+    _removeMarketFromVault();
+    _triggerInterestFlush(30 ether);
+
+    USDT.setBalance(address(broker), 20 ether);
+    vm.startPrank(address(broker));
+    IERC20(address(USDT)).approve(address(relayer), 20 ether);
+    vm.expectEmit(true, true, false, true);
+    emit ICreditBrokerInterestRelayer.SupplySkipped(address(broker), id, 20 ether, 50 ether);
+    relayer.supplyToVault(20 ether);
+    vm.stopPrank();
   }
 }
