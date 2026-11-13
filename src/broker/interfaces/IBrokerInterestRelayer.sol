@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.34;
 
+import { Id } from "../../moolah/interfaces/IMoolah.sol";
+
 /// @dev Broker Interest Relayer Interface
 interface IBrokerInterestRelayer {
   /**
@@ -36,6 +38,9 @@ interface IBrokerInterestRelayer {
   event RemovedBroker(address indexed broker);
   event InterestAccumulated(address indexed broker, uint256 amount);
   event SuppliedToMoolahVault(uint256 amount);
+  /// @dev relay kept in the relayer because the broker's market is not enabled in the vault or has a zero cap;
+  ///      `amount` is this relay net of the protocol fee, `balance` is the relayer's total balance afterwards
+  event SupplySkipped(address indexed broker, Id indexed marketId, uint256 amount, uint256 balance);
   /// @dev protocol fee skimmed from a broker's supplied revenue
   event ProtocolFeeCharged(address indexed broker, address indexed feeRecipient, uint256 fee);
   event SetFeeRate(uint256 oldFeeRate, uint256 newFeeRate);

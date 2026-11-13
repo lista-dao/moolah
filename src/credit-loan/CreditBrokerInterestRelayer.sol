@@ -12,7 +12,7 @@ import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import { Id, IMoolah, MarketParams, Market, Position } from "../moolah/interfaces/IMoolah.sol";
 import { ICreditBrokerBase } from "./interfaces/ICreditBroker.sol";
 import { ICreditBrokerInterestRelayer } from "./interfaces/ICreditBrokerInterestRelayer.sol";
-import { IMoolahVault } from "../moolah-vault/interfaces/IMoolahVault.sol";
+import { IMoolahVault, MarketConfig } from "../moolah-vault/interfaces/IMoolahVault.sol";
 import { IBrokerInterestLockBuffer } from "../utils/interfaces/IBrokerInterestLockBuffer.sol";
 
 /// @title Credit Broker Interest Relayer
@@ -120,11 +120,22 @@ contract CreditBrokerInterestRelayer is
     // transfer interest from broker
     IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
 
-    // get minLoan
-    uint256 minLoan = MOOLAH.minLoan(MOOLAH.idToMarketParams(ICreditBrokerBase(msg.sender).MARKET_ID()));
+    Id marketId = ICreditBrokerBase(msg.sender).MARKET_ID();
 
     // records interest accumulated event
     emit InterestAccumulated(msg.sender, supplyAmount);
+
+    // keep the accumulated amount if the vault does not track this market (not in withdrawQueue => not in
+    // totalAssets) or is winding it down (cap 0); never revert here, this runs inside repay / liquidate.
+    // The held amount leaves with the next relay into an active market.
+    if (!_isMarketActive(marketId)) {
+      emit SupplySkipped(msg.sender, marketId, amount, supplyAmount);
+      return;
+    }
+
+    // get minLoan
+    MarketParams memory marketParams = MOOLAH.idToMarketParams(marketId);
+    uint256 minLoan = MOOLAH.minLoan(marketParams);
 
     // supply to moolah vault if accumulated amount exceeds minLoan
     if (supplyAmount >= minLoan) {
@@ -133,13 +144,19 @@ contract CreditBrokerInterestRelayer is
       // approve to moolah
       IERC20(token).safeIncreaseAllowance(address(MOOLAH), _supplyToVault);
       // supply to moolah vault
-      MOOLAH.supply(MOOLAH.idToMarketParams(ICreditBrokerBase(msg.sender).MARKET_ID()), _supplyToVault, 0, vault, "");
-      // audit #08: atomic notify so totalAssets smooths the flush; no-op when vault has no buffer set.
+      MOOLAH.supply(marketParams, _supplyToVault, 0, vault, "");
+      // atomic notify so totalAssets smooths the flush; no-op when vault has no buffer set.
       address buf = IMoolahVault(vault).lockBuffer();
       if (buf != address(0)) IBrokerInterestLockBuffer(buf).notifyBrokerInterest(_supplyToVault);
       // records supplied to vault event
       emit SuppliedToMoolahVault(_supplyToVault);
     }
+  }
+
+  /// @dev whether the vault tracks `id` (listed in its withdrawQueue) and still allocates to it (cap > 0)
+  function _isMarketActive(Id id) internal view returns (bool) {
+    MarketConfig memory cfg = IMoolahVault(vault).config(id);
+    return cfg.enabled && cfg.cap > 0;
   }
 
   /**
