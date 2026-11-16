@@ -5,6 +5,7 @@ import { AccessControlUpgradeable } from "@openzeppelin/contracts-upgradeable/ac
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 import "./ILiquidator.sol";
 
@@ -13,7 +14,15 @@ import { MarketParamsLib } from "moolah/libraries/MarketParamsLib.sol";
 import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
 import { ILiquidationVault } from "./ILiquidationVault.sol";
 
-contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessControlUpgradeable, ILiquidator {
+/// @dev PausableUpgradeable (OZ v5) keeps its state in an ERC-7201 namespaced slot, so adding it to
+///      the live proxy moves no existing storage; the proxy starts unpaused.
+contract Liquidator is
+  ReentrancyGuardUpgradeable,
+  UUPSUpgradeable,
+  AccessControlUpgradeable,
+  PausableUpgradeable,
+  ILiquidator
+{
   using MarketParamsLib for IMoolah.MarketParams;
   using SafeTransferLib for address;
 
@@ -43,6 +52,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // manager role
+  bytes32 public constant PAUSER = keccak256("PAUSER"); // pauser role
   address public constant BNB_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
   event TokenWhitelistChanged(address indexed token, bool added);
@@ -88,6 +98,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     require(manager != address(0), ZERO_ADDRESS);
     require(bot != address(0), ZERO_ADDRESS);
     __AccessControl_init();
+    __Pausable_init();
     _grantRole(DEFAULT_ADMIN_ROLE, admin);
     _grantRole(MANAGER, manager);
     _grantRole(BOT, bot);
@@ -99,6 +110,16 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
   ///      already set this in initialize; call this via upgradeToAndCall for existing ones.
   function setBotRoleAdmin() external onlyRole(DEFAULT_ADMIN_ROLE) {
     _setRoleAdmin(BOT, MANAGER);
+  }
+
+  /// @dev Emergency kill switch (PAUSER). Halts every BOT entry point: liquidations, smart-collateral
+  ///      redemption and token sales. withdraw* and admin setters stay callable.
+  function pause() external onlyRole(PAUSER) {
+    _pause();
+  }
+
+  function unpause() external onlyRole(MANAGER) {
+    _unpause();
   }
 
   receive() external payable {}
@@ -209,7 +230,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     uint256 amountIn,
     uint256 amountOutMin,
     bytes calldata swapData
-  ) external nonReentrant onlyRole(BOT) {
+  ) external nonReentrant whenNotPaused onlyRole(BOT) {
     _sellToken(pair, pair, tokenIn, tokenOut, amountIn, amountOutMin, swapData);
   }
 
@@ -229,7 +250,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     uint256 amountIn,
     uint256 amountOutMin,
     bytes calldata swapData
-  ) external nonReentrant onlyRole(BOT) {
+  ) external nonReentrant whenNotPaused onlyRole(BOT) {
     require(pair != spender, "pair and spender cannot be same address");
     require(pairWhitelist[spender], NotWhitelisted());
     _sellToken(pair, spender, tokenIn, tokenOut, amountIn, amountOutMin, swapData);
@@ -281,7 +302,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     uint256 amountIn,
     uint256 amountOutMin,
     bytes calldata swapData
-  ) external nonReentrant onlyRole(BOT) {
+  ) external nonReentrant whenNotPaused onlyRole(BOT) {
     require(tokenWhitelist[BNB_ADDRESS], NotWhitelisted());
     require(tokenWhitelist[tokenOut], NotWhitelisted());
     require(pairWhitelist[pair], NotWhitelisted());
@@ -316,7 +337,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     uint256 seizedAssets,
     address pair,
     bytes calldata swapCollateralData
-  ) external nonReentrant onlyRole(BOT) {
+  ) external nonReentrant whenNotPaused onlyRole(BOT) {
     _flashLiquidate(id, borrower, seizedAssets, pair, pair, swapCollateralData);
   }
 
@@ -334,7 +355,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     address pair,
     address spender,
     bytes calldata swapCollateralData
-  ) external nonReentrant onlyRole(BOT) {
+  ) external nonReentrant whenNotPaused onlyRole(BOT) {
     _flashLiquidate(id, borrower, seizedAssets, pair, spender, swapCollateralData);
   }
 
@@ -390,7 +411,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     address borrower,
     uint256 seizedAssets,
     uint256 repaidShares
-  ) external nonReentrant onlyRole(BOT) {
+  ) external nonReentrant whenNotPaused onlyRole(BOT) {
     require(marketWhitelist[id], NotWhitelisted());
     IMoolah.MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(id);
     IMoolah(MOOLAH).liquidate(
@@ -438,7 +459,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     uint256 seizedAssets,
     uint256 repaidShares,
     bytes memory payload
-  ) external nonReentrant onlyRole(BOT) returns (uint256, uint256) {
+  ) external nonReentrant whenNotPaused onlyRole(BOT) returns (uint256, uint256) {
     require(smartProviders[smartProvider], NotWhitelisted());
     address lpToken = ISmartProvider(smartProvider).dexLP();
     require(marketWhitelist[id], NotWhitelisted());
@@ -510,7 +531,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     bytes calldata swapToken0Data,
     bytes calldata swapToken1Data,
     bytes memory payload
-  ) external nonReentrant onlyRole(BOT) returns (uint256, uint256) {
+  ) external nonReentrant whenNotPaused onlyRole(BOT) returns (uint256, uint256) {
     require(smartProviders[smartProvider], NotWhitelisted());
     require(marketWhitelist[id], NotWhitelisted());
     require(pairWhitelist[token0Pair], NotWhitelisted());
@@ -562,7 +583,7 @@ contract Liquidator is ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessContro
     uint256 lpAmount,
     uint256 minToken0Amt,
     uint256 minToken1Amt
-  ) external nonReentrant onlyRole(BOT) returns (uint256, uint256) {
+  ) external nonReentrant whenNotPaused onlyRole(BOT) returns (uint256, uint256) {
     require(smartProviders[smartProvider], NotWhitelisted());
     (uint256 amount0, uint256 amount1) = ISmartProvider(smartProvider).redeemLpCollateral(
       lpAmount,
