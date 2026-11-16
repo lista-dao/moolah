@@ -14,7 +14,7 @@ contract BrokerInterestLockBuffer is UUPSUpgradeable, AccessControlEnumerableUpg
   bytes32 public constant RELAYER = keccak256("RELAYER");
 
   uint64 public constant MIN_DURATION = 1 hours;
-  uint64 public constant MAX_DURATION = 3 days;
+  uint64 public constant MAX_DURATION = 31 days;
 
   address public override vault;
   address public override asset;

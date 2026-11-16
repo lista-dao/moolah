@@ -420,6 +420,9 @@ interface IMoolah is IMoolahBase {
 
   function _getPrice(MarketParams memory marketParams, address user) external view returns (uint256);
 
+  /// @notice Returns whether the position of `borrower` in the given market `marketParams` is healthy.
+  function isHealthy(MarketParams memory marketParams, Id id, address borrower) external view returns (bool);
+
   /// @notice grants `role` to `account`.
   function grantRole(bytes32 role, address account) external;
 }
