@@ -69,6 +69,7 @@ contract LendingBroker is
   error MarketNotSet();
   error BorrowIsPaused();
   error InvalidRepaidShares();
+  error LengthMismatch();
 
   // ------- Roles -------
   bytes32 public constant MANAGER = keccak256("MANAGER");
@@ -333,19 +334,23 @@ contract LendingBroker is
   }
 
   /**
-   * @dev Settle the accrued interest of each user's dynamic position: the interest is borrowed from Moolah
-   *      on behalf of the user and supplied to the vault via the relayer, and the dynamic principal grows
-   *      by the same amount. The user's total debt is unchanged; only its split between Moolah principal
-   *      and broker-side interest moves (same path as the interest leg of `convertDynamicToFixed`).
-   *      Users that cannot be settled right now are skipped instead of reverting the whole batch:
-   *      no accrued interest, not whitelisted in the market, market idle liquidity below the interest,
-   *      position unhealthy, or resulting principal below minLoan.
+   * @dev Settle accrued interest of each user's dynamic position, fully or partially: the settled amount is
+   *      borrowed from Moolah on behalf of the user and supplied to the vault via the relayer, and the dynamic
+   *      principal grows by the same amount. The user's total debt is unchanged; only its split between Moolah
+   *      principal and broker-side interest moves (same path as the interest leg of `convertDynamicToFixed`).
+   *      Each entry settles `min(amounts[i], accrued interest)`; the unsettled remainder keeps accruing and
+   *      can be settled later. A user may appear more than once to settle in several chunks.
+   *      Entries that cannot be settled right now are skipped instead of reverting the whole batch:
+   *      zero amount or no accrued interest, not whitelisted in the market, market idle liquidity below the
+   *      settled amount, position unhealthy, or resulting principal below minLoan.
    * @param users The addresses to settle
-   * @return settledCount Number of users settled
+   * @param amounts The max interest to settle per user (type(uint256).max settles all accrued interest)
+   * @return settledCount Number of entries settled
    * @return settledInterest Total interest settled
    */
   function batchSettleDynamicInterest(
-    address[] calldata users
+    address[] calldata users,
+    uint256[] calldata amounts
   )
     external
     override
@@ -356,13 +361,15 @@ contract LendingBroker is
     onlyRole(BOT)
     returns (uint256 settledCount, uint256 settledInterest)
   {
+    if (users.length != amounts.length) revert LengthMismatch();
     uint256 rate = IRateCalculator(rateCalculator).accrueRate(address(this));
     MarketParams memory marketParams = _getMarketParams(MARKET_ID);
     uint256 minLoan = MOOLAH.minLoan(marketParams);
     for (uint256 i = 0; i < users.length; i++) {
       address user = users[i];
-      if (!_canSettleDynamicInterest(user, rate, marketParams, minLoan)) continue;
-      settledInterest += _settleDynamicInterest(user, rate);
+      uint256 amount = amounts[i];
+      if (!_canSettleDynamicInterest(user, amount, rate, marketParams, minLoan)) continue;
+      settledInterest += _settleDynamicInterest(user, amount, rate);
       settledCount++;
     }
   }
@@ -839,10 +846,11 @@ contract LendingBroker is
     return BrokerMath.denormalizeBorrowAmount(position.normalizedDebt, rate).zeroFloorSub(position.principal);
   }
 
-  /// @dev capitalise the accrued dynamic interest of `user`; returns the settled amount (0 = nothing to settle)
-  function _settleDynamicInterest(address user, uint256 rate) internal returns (uint256 interest) {
+  /// @dev capitalise up to `amount` of the accrued dynamic interest of `user`;
+  ///      returns the settled amount (0 = nothing to settle)
+  function _settleDynamicInterest(address user, uint256 amount, uint256 rate) internal returns (uint256 interest) {
     DynamicLoanPosition storage position = dynamicLoanPositions[user];
-    interest = _dynamicInterest(position, rate);
+    interest = UtilsLib.min(amount, _dynamicInterest(position, rate));
     if (interest == 0) return 0;
     // borrow the interest from Moolah on behalf of the user: total debt unchanged, only its split moves
     _borrowFromMoolah(user, interest);
@@ -856,12 +864,13 @@ contract LendingBroker is
   /// @dev the checks `_settleDynamicInterest` would fail on, mirrored so a batch can skip instead of revert
   function _canSettleDynamicInterest(
     address user,
+    uint256 amount,
     uint256 rate,
     MarketParams memory marketParams,
     uint256 minLoan
   ) internal view returns (bool) {
     DynamicLoanPosition storage position = dynamicLoanPositions[user];
-    uint256 interest = _dynamicInterest(position, rate);
+    uint256 interest = UtilsLib.min(amount, _dynamicInterest(position, rate));
     if (interest == 0) return false;
     if (position.principal + interest < minLoan) return false;
     if (!MOOLAH.isWhiteList(MARKET_ID, user)) return false;

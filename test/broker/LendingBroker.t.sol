@@ -3163,10 +3163,27 @@ contract LendingBrokerTest is Test {
   // ===== dynamic interest settlement (batchSettleDynamicInterest) =====
 
   function _settleOne(address user) internal returns (uint256 count, uint256 amount) {
+    return _settleOne(user, type(uint256).max);
+  }
+
+  function _settleOne(address user, uint256 maxAmount) internal returns (uint256 count, uint256 amount) {
     address[] memory users = new address[](1);
     users[0] = user;
     vm.prank(BOT);
-    (count, amount) = broker.batchSettleDynamicInterest(users);
+    (count, amount) = broker.batchSettleDynamicInterest(users, _amounts(1, maxAmount));
+  }
+
+  function _amounts(uint256 n, uint256 value) internal pure returns (uint256[] memory amounts) {
+    amounts = new uint256[](n);
+    for (uint256 i = 0; i < n; i++) amounts[i] = value;
+  }
+
+  /// @dev withdraw supplier liquidity until only `keep` is idle in the market
+  function _leaveIdleLiquidity(uint256 keep) internal {
+    Market memory m = moolah.market(id);
+    uint256 idle = uint256(m.totalSupplyAssets) - uint256(m.totalBorrowAssets);
+    vm.prank(supplier);
+    moolah.withdraw(marketParams, idle - keep, 0, supplier, supplier);
   }
 
   function _openDynamicWithInterest(uint256 amount) internal {
@@ -3237,7 +3254,7 @@ contract LendingBrokerTest is Test {
     users[0] = borrower;
     vm.prank(borrower);
     vm.expectRevert(); // AccessControlUnauthorizedAccount
-    broker.batchSettleDynamicInterest(users);
+    broker.batchSettleDynamicInterest(users, _amounts(1, type(uint256).max));
   }
 
   function test_settleDynamicInterest_respectsPauses() public {
@@ -3249,7 +3266,7 @@ contract LendingBrokerTest is Test {
     broker.setBorrowPaused(true);
     vm.prank(BOT);
     vm.expectRevert(LendingBroker.BorrowIsPaused.selector);
-    broker.batchSettleDynamicInterest(users);
+    broker.batchSettleDynamicInterest(users, _amounts(1, type(uint256).max));
     vm.prank(MANAGER);
     broker.setBorrowPaused(false);
 
@@ -3260,7 +3277,7 @@ contract LendingBrokerTest is Test {
     broker.pause();
     vm.prank(BOT);
     vm.expectRevert(); // EnforcedPause
-    broker.batchSettleDynamicInterest(users);
+    broker.batchSettleDynamicInterest(users, _amounts(1, type(uint256).max));
   }
 
   function test_settleDynamicInterest_noLiquidity_skips() public {
@@ -3343,12 +3360,132 @@ contract LendingBrokerTest is Test {
     vm.expectEmit(true, false, false, true, address(broker));
     emit IBroker.DynamicInterestSettled(borrower, interest, principalBefore + interest);
     vm.prank(BOT);
-    (uint256 count, uint256 amount) = broker.batchSettleDynamicInterest(users);
+    (uint256 count, uint256 amount) = broker.batchSettleDynamicInterest(users, _amounts(3, type(uint256).max));
     assertEq(count, 1, "exactly one user settled");
     assertEq(amount, interest, "settled amount");
     (uint256 principalAfter, ) = broker.dynamicLoanPositions(borrower);
     assertEq(principalAfter, principalBefore + interest);
     assertEq(_dynamicInterestOf(borrower), 0);
+  }
+
+  function test_settleDynamicInterest_partial() public {
+    _openDynamicWithInterest(10_000 ether);
+    uint256 interest = _dynamicInterestOf(borrower);
+    uint256 part = interest / 2;
+    assertGt(part, 15 ether, "part must exceed minLoan so the relayer flushes");
+
+    (uint256 principalBefore, uint256 normBefore) = broker.dynamicLoanPositions(borrower);
+    uint256 totalDebtBefore = broker.getUserTotalDebt(borrower);
+    uint256 moolahDebtBefore = _principalAtMoolah(borrower);
+
+    vm.expectEmit(true, false, false, true, address(broker));
+    emit IBroker.DynamicInterestSettled(borrower, part, principalBefore + part);
+    (uint256 count, uint256 amount) = _settleOne(borrower, part);
+    assertEq(count, 1, "settled count");
+    assertEq(amount, part, "only the requested part is settled");
+
+    (uint256 principalAfter, uint256 normAfter) = broker.dynamicLoanPositions(borrower);
+    assertEq(principalAfter, principalBefore + part, "principal must grow by the part");
+    assertEq(normAfter, normBefore, "normalizedDebt must not move");
+    assertEq(broker.getUserTotalDebt(borrower), totalDebtBefore, "total debt must be unchanged");
+    assertApproxEqAbs(_principalAtMoolah(borrower), moolahDebtBefore + part, 1, "moolah debt +part");
+    assertEq(_dynamicInterestOf(borrower), interest - part, "remainder stays as broker interest");
+
+    // an amount above the remaining interest is capped to it
+    (count, amount) = _settleOne(borrower, interest * 10);
+    assertEq(count, 1);
+    assertEq(amount, interest - part, "capped to the accrued interest");
+    (principalAfter, normAfter) = broker.dynamicLoanPositions(borrower);
+    assertEq(principalAfter, principalBefore + interest);
+    assertEq(normAfter, normBefore);
+    assertEq(broker.getUserTotalDebt(borrower), totalDebtBefore, "total debt must be unchanged");
+    assertEq(_dynamicInterestOf(borrower), 0);
+  }
+
+  function test_settleDynamicInterest_zeroAmount_skips() public {
+    _openDynamicWithInterest(10_000 ether);
+    (uint256 pBefore, uint256 nBefore) = broker.dynamicLoanPositions(borrower);
+
+    (uint256 count, uint256 amount) = _settleOne(borrower, 0);
+    assertEq(count, 0);
+    assertEq(amount, 0);
+    (uint256 pAfter, uint256 nAfter) = broker.dynamicLoanPositions(borrower);
+    assertEq(pAfter, pBefore);
+    assertEq(nAfter, nBefore);
+  }
+
+  function test_batchSettleDynamicInterest_lengthMismatch_reverts() public {
+    _openDynamicWithInterest(10_000 ether);
+    address[] memory users = new address[](2);
+    users[0] = borrower;
+    users[1] = borrower;
+    vm.prank(BOT);
+    vm.expectRevert(LendingBroker.LengthMismatch.selector);
+    broker.batchSettleDynamicInterest(users, _amounts(1, type(uint256).max));
+  }
+
+  /// @dev idle liquidity below the full interest: a full settle is skipped, a partial one within the
+  ///      idle liquidity goes through
+  function test_settleDynamicInterest_partialWithinIdleLiquidity() public {
+    _openDynamicWithInterest(10_000 ether);
+    uint256 interest = _dynamicInterestOf(borrower);
+    uint256 keep = interest / 2;
+    _leaveIdleLiquidity(keep);
+
+    (uint256 count, uint256 amount) = _settleOne(borrower);
+    assertEq(count, 0, "full settle must be skipped");
+    assertEq(amount, 0);
+
+    (count, amount) = _settleOne(borrower, keep);
+    assertEq(count, 1, "partial settle within idle liquidity");
+    assertEq(amount, keep);
+    assertEq(_dynamicInterestOf(borrower), interest - keep);
+  }
+
+  /// @dev the settled interest flows back into the market, so one batch can settle an interest larger
+  ///      than the idle liquidity by listing the same user several times
+  function test_batchSettleDynamicInterest_sameUserInChunks() public {
+    _openDynamicWithInterest(10_000 ether);
+    uint256 interest = _dynamicInterestOf(borrower);
+    uint256 chunk = interest / 4;
+    assertGe(chunk, 15 ether, "chunk must reach minLoan so the relayer flushes each time");
+    // each chunk returns to the market net of the relayer fee (<= 10%)
+    _leaveIdleLiquidity((chunk * 3) / 2);
+
+    (uint256 principalBefore, uint256 normBefore) = broker.dynamicLoanPositions(borrower);
+    uint256 totalDebtBefore = broker.getUserTotalDebt(borrower);
+
+    address[] memory users = new address[](4);
+    uint256[] memory amounts = _amounts(4, chunk);
+    amounts[3] = type(uint256).max;
+    for (uint256 i = 0; i < 4; i++) users[i] = borrower;
+
+    vm.prank(BOT);
+    (uint256 count, uint256 amount) = broker.batchSettleDynamicInterest(users, amounts);
+    assertEq(count, 4, "every chunk settled");
+    assertEq(amount, interest, "whole interest settled across chunks");
+
+    (uint256 principalAfter, uint256 normAfter) = broker.dynamicLoanPositions(borrower);
+    assertEq(principalAfter, principalBefore + interest);
+    assertEq(normAfter, normBefore);
+    assertEq(broker.getUserTotalDebt(borrower), totalDebtBefore, "total debt must be unchanged");
+    assertEq(_dynamicInterestOf(borrower), 0);
+  }
+
+  function test_settleDynamicInterest_partialThenRepayAllClears() public {
+    _openDynamicWithInterest(10_000 ether);
+    (uint256 settled, ) = _settleOne(borrower, _dynamicInterestOf(borrower) / 3);
+    assertEq(settled, 1);
+    skip(1 days);
+
+    LISUSD.setBalance(borrower, 1_000_000 ether);
+    vm.prank(borrower);
+    broker.repayAll(borrower);
+
+    (uint256 p, uint256 n) = broker.dynamicLoanPositions(borrower);
+    assertEq(p, 0);
+    assertEq(n, 0);
+    assertEq(moolah.position(id, borrower).borrowShares, 0, "moolah debt not cleared");
   }
 
   function test_settleDynamicInterest_thenRepayAllClears() public {
