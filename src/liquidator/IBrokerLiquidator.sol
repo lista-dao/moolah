@@ -30,6 +30,22 @@ interface IBrokerLiquidator {
 
   function liquidate(bytes32 id, address borrower, uint256 seizedAssets, uint256 repaidShares) external;
 
+  function keeperLiquidate(
+    bytes32 id,
+    address borrower,
+    uint256 seizedAssets,
+    uint256 repaidShares,
+    uint256 maxRepaidAssets
+  ) external returns (uint256, uint256);
+
+  function setKeeper(address keeper, bool status) external;
+
+  function keepers(address keeper) external view returns (bool);
+
+  function setMarketKeeper(bytes32 id, address keeper, bool status) external;
+
+  function marketKeepers(bytes32 id, address keeper) external view returns (bool);
+
   function liquidateSmartCollateral(
     bytes32 id,
     address borrower,
