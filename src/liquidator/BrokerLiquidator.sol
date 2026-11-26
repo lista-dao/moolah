@@ -35,6 +35,8 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, Pausable
   error NotAuthorized();
   error InvalidFundSource();
   error Reentrancy();
+  error ExceedMaxRepaid();
+  error InsufficientRepayment();
 
   address public immutable MOOLAH;
   mapping(address => bool) public tokenWhitelist;
@@ -48,18 +50,30 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, Pausable
   mapping(address => bytes32) public brokerToMarketId;
   // @dev smart collateral provider whitelist
   mapping(address => bool) public smartProviders;
-  /// @dev transient storage for repaidAssets from onMoolahLiquidate callback
+  /// @dev repaidAssets from the last onMoolahLiquidate callback. Regular storage, not transient:
+  ///      liquidate / flashLiquidate do not clear it.
   uint256 internal _lastRepaidAssets;
   /// @dev Shared liquidation fund pool (LiquidationVault). 0 => legacy behavior. Appended for the
   ///      UUPS upgrade; no existing slot is moved.
   address public fundSource;
   /// @dev Local reentrancy lock. This contract does not inherit ReentrancyGuard; the lock is
-  ///      a single appended slot (0/1 = not entered, 2 = entered). Guards BOT entry points only.
+  ///      a single appended slot (0/1 = not entered, 2 = entered). Guards the BOT entry points and
+  ///      keeperLiquidate.
   uint256 private _reentrancyLock;
   /// @dev Tokens excluded from reflow to the vault (smart-collateral LP the vault cannot sell). A
   ///      wrong-entry plain liquidate on a smart-LP fixed-term market must not push LP into the vault;
   ///      the LP stays here as a process holding, redeemable via redeemSmartCollateral. Storage appended.
   mapping(address => bool) public reflowBlacklist;
+  /// @dev market id => keeper => assigned, for keeperLiquidate. Set by BOT or MANAGER; only effective
+  ///      while the keeper is approved in `keepers`. Not cleared when the market is deregistered, so
+  ///      assignments apply again if the same id is re-registered. Storage appended.
+  mapping(bytes32 => mapping(address => bool)) public marketKeepers;
+  /// @dev Approved keepers (MANAGER). Second layer over marketKeepers: BOT can only assign markets to
+  ///      addresses listed here, and delisting a keeper disables it on every market at once.
+  mapping(address => bool) public keepers;
+  /// @dev Set for the duration of a keeperLiquidate call: the address the callback pulls the
+  ///      repayment from. Non-zero means the vault (fundSource) and local balance must not be used.
+  address private _keeper;
 
   bytes32 public constant MANAGER = keccak256("MANAGER"); // manager role
   bytes32 public constant BOT = keccak256("BOT"); // bot role
@@ -75,6 +89,15 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, Pausable
   event FundSourceChanged(address indexed oldFundSource, address indexed newFundSource);
   event FundReflowed(address indexed token, uint256 amount);
   event ReflowBlacklistChanged(address indexed token, bool blacklisted);
+  event KeeperChanged(address indexed keeper, bool added);
+  event MarketKeeperChanged(bytes32 indexed id, address indexed keeper, bool added);
+  event KeeperLiquidated(
+    bytes32 indexed id,
+    address indexed borrower,
+    address indexed keeper,
+    uint256 seizedAssets,
+    uint256 repaidAssets
+  );
   event SmartLiquidation(
     bytes32 indexed id,
     address indexed lpToken,
@@ -117,8 +140,9 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, Pausable
     _setRoleAdmin(BOT, MANAGER);
   }
 
-  /// @dev Emergency kill switch (PAUSER). Halts every BOT entry point: liquidations, smart-collateral
-  ///      redemption and token sales. withdraw* and admin setters stay callable.
+  /// @dev Emergency kill switch (PAUSER). Halts every BOT entry point (liquidations, smart-collateral
+  ///      redemption and token sales) and keeperLiquidate. withdraw* and admin setters stay callable.
+  ///      Pausing LiquidationVault does not stop keeperLiquidate.
   function pause() external onlyRole(PAUSER) {
     _pause();
   }
@@ -127,9 +151,9 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, Pausable
     _unpause();
   }
 
-  /// @dev Local reentrancy lock. Guards BOT entry points; deliberately NOT applied to
-  ///      onMoolahLiquidate (legal same-tx re-entry from the broker) or withdraw* (must stay callable
-  ///      by the vault's collect* outside the lock).
+  /// @dev Local reentrancy lock. Guards the BOT entry points and keeperLiquidate; deliberately NOT
+  ///      applied to onMoolahLiquidate (legal same-tx re-entry from the broker) or withdraw* (must stay
+  ///      callable by the vault's collect* outside the lock).
   modifier nonReentrant() {
     require(_reentrancyLock != 2, Reentrancy());
     _reentrancyLock = 2;
@@ -228,6 +252,43 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, Pausable
   function _checkBrokerMarketId(address broker, bytes32 id) internal view returns (bool) {
     IMoolah moolah = IMoolah(MOOLAH);
     return moolah.brokers(Id.wrap(id)) == broker;
+  }
+
+  /// @dev Approves/removes a keeper (MANAGER). Approval alone grants nothing: the keeper must also be
+  ///      assigned to a market via setMarketKeeper. Removal disables the keeper on every market; its
+  ///      marketKeepers entries are kept and become effective again if it is re-approved.
+  /// @param keeper The address of the keeper.
+  /// @param status The status of the keeper.
+  function setKeeper(address keeper, bool status) external onlyRole(MANAGER) {
+    require(keeper != address(0), ZERO_ADDRESS);
+    require(keepers[keeper] != status, WhitelistSameStatus());
+    keepers[keeper] = status;
+    emit KeeperChanged(keeper, status);
+  }
+
+  /// @dev Assigns/unassigns an approved keeper to market `id` (BOT or MANAGER). When adding, the keeper
+  ///      must be approved (setKeeper) and the market must pass the same checks as keeperLiquidate.
+  ///      Removal is always allowed.
+  /// @param id The id of the market.
+  /// @param keeper The address of the keeper.
+  /// @param status The status of the keeper on this market.
+  function setMarketKeeper(bytes32 id, address keeper, bool status) external {
+    require(hasRole(BOT, msg.sender) || hasRole(MANAGER, msg.sender), NotAuthorized());
+    require(keeper != address(0), ZERO_ADDRESS);
+    require(marketKeepers[id][keeper] != status, WhitelistSameStatus());
+    if (status) {
+      require(keepers[keeper], NotWhitelisted());
+      // same market checks as keeperLiquidate
+      address broker = marketIdToBroker[id];
+      require(broker != address(0), NotWhitelisted());
+      require(_checkBrokerMarketId(broker, id), BrokerMarketIdMismatch());
+      require(
+        !_isSmartCollateral(IMoolah(MOOLAH).idToMarketParams(Id.wrap(id)).collateralToken),
+        SmartCollateralMustUseDedicatedFunction()
+      );
+    }
+    marketKeepers[id][keeper] = status;
+    emit MarketKeeperChanged(id, keeper, status);
   }
 
   /// @dev sets the pair whitelist.
@@ -408,6 +469,71 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, Pausable
     // reflow leftover balances to the vault (no-op when fundSource == 0).
     _reflow(params.loanToken);
     _reflow(params.collateralToken);
+  }
+
+  /// @dev Self-funded liquidation of a fixed-term (broker) market. The caller pays the full repayment
+  ///      (principal + interestToBroker) from its own balance and receives the seized collateral; the
+  ///      vault (fundSource) and this contract's own balances are never touched. Requires an approved
+  ///      keeper assigned to the market; the BOT role is not needed. No size limit is enforced: a
+  ///      keeper's exposure is its own balance/allowance. Smart-collateral markets and fee-on-transfer
+  ///      loan tokens are not supported.
+  /// @param id The id of the market.
+  /// @param borrower The address of the borrower.
+  /// @param seizedAssets The amount of assets to seize.
+  /// @param repaidShares The amount of shares to repay.
+  /// @param maxRepaidAssets Upper bound on the loan token pulled from the caller.
+  /// @return The seized collateral sent to the caller and the loan token pulled from the caller.
+  function keeperLiquidate(
+    bytes32 id,
+    address borrower,
+    uint256 seizedAssets,
+    uint256 repaidShares,
+    uint256 maxRepaidAssets
+  ) external whenNotPaused nonReentrant returns (uint256, uint256) {
+    require(keepers[msg.sender] && marketKeepers[id][msg.sender], NotWhitelisted());
+    address broker = marketIdToBroker[id];
+    require(broker != address(0), NotWhitelisted());
+    require(_checkBrokerMarketId(broker, id), BrokerMarketIdMismatch());
+    MarketParams memory params = IMoolah(MOOLAH).idToMarketParams(Id.wrap(id));
+    require(!_isSmartCollateral(params.collateralToken), SmartCollateralMustUseDedicatedFunction());
+
+    uint256 collBefore = SafeTransferLib.balanceOf(params.collateralToken, address(this));
+    _keeper = msg.sender;
+    IBrokerBase(broker).liquidate(
+      params,
+      borrower,
+      seizedAssets,
+      repaidShares,
+      abi.encode(
+        MoolahLiquidateData(
+          params.collateralToken,
+          params.loanToken,
+          seizedAssets,
+          address(0),
+          "",
+          false,
+          false,
+          address(0),
+          0,
+          0,
+          address(0),
+          address(0),
+          "",
+          ""
+        )
+      )
+    );
+    _keeper = address(0);
+    uint256 repaidAssets = _lastRepaidAssets;
+    _lastRepaidAssets = 0;
+    require(repaidAssets <= maxRepaidAssets, ExceedMaxRepaid());
+
+    uint256 collAmount = SafeTransferLib.balanceOf(params.collateralToken, address(this)) - collBefore;
+    require(collAmount > 0, "No collateral seized");
+    SafeTransferLib.safeTransfer(params.collateralToken, msg.sender, collAmount);
+
+    emit KeeperLiquidated(id, borrower, msg.sender, collAmount, repaidAssets);
+    return (collAmount, repaidAssets);
   }
 
   /// @dev liquidates a position with smart collateral.
@@ -593,6 +719,15 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, Pausable
       if (out < repaidAssets) revert NoProfit();
       if (token0 != BNB_ADDRESS) SafeTransferLib.safeApprove(token0, arb.token0Pair, 0);
       if (token1 != BNB_ADDRESS) SafeTransferLib.safeApprove(token1, arb.token1Pair, 0);
+    } else if (_keeper != address(0)) {
+      // self-funded path: the caller of keeperLiquidate pays the whole amount. Neither the local
+      // balance nor the vault is used; revert if less than repaidAssets arrives (fee-on-transfer).
+      uint256 before = SafeTransferLib.balanceOf(arb.loanToken, address(this));
+      SafeTransferLib.safeTransferFrom(arb.loanToken, _keeper, address(this), repaidAssets);
+      require(
+        SafeTransferLib.balanceOf(arb.loanToken, address(this)) - before >= repaidAssets,
+        InsufficientRepayment()
+      );
     } else if (fundSource != address(0)) {
       // normal pre-funded path. Pull the exact shortfall from the vault. `repaidAssets` already
       // includes interestToBroker (the broker sums it before invoking this callback), so it is the

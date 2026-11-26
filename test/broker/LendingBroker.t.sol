@@ -1182,6 +1182,155 @@ contract LendingBrokerTest is Test {
     assertLt(posAfter.collateral, posBefore.collateral, "collateral should decrease");
   }
 
+  // --------------- SELF-FUNDED (PER-MARKET WHITELISTED) LIQUIDATION ---------------
+  function _setupKeeper(Id marketId, uint256 balance) internal returns (address keeper) {
+    keeper = makeAddr("keeper");
+    vm.prank(MANAGER);
+    liquidator.setKeeper(keeper, true);
+    // market assignment is a BOT action
+    vm.prank(BOT);
+    liquidator.setMarketKeeper(Id.unwrap(marketId), keeper, true);
+    LISUSD.setBalance(keeper, balance);
+    vm.prank(keeper);
+    LISUSD.approve(address(liquidator), type(uint256).max);
+  }
+
+  function test_keeperLiquidate_keeperPaysAndReceivesCollateral() public {
+    _prepareLiquidatablePositionByLoanTokenDepeg();
+    address keeper = _setupKeeper(id, 1_000_000 ether);
+    // residual balance sitting in the liquidator must not be consumed by the self-funded path
+    LISUSD.setBalance(address(liquidator), 500 ether);
+
+    Position memory posBefore = moolah.position(id, borrower);
+    uint256 userRepayShares = BrokerMath.mulDivCeiling(posBefore.borrowShares, 50 * 1e8, 100 * 1e8);
+
+    vm.prank(keeper);
+    (uint256 seized, uint256 repaid) = liquidator.keeperLiquidate(
+      Id.unwrap(id),
+      borrower,
+      0,
+      userRepayShares,
+      type(uint256).max
+    );
+
+    Position memory posAfter = moolah.position(id, borrower);
+    assertGt(seized, 0, "nothing seized");
+    assertEq(seized, posBefore.collateral - posAfter.collateral, "seized != collateral delta");
+    assertEq(BTCB.balanceOf(keeper), seized, "keeper did not receive collateral");
+    assertEq(LISUSD.balanceOf(keeper), 1_000_000 ether - repaid, "keeper did not pay repayment");
+    assertEq(LISUSD.balanceOf(address(liquidator)), 500 ether, "liquidator balance was used");
+    assertEq(BTCB.balanceOf(address(liquidator)), 0, "collateral left in liquidator");
+    assertApproxEqAbs(_totalPrincipalAtBroker(borrower), _principalAtMoolah(borrower), 1, "principal mismatch");
+  }
+
+  function test_keeperLiquidate_revertsIfNotWhitelisted() public {
+    _prepareLiquidatablePositionByLoanTokenDepeg();
+    Position memory pos = moolah.position(id, borrower);
+    uint256 userRepayShares = BrokerMath.mulDivCeiling(pos.borrowShares, 50 * 1e8, 100 * 1e8);
+
+    // the BOT role alone does not grant the self-funded entry
+    vm.prank(BOT);
+    vm.expectRevert(BrokerLiquidator.NotWhitelisted.selector);
+    liquidator.keeperLiquidate(Id.unwrap(id), borrower, 0, userRepayShares, type(uint256).max);
+  }
+
+  function test_keeperLiquidate_revertsOnOtherMarket() public {
+    _prepareLiquidatablePositionByLoanTokenDepeg();
+    // keeper is listed for the BNB market only
+    address keeper = _setupKeeper(bnbId, 1_000_000 ether);
+    Position memory pos = moolah.position(id, borrower);
+    uint256 userRepayShares = BrokerMath.mulDivCeiling(pos.borrowShares, 50 * 1e8, 100 * 1e8);
+
+    vm.prank(keeper);
+    vm.expectRevert(BrokerLiquidator.NotWhitelisted.selector);
+    liquidator.keeperLiquidate(Id.unwrap(id), borrower, 0, userRepayShares, type(uint256).max);
+  }
+
+  function test_keeperLiquidate_revertsAfterRemoval() public {
+    _prepareLiquidatablePositionByLoanTokenDepeg();
+    address keeper = _setupKeeper(id, 1_000_000 ether);
+    vm.prank(BOT);
+    liquidator.setMarketKeeper(Id.unwrap(id), keeper, false);
+
+    Position memory pos = moolah.position(id, borrower);
+    uint256 userRepayShares = BrokerMath.mulDivCeiling(pos.borrowShares, 50 * 1e8, 100 * 1e8);
+
+    vm.prank(keeper);
+    vm.expectRevert(BrokerLiquidator.NotWhitelisted.selector);
+    liquidator.keeperLiquidate(Id.unwrap(id), borrower, 0, userRepayShares, type(uint256).max);
+  }
+
+  function test_keeperLiquidate_revertsIfExceedMaxRepaid() public {
+    _prepareLiquidatablePositionByLoanTokenDepeg();
+    address keeper = _setupKeeper(id, 1_000_000 ether);
+    Position memory pos = moolah.position(id, borrower);
+    uint256 userRepayShares = BrokerMath.mulDivCeiling(pos.borrowShares, 50 * 1e8, 100 * 1e8);
+
+    vm.prank(keeper);
+    vm.expectRevert(BrokerLiquidator.ExceedMaxRepaid.selector);
+    liquidator.keeperLiquidate(Id.unwrap(id), borrower, 0, userRepayShares, 1);
+  }
+
+  function test_setMarketKeeper_accessAndValidation() public {
+    address keeper = makeAddr("keeper");
+
+    // only MANAGER approves keepers
+    vm.prank(BOT);
+    vm.expectRevert();
+    liquidator.setKeeper(keeper, true);
+
+    // BOT cannot assign a market to an address MANAGER has not approved (including itself)
+    vm.startPrank(BOT);
+    vm.expectRevert(BrokerLiquidator.NotWhitelisted.selector);
+    liquidator.setMarketKeeper(Id.unwrap(id), keeper, true);
+    vm.expectRevert(BrokerLiquidator.NotWhitelisted.selector);
+    liquidator.setMarketKeeper(Id.unwrap(id), BOT, true);
+    vm.stopPrank();
+
+    vm.prank(MANAGER);
+    liquidator.setKeeper(keeper, true);
+    assertTrue(liquidator.keepers(keeper));
+
+    // neither a keeper nor a stranger can assign markets
+    vm.prank(keeper);
+    vm.expectRevert(BrokerLiquidator.NotAuthorized.selector);
+    liquidator.setMarketKeeper(Id.unwrap(id), keeper, true);
+
+    vm.startPrank(BOT);
+    // market must be registered
+    vm.expectRevert(BrokerLiquidator.NotWhitelisted.selector);
+    liquidator.setMarketKeeper(bytes32(uint256(1)), keeper, true);
+
+    liquidator.setMarketKeeper(Id.unwrap(id), keeper, true);
+    assertTrue(liquidator.marketKeepers(Id.unwrap(id), keeper));
+    assertFalse(liquidator.marketKeepers(Id.unwrap(bnbId), keeper));
+
+    vm.expectRevert(BrokerLiquidator.WhitelistSameStatus.selector);
+    liquidator.setMarketKeeper(Id.unwrap(id), keeper, true);
+    vm.stopPrank();
+
+    // MANAGER can assign as well
+    vm.prank(MANAGER);
+    liquidator.setMarketKeeper(Id.unwrap(bnbId), keeper, true);
+    assertTrue(liquidator.marketKeepers(Id.unwrap(bnbId), keeper));
+  }
+
+  function test_keeperLiquidate_revertsAfterKeeperDelisted() public {
+    _prepareLiquidatablePositionByLoanTokenDepeg();
+    address keeper = _setupKeeper(id, 1_000_000 ether);
+    // MANAGER delists the keeper; its market assignment stays but no longer grants access
+    vm.prank(MANAGER);
+    liquidator.setKeeper(keeper, false);
+    assertTrue(liquidator.marketKeepers(Id.unwrap(id), keeper));
+
+    Position memory pos = moolah.position(id, borrower);
+    uint256 userRepayShares = BrokerMath.mulDivCeiling(pos.borrowShares, 50 * 1e8, 100 * 1e8);
+
+    vm.prank(keeper);
+    vm.expectRevert(BrokerLiquidator.NotWhitelisted.selector);
+    liquidator.keeperLiquidate(Id.unwrap(id), borrower, 0, userRepayShares, type(uint256).max);
+  }
+
   function test_liquidation_notTriggeredWhenLoanTokenPriceDrops() public {
     // Borrow near the limit with normal prices
     uint256 termId = ++nextTermId;

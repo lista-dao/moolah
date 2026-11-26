@@ -225,6 +225,135 @@ contract BrokerLiquidatorTest is BaseTest {
     // If we get here, the _isSmartCollateral check did not block normal collateral
   }
 
+  // ==================== keeper assignment / self-funded path (audit fixes) ====================
+
+  /// @dev registers `mp` on the liquidator with a mock broker (Moolah.brokers is mocked to match)
+  function _registerMarket(MarketParams memory mp, address broker) internal returns (bytes32 id) {
+    if (moolah.market(mp.id()).lastUpdate == 0) moolah.createMarket(mp);
+    id = Id.unwrap(mp.id());
+    vm.mockCall(address(moolah), abi.encodeWithSelector(moolah.brokers.selector, mp.id()), abi.encode(broker));
+    vm.prank(MANAGER_ADDR);
+    brokerLiquidator.setMarketToBroker(id, broker, true);
+  }
+
+  function testSetMarketKeeperAllowsNormalMarket() public {
+    address keeper = makeAddr("keeper");
+    bytes32 id = _registerMarket(marketParams, address(new MockBrokerForLiquidation(marketParams.id())));
+
+    vm.prank(MANAGER_ADDR);
+    brokerLiquidator.setKeeper(keeper, true);
+    vm.prank(BOT);
+    brokerLiquidator.setMarketKeeper(id, keeper, true);
+    assertTrue(brokerLiquidator.marketKeepers(id, keeper));
+  }
+
+  function testSetMarketKeeperRevertsForSmartCollateral() public {
+    address keeper = makeAddr("keeper");
+    MockStableSwapLPCollateral mockLPCollateral = new MockStableSwapLPCollateral(
+      "MockLP",
+      "MLP",
+      address(smartProvider)
+    );
+    smartProvider.setCollateralToken(address(mockLPCollateral));
+    MarketParams memory smartMarketParams = MarketParams({
+      loanToken: address(loanToken),
+      collateralToken: address(mockLPCollateral),
+      oracle: address(oracle),
+      irm: address(irm),
+      lltv: 0.8e18
+    });
+    bytes32 id = _registerMarket(smartMarketParams, address(new MockBrokerForLiquidation(smartMarketParams.id())));
+
+    vm.prank(MANAGER_ADDR);
+    brokerLiquidator.setKeeper(keeper, true);
+
+    vm.prank(BOT);
+    vm.expectRevert(BrokerLiquidator.SmartCollateralMustUseDedicatedFunction.selector);
+    brokerLiquidator.setMarketKeeper(id, keeper, true);
+    assertFalse(brokerLiquidator.marketKeepers(id, keeper));
+  }
+
+  function testSetMarketKeeperRevertsOnBrokerMismatch() public {
+    address keeper = makeAddr("keeper");
+    bytes32 id = _registerMarket(marketParams, address(new MockBrokerForLiquidation(marketParams.id())));
+    vm.prank(MANAGER_ADDR);
+    brokerLiquidator.setKeeper(keeper, true);
+
+    // Moolah no longer reports the registered broker for this market
+    vm.clearMockedCalls();
+
+    vm.prank(BOT);
+    vm.expectRevert(BrokerLiquidator.BrokerMarketIdMismatch.selector);
+    brokerLiquidator.setMarketKeeper(id, keeper, true);
+  }
+
+  function testSetMarketKeeperRemovalSkipsMarketChecks() public {
+    address keeper = makeAddr("keeper");
+    bytes32 id = _registerMarket(marketParams, address(new MockBrokerForLiquidation(marketParams.id())));
+    vm.prank(MANAGER_ADDR);
+    brokerLiquidator.setKeeper(keeper, true);
+    vm.prank(BOT);
+    brokerLiquidator.setMarketKeeper(id, keeper, true);
+
+    // removal stays possible even when the market could no longer be assigned
+    vm.clearMockedCalls();
+    vm.prank(BOT);
+    brokerLiquidator.setMarketKeeper(id, keeper, false);
+    assertFalse(brokerLiquidator.marketKeepers(id, keeper));
+  }
+
+  function _setupCallbackMarket(
+    ERC20Mock loan
+  ) internal returns (bytes32 id, MockCallbackBroker broker, address keeper) {
+    keeper = makeAddr("keeper");
+    MarketParams memory mp = MarketParams({
+      loanToken: address(loan),
+      collateralToken: address(collateralToken),
+      oracle: address(oracle),
+      irm: address(irm),
+      lltv: 0.8e18
+    });
+    broker = new MockCallbackBroker(mp.id(), address(loan), address(collateralToken));
+    collateralToken.setBalance(address(broker), broker.SEIZED());
+    id = _registerMarket(mp, address(broker));
+
+    vm.prank(MANAGER_ADDR);
+    brokerLiquidator.setKeeper(keeper, true);
+    vm.prank(BOT);
+    brokerLiquidator.setMarketKeeper(id, keeper, true);
+
+    loan.setBalance(keeper, 1_000 ether);
+    vm.prank(keeper);
+    loan.approve(address(brokerLiquidator), type(uint256).max);
+    // residual balance held by the liquidator; the keeper path must never spend it
+    loan.setBalance(address(brokerLiquidator), 500 ether);
+  }
+
+  function testKeeperLiquidatePullsExactRepaymentFromKeeper() public {
+    ERC20Mock loan = new ERC20Mock();
+    (bytes32 id, MockCallbackBroker broker, address keeper) = _setupCallbackMarket(loan);
+
+    vm.prank(keeper);
+    (uint256 seized, uint256 repaid) = brokerLiquidator.keeperLiquidate(id, address(1), 1, 0, type(uint256).max);
+
+    assertEq(seized, broker.SEIZED());
+    assertEq(repaid, broker.REPAID());
+    assertEq(collateralToken.balanceOf(keeper), broker.SEIZED());
+    assertEq(loan.balanceOf(keeper), 1_000 ether - broker.REPAID());
+    assertEq(loan.balanceOf(address(brokerLiquidator)), 500 ether, "liquidator balance was used");
+    assertEq(loan.balanceOf(address(broker)), broker.REPAID());
+  }
+
+  function testKeeperLiquidateRevertsOnFeeOnTransferLoanToken() public {
+    FeeOnTransferMock loan = new FeeOnTransferMock();
+    (bytes32 id, , address keeper) = _setupCallbackMarket(loan);
+
+    // the keeper's transfer arrives short; the liquidator must not cover the gap from its own balance
+    vm.prank(keeper);
+    vm.expectRevert(BrokerLiquidator.InsufficientRepayment.selector);
+    brokerLiquidator.keeperLiquidate(id, address(1), 1, 0, type(uint256).max);
+  }
+
   // ==================== sellBNB ====================
 
   function testSellBNB() public {
@@ -296,5 +425,46 @@ contract MockBrokerForLiquidation {
 
   function liquidate(MarketParams memory, address, uint256, uint256, bytes calldata) external {
     // no-op for testing
+  }
+}
+
+interface ILiquidateCallback {
+  function onMoolahLiquidate(uint256 repaidAssets, bytes calldata data) external;
+}
+
+/// @dev Mock broker that mimics LendingBroker's liquidation flow towards the liquidator: send the
+///      seized collateral, call back with the repayment amount, then pull that amount.
+contract MockCallbackBroker {
+  Id public immutable MARKET_ID;
+  address public immutable loan;
+  address public immutable collateral;
+  uint256 public constant SEIZED = 1 ether;
+  uint256 public constant REPAID = 100 ether;
+
+  constructor(Id _marketId, address _loan, address _collateral) {
+    MARKET_ID = _marketId;
+    loan = _loan;
+    collateral = _collateral;
+  }
+
+  function liquidate(MarketParams memory, address, uint256, uint256, bytes calldata data) external {
+    ERC20Mock(collateral).transfer(msg.sender, SEIZED);
+    ILiquidateCallback(msg.sender).onMoolahLiquidate(REPAID, data);
+    ERC20Mock(loan).transferFrom(msg.sender, address(this), REPAID);
+  }
+}
+
+/// @dev ERC20 that burns 1% of every transferFrom
+contract FeeOnTransferMock is ERC20Mock {
+  function transferFrom(address from, address to, uint256 amount) public override returns (bool) {
+    require(allowance[from][msg.sender] >= amount, "insufficient allowance");
+    allowance[from][msg.sender] -= amount;
+    require(balanceOf[from] >= amount, "insufficient balance");
+    uint256 fee = amount / 100;
+    balanceOf[from] -= amount;
+    balanceOf[to] += amount - fee;
+    totalSupply -= fee;
+    emit Transfer(from, to, amount - fee);
+    return true;
   }
 }
