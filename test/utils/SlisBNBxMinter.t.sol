@@ -15,6 +15,7 @@ import { SlisBNBxMinter, ISlisBNBx } from "../../src/utils/SlisBNBxMinter.sol";
 
 import { SlisBNBProvider, IStakeManager } from "../../src/provider/SlisBNBProvider.sol";
 import { SmartProvider } from "../../src/provider/SmartProvider.sol";
+import { StableSwapPool } from "../../src/dex/StableSwapPool.sol";
 import { Moolah } from "../../src/moolah/Moolah.sol";
 import { IOracle } from "../../src/moolah/interfaces/IOracle.sol";
 
@@ -131,6 +132,16 @@ contract SlisBNBxMinterTest is Test {
     assertEq(slisBnbProvider.slisBNBxMinter(), address(minter));
   }
 
+  address constant SS_FACTORY = 0xDE9c8E1536989d8c3817afDabC37C0fb44cB49b4;
+
+  /// @dev Move the provider's pool proxy onto the implementation built from this repo.
+  function _upgradePool() internal {
+    address dex = smartProvider.dex();
+    address impl = address(new StableSwapPool(SS_FACTORY));
+    vm.prank(admin);
+    UUPSUpgradeable(dex).upgradeToAndCall(impl, "");
+  }
+
   function upgrade_SmartProvider() public {
     address lpCollateral = 0x719f6445cdAC08B84611D0F19d733F57214bcfee;
     address newImlp = address(new SmartProvider(address(moolah), lpCollateral));
@@ -140,6 +151,10 @@ contract SlisBNBxMinterTest is Test {
     assertEq(getImplementation(smartLpModule), newImlp);
     vm.stopPrank();
     smartProvider = SmartProvider(payable(smartLpModule));
+
+    // SmartProvider and its pool must be upgraded together: leaving the pool on the previously deployed
+    // implementation would revert on the share-input add_liquidity.
+    _upgradePool();
 
     vm.startPrank(admin);
     smartProvider.grantRole(smartProvider.MANAGER(), manager);
