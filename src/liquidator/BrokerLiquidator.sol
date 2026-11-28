@@ -13,10 +13,6 @@ import { IBrokerLiquidator } from "./IBrokerLiquidator.sol";
 import { ISmartProvider } from "../provider/interfaces/IProvider.sol";
 import { ILiquidationVault } from "./ILiquidationVault.sol";
 
-interface IHasMinter {
-  function minter() external view returns (address);
-}
-
 /// @dev PausableUpgradeable (OZ v5) keeps its state in an ERC-7201 namespaced slot, so adding it to
 ///      the live proxy moves no existing storage; the proxy starts unpaused.
 contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, PausableUpgradeable, IBrokerLiquidator {
@@ -60,9 +56,9 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, Pausable
   ///      a single appended slot (0/1 = not entered, 2 = entered). Guards the BOT entry points and
   ///      keeperLiquidate.
   uint256 private _reentrancyLock;
-  /// @dev Tokens excluded from reflow to the vault (smart-collateral LP the vault cannot sell). A
-  ///      wrong-entry plain liquidate on a smart-LP fixed-term market must not push LP into the vault;
-  ///      the LP stays here as a process holding, redeemable via redeemSmartCollateral. Storage appended.
+  /// @dev Smart-collateral LP tokens. They are never reflowed to the vault (it cannot sell them), and
+  ///      liquidate / keeperLiquidate / setMarketKeeper reject markets using them as collateral. An LP
+  ///      token must be listed here before its market is registered. Storage appended.
   mapping(address => bool) public reflowBlacklist;
   /// @dev market id => keeper => assigned, for keeperLiquidate. Set by BOT or MANAGER; only effective
   ///      while the keeper is approved in `keepers`. Not cleared when the market is deregistered, so
@@ -191,8 +187,9 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, Pausable
     fundSource = _fundSource;
   }
 
-  /// @dev Adds/removes a token from the reflow blacklist. Blacklisted tokens (smart-collateral LP) are
-  ///      never pushed to the vault; they remain here to be redeemed via redeemSmartCollateral.
+  /// @dev Adds/removes a smart-collateral LP token. Listed tokens are never pushed to the vault (they
+  ///      remain here to be redeemed via redeemSmartCollateral) and their markets are rejected by
+  ///      liquidate / keeperLiquidate / setMarketKeeper.
   function setReflowBlacklist(address token, bool status) external onlyRole(MANAGER) {
     require(token != address(0), ZERO_ADDRESS);
     reflowBlacklist[token] = status;
@@ -780,18 +777,11 @@ contract BrokerLiquidator is UUPSUpgradeable, AccessControlUpgradeable, Pausable
     }
   }
 
-  /// @dev Checks if a collateral token is a SmartCollateral (StableSwapLPCollateral).
-  ///      Uses try/catch so it won't revert for normal collateral tokens that lack minter().
+  /// @dev Whether a collateral token is a smart-collateral LP. Reads reflowBlacklist instead of
+  ///      probing the token: a probe burns 63/64 of the gas on tokens whose fallback writes state
+  ///      (e.g. WBNB).
   function _isSmartCollateral(address collateralToken) internal view returns (bool) {
-    try IHasMinter(collateralToken).minter() returns (address minterAddr) {
-      try ISmartProvider(minterAddr).TOKEN() returns (address token) {
-        return token == collateralToken;
-      } catch {
-        return false;
-      }
-    } catch {
-      return false;
-    }
+    return reflowBlacklist[collateralToken];
   }
 
   /// @dev Reflow (push) the full balance of `token` to the vault. No-op when fundSource is unset or

@@ -197,6 +197,10 @@ contract BrokerLiquidatorTest is BaseTest {
     vm.prank(MANAGER_ADDR);
     brokerLiquidator.setMarketToBroker(smartMarketId, address(mockBroker), true);
 
+    // The guard reads reflowBlacklist: the LP token must be listed
+    vm.prank(MANAGER_ADDR);
+    brokerLiquidator.setReflowBlacklist(address(mockLPCollateral), true);
+
     // Attempt to liquidate should revert with SmartCollateralMustUseDedicatedFunction
     vm.prank(BOT);
     vm.expectRevert(BrokerLiquidator.SmartCollateralMustUseDedicatedFunction.selector);
@@ -264,13 +268,61 @@ contract BrokerLiquidatorTest is BaseTest {
     });
     bytes32 id = _registerMarket(smartMarketParams, address(new MockBrokerForLiquidation(smartMarketParams.id())));
 
-    vm.prank(MANAGER_ADDR);
+    vm.startPrank(MANAGER_ADDR);
     brokerLiquidator.setKeeper(keeper, true);
+    brokerLiquidator.setReflowBlacklist(address(mockLPCollateral), true);
+    vm.stopPrank();
 
     vm.prank(BOT);
     vm.expectRevert(BrokerLiquidator.SmartCollateralMustUseDedicatedFunction.selector);
     brokerLiquidator.setMarketKeeper(id, keeper, true);
     assertFalse(brokerLiquidator.marketKeepers(id, keeper));
+
+    // the guard follows the list, not the token's shape: once delisted the market is assignable
+    vm.prank(MANAGER_ADDR);
+    brokerLiquidator.setReflowBlacklist(address(mockLPCollateral), false);
+    vm.prank(BOT);
+    brokerLiquidator.setMarketKeeper(id, keeper, true);
+    assertTrue(brokerLiquidator.marketKeepers(id, keeper));
+  }
+
+  /// @dev WBNB-like collateral: unknown selectors fall into a state-writing fallback. Probing such a
+  ///      token inside a staticcall burns 63/64 of the gas; the list lookup must not touch the token.
+  function testSetMarketKeeperCheapForCollateralWithStateWritingFallback() public {
+    address keeper = makeAddr("keeper");
+    FallbackDepositMock wbnbLike = new FallbackDepositMock();
+    MarketParams memory mp = MarketParams({
+      loanToken: address(loanToken),
+      collateralToken: address(wbnbLike),
+      oracle: address(oracle),
+      irm: address(irm),
+      lltv: 0.8e18
+    });
+    bytes32 id = _registerMarket(mp, address(new MockBrokerForLiquidation(mp.id())));
+    vm.prank(MANAGER_ADDR);
+    brokerLiquidator.setKeeper(keeper, true);
+
+    vm.prank(BOT);
+    brokerLiquidator.setMarketKeeper{ gas: 200_000 }(id, keeper, true);
+    assertTrue(brokerLiquidator.marketKeepers(id, keeper));
+    assertEq(wbnbLike.fallbackCalls(), 0, "collateral token was called");
+  }
+
+  function testLiquidateCheapForCollateralWithStateWritingFallback() public {
+    FallbackDepositMock wbnbLike = new FallbackDepositMock();
+    MarketParams memory mp = MarketParams({
+      loanToken: address(loanToken),
+      collateralToken: address(wbnbLike),
+      oracle: address(oracle),
+      irm: address(irm),
+      lltv: 0.8e18
+    });
+    bytes32 id = _registerMarket(mp, address(new MockBrokerForLiquidation(mp.id())));
+
+    // the mock broker's liquidate is a no-op, so this only exercises the pre-checks
+    vm.prank(BOT);
+    brokerLiquidator.liquidate{ gas: 300_000 }(id, address(1), 1e18, 0);
+    assertEq(wbnbLike.fallbackCalls(), 0, "collateral token was called");
   }
 
   function testSetMarketKeeperRevertsOnBrokerMismatch() public {
@@ -466,5 +518,18 @@ contract FeeOnTransferMock is ERC20Mock {
     totalSupply -= fee;
     emit Transfer(from, to, amount - fee);
     return true;
+  }
+}
+
+/// @dev ERC20 whose fallback writes state, like WBNB's fallback -> deposit()
+contract FallbackDepositMock is ERC20Mock {
+  uint256 public fallbackCalls;
+
+  fallback() external payable {
+    fallbackCalls += 1;
+  }
+
+  receive() external payable {
+    fallbackCalls += 1;
   }
 }
